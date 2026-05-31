@@ -55,14 +55,14 @@ fig = make_subplots(
     horizontal_spacing=0.05,
     specs=[
         [{'type': 'treemap'}, {'type': 'treemap'}, {'type': 'treemap'}],
-        [{'type': 'table'},   {'type': 'treemap'}, {'type': 'treemap'}]
+        [{'type': 'table'},   {'type': 'xy'},      {'type': 'treemap'}]
     ],
     subplot_titles=(
         '📊 실시간 수급(외/기/프)',
         '🎯 Quant Buy TOP 10',
         '🔥 거래량 리더(15)',
         '📉 시장 요약 및 수급',
-        '🏗️ 섹터 상태',
+        '📈 코스피/코스닥 수급 현황',
         '🚀 상승률 리더(15)'
     )
 )
@@ -132,19 +132,53 @@ if not df_summary.empty:
         )
     ), row=2, col=1)
 
-# [Panel 5] 섹터 상태
-if not df_m.empty and 'Sector' in df_m.columns:
-    df5 = df_m.groupby('Sector').agg(
-        Avg_Change=('ChagesRatio', 'mean'),
-        Count=('Name', 'count')
-    ).reset_index()
-    fig.add_trace(go.Treemap(
-        labels=df5['Sector'], parents=[''] * len(df5),
-        values=df5['Count'],
-        marker=dict(colors=df5['Avg_Change'], colorscale=kr_scale, cmid=0),
-        text=df5['Avg_Change'].apply(lambda x: f"{x:+.2f}%"),
-        texttemplate='<b>%{label}</b><br>%{text}',
-        hovertemplate='<b>%{label}</b><br>평균등락률: %{text}<extra></extra>'
+# [Panel 5] 코스피/코스닥 수급 현황 막대 차트
+if not df_summary.empty and '외국인(억)' in df_summary.columns:
+    # 코스피·코스닥 행만 추출
+    markets = ['코스피', '코스닥']
+    df5 = df_summary[df_summary['지수/종목'].isin(markets)].copy()
+
+    def to_num(series):
+        return pd.to_numeric(series.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+    investor_cols = {'외국인(억)': '#4e9ff5', '개인(억)': '#ff6b6b', '기관(억)': '#51cf66'}
+
+    for col, color in investor_cols.items():
+        vals = to_num(df5[col])
+        bar_colors = ['#e74c3c' if v > 0 else '#3498db' for v in vals]
+        fig.add_trace(go.Bar(
+            name=col.replace('(억)', ''),
+            x=df5['지수/종목'].tolist(),
+            y=vals.tolist(),
+            marker_color=bar_colors,
+            text=[f"{v:+,.0f}억" for v in vals],
+            textposition='outside',
+            marker_line_width=0,
+            legendgroup=col,
+            showlegend=False
+        ), row=2, col=2)
+
+    # 투자자 구분 레이블 추가
+    for i, (col, color) in enumerate(investor_cols.items()):
+        vals = to_num(df5[col])
+        fig.add_trace(go.Bar(
+            name=col.replace('(억)', ''),
+            x=[None], y=[None],
+            marker_color=color,
+            showlegend=True,
+            legendgroup=col
+        ), row=2, col=2)
+
+    fig.update_yaxes(title_text='순매수(억원)', row=2, col=2, zeroline=True,
+                     zerolinecolor='rgba(255,255,255,0.3)', zerolinewidth=1)
+    fig.update_xaxes(row=2, col=2)
+else:
+    # 데이터 없을 때 빈 안내 차트
+    fig.add_trace(go.Bar(
+        x=['코스피', '코스닥'],
+        y=[0, 0],
+        marker_color='#555555',
+        showlegend=False
     ), row=2, col=2)
 
 # [Panel 6] 상승률 리더(15)
@@ -163,7 +197,14 @@ fig.update_layout(
     height=850,
     template='plotly_dark',
     margin=dict(t=50, l=10, r=10, b=10),
-    showlegend=False
+    showlegend=True,
+    legend=dict(
+        orientation='h',
+        x=0.37, y=0.46,
+        font=dict(size=10),
+        bgcolor='rgba(0,0,0,0)'
+    ),
+    barmode='group'
 )
 
 st.plotly_chart(fig, use_container_width=True)
