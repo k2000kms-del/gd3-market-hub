@@ -3,9 +3,6 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
-import gdown
-import os
-import tempfile
 
 st.set_page_config(
     page_title='GD 3.0 Market Hub',
@@ -24,18 +21,15 @@ FILE_IDS = {
 
 @st.cache_data(ttl=60)  # 60초마다 데이터 갱신
 def load_data():
-    """구글 드라이브에서 CSV 파일 다운로드 후 DataFrame 반환"""
+    """구글 드라이브 공개 URL에서 직접 CSV 읽기 (gdown 불필요)"""
     dfs = {}
-    tmp = tempfile.mkdtemp()
     for fname, fid in FILE_IDS.items():
         if not fid:
             dfs[fname] = pd.DataFrame()
             continue
         try:
-            url = f'https://drive.google.com/uc?id={fid}'
-            out = os.path.join(tmp, fname)
-            gdown.download(url, out, quiet=True, fuzzy=True)
-            dfs[fname] = pd.read_csv(out)
+            url = f'https://drive.google.com/uc?export=download&id={fid}'
+            dfs[fname] = pd.read_csv(url)
         except Exception as e:
             st.warning(f'{fname} 로드 실패: {e}')
             dfs[fname] = pd.DataFrame()
