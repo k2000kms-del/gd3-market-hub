@@ -133,12 +133,56 @@ if not df_summary.empty:
         )
     ), row=2, col=1)
 
-# [Panel 5] 수급 현황 - 하단 탭으로 이동됨 (안내 텍스트)
-fig.add_annotation(
-    text='📈 코스피 / 코스닥 수급 툵<br>아래 탭에서 확인',
-    x=0.5, y=0.25, xref='paper', yref='paper',
-    showarrow=False, font=dict(size=13, color='#aaaaaa'), align='center'
-)
+# [Panel 5] 코스피/코스닥 수급 라인차트 (트레이스 수 동적 추적)
+p5_has_data = not df_intraday.empty and 'Time' in df_intraday.columns
+
+if p5_has_data:
+    def to_num(s):
+        return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+    col_cfg = [
+        ('Foreign_Net',       '외국인', '#4e9ff5'),
+        ('Individual_Net',    '개인',   '#ff6b6b'),
+        ('Institutional_Net', '기관',   '#51cf66'),
+    ]
+
+    # KOSPI 트레이스 (visible=True)
+    kospi_start = len(fig.data)
+    df_k = df_intraday[df_intraday['Market'] == '코스피'].sort_values('Time')
+    for col, name, color in col_cfg:
+        if not df_k.empty and col in df_k.columns:
+            fig.add_trace(go.Scatter(
+                x=df_k['Time'], y=to_num(df_k[col]),
+                name=f'코스피 {name}', mode='lines',
+                line=dict(color=color, width=2),
+                visible=True, showlegend=True
+            ), row=2, col=2)
+    kospi_end = len(fig.data)
+
+    # KOSDAQ 트레이스 (visible=False)
+    kosdaq_start = len(fig.data)
+    df_qd = df_intraday[df_intraday['Market'] == '코스닥'].sort_values('Time')
+    for col, name, color in col_cfg:
+        if not df_qd.empty and col in df_qd.columns:
+            fig.add_trace(go.Scatter(
+                x=df_qd['Time'], y=to_num(df_qd[col]),
+                name=f'코스닥 {name}', mode='lines',
+                line=dict(color=color, width=2, dash='dot'),
+                visible=False, showlegend=False
+            ), row=2, col=2)
+    kosdaq_end = len(fig.data)
+
+    fig.update_yaxes(
+        title_text='순매수(억원)', row=2, col=2,
+        zeroline=True, zerolinecolor='rgba(255,255,255,0.2)', zerolinewidth=1
+    )
+else:
+    kospi_start = kospi_end = kosdaq_start = kosdaq_end = len(fig.data)
+    fig.add_annotation(
+        text='📡 수급 데이터 수집 중...',
+        x=0.5, y=0.25, xref='paper', yref='paper',
+        showarrow=False, font=dict(size=12, color='#888'), align='center'
+    )
 
 # [Panel 6] 상승률 리더(15)
 if not df_m.empty and 'ChagesRatio' in df_m.columns:
@@ -152,100 +196,70 @@ if not df_m.empty and 'ChagesRatio' in df_m.columns:
         hovertemplate='<b>%{label}</b><br>등락률: %{text}<extra></extra>'
     ), row=2, col=3)
 
+# updatemenus 생성 (Panel 5 코스피/코스닥 전환 버튼)
+if p5_has_data:
+    total_n = len(fig.data)  # Panel 6 포함한 전체 트레이스 수
+
+    def make_vis(show_kospi):
+        """KOSPI를 보여줄지 KOSDAQ을 보여줄지 관리"""
+        vis = []
+        for i in range(total_n):
+            if kospi_start <= i < kospi_end:
+                vis.append(show_kospi)
+            elif kosdaq_start <= i < kosdaq_end:
+                vis.append(not show_kospi)
+            else:
+                vis.append(True)   # 다른 패널은 항상 표시
+        return vis
+
+    updatemenus = [dict(
+        type='buttons',
+        direction='right',
+        x=0.37, y=0.48,       # Panel 5 좌상단 (페이퍼 좌표)
+        xanchor='left',
+        yanchor='bottom',
+        buttons=[
+            dict(
+                label='📊 코스피',
+                method='update',
+                args=[{'visible': make_vis(True)},
+                      {'legend.title.text': '코스피 수급'}]
+            ),
+            dict(
+                label='📊 코스닥',
+                method='update',
+                args=[{'visible': make_vis(False)},
+                      {'legend.title.text': '코스닥 수급'}]
+            ),
+        ],
+        bgcolor='#1e2a3a',
+        bordercolor='#4e9ff5',
+        borderwidth=1,
+        font=dict(color='white', size=11),
+        active=0,
+        pad={'r': 4, 't': 4}
+    )]
+else:
+    updatemenus = []
+
 fig.update_layout(
     height=850,
     template='plotly_dark',
     margin=dict(t=50, l=10, r=10, b=10),
     showlegend=True,
     legend=dict(
+        title=dict(text='코스피 수급', font=dict(size=10)),
         orientation='h',
         x=0.37, y=0.46,
         font=dict(size=10),
         bgcolor='rgba(0,0,0,0)'
     ),
-    barmode='group'
+    updatemenus=updatemenus
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ── 코스피 / 코스닥 수급 상세 탭 ────────────────────────────────────────
-st.markdown('### 📈 코스피 / 코스닥 수급 흐름 (외국인 · 개인 · 기관)')
-tab_k, tab_q = st.tabs(['📊 코스피', '📊 코스닥'])
-
-def draw_supply_tab(market):
-    if df_intraday.empty or 'Time' not in df_intraday.columns:
-        st.info('📡 수급 데이터를 수집 중입니다. Colab에서 수집기를 실행해 주세요.')
-        return
-
-    df_mkt = df_intraday[df_intraday['Market'] == market].copy()
-    if df_mkt.empty:
-        st.info(f'{market} 데이터가 없습니다.')
-        return
-
-    df_mkt = df_mkt.sort_values('Time').reset_index(drop=True)
-
-    def to_n(s):
-        return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-
-    cfg = [
-        ('Foreign_Net',      '외국인', '#4e9ff5', 2.0),
-        ('Individual_Net',   '개인',   '#ff6b6b', 2.0),
-        ('Institutional_Net','기관',   '#51cf66', 2.0),
-    ]
-
-    fig2 = go.Figure()
-    for col, name, color, width in cfg:
-        if col in df_mkt.columns:
-            fig2.add_trace(go.Scatter(
-                x=df_mkt['Time'],
-                y=to_n(df_mkt[col]),
-                name=name,
-                mode='lines',
-                line=dict(color=color, width=width)
-            ))
-
-    # 0선 명시
-    fig2.add_hline(
-        y=0,
-        line_dash='dash',
-        line_color='rgba(255,255,255,0.25)',
-        line_width=1
-    )
-
-    # 수급 합계 지표 (우측 상단 표시)
-    last = df_mkt.iloc[-1]
-    for col, name, color, _ in cfg:
-        if col in df_mkt.columns:
-            val = to_n(df_mkt[col]).iloc[-1]
-            sign = '+' if val >= 0 else ''
-            fig2.add_annotation(
-                x=df_mkt['Time'].iloc[-1],
-                y=to_n(df_mkt[col]).iloc[-1],
-                text=f'  {name} {sign}{val:.0f}억',
-                showarrow=False,
-                font=dict(color=color, size=11),
-                xanchor='left'
-            )
-
-    fig2.update_layout(
-        template='plotly_dark',
-        height=380,
-        margin=dict(t=40, l=10, r=80, b=40),
-        yaxis_title='순매수(억원)',
-        xaxis_title='시간',
-        legend=dict(orientation='h', y=1.12, x=0, font=dict(size=11)),
-        hovermode='x unified'
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-with tab_k:
-    draw_supply_tab('코스피')
-
-with tab_q:
-    draw_supply_tab('코스닥')
-
 # 하단 갱신 버튼
-st.markdown('---')
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     if st.button('🔄 데이터 새로고침', use_container_width=True):
