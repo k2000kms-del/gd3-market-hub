@@ -93,17 +93,37 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
 # [Panel 2] Quant Buy TOP 10
 if not df_q.empty and 'Total_Score' in df_q.columns:
     df2 = df_q.sort_values('Total_Score', ascending=False).head(10).copy()
+
+    # df_full_market에서 현재가/등락률 합치기
+    if not df_m.empty and 'Code' in df_m.columns and 'Code' in df2.columns:
+        df2 = df2.merge(df_m[['Code','Price','ChagesRatio','Volume']], on='Code', how='left')
+    else:
+        df2['Price'] = 0; df2['ChagesRatio'] = 0.0; df2['Volume'] = 0
+
+    def quant_grade(s):
+        if s >= 90: return '🔥 강력매수'
+        if s >= 80: return '⭐ 매수'
+        if s >= 70: return '👀 관심'
+        return '🔍 검토'
+
+    df2['Grade'] = df2['Total_Score'].apply(quant_grade)
+
     fig.add_trace(go.Treemap(
         labels=df2['Name'], parents=[''] * len(df2),
         values=df2['Total_Score'],
         marker=dict(colors=df2['Total_Score'], colorscale='Reds', showscale=False),
         text=df2['Total_Score'].apply(lambda x: f"{x:.1f}점"),
-        customdata=df2[['Code','Total_Score']].values,
+        customdata=df2[['Code','Total_Score','Grade','Price','ChagesRatio','Volume']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[0]})<br>'
+            '━━━━━━━━━━━━━━━<br>'
             'Quant 점수: <b>%{customdata[1]:.1f}점</b><br>'
-            '※ 점수가 높을수록 매수 신호 강함'
+            '평가: <b>%{customdata[2]}</b><br>'
+            '━━━━━━━━━━━━━━━<br>'
+            '현재가: %{customdata[3]:,}원<br>'
+            '등락률: %{customdata[4]:+.2f}%<br>'
+            '거래량: %{customdata[5]:,}주'
             '<extra></extra>'
         )
     ), row=1, col=2)
