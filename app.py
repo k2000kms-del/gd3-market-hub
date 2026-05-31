@@ -94,11 +94,17 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
 if not df_q.empty and 'Total_Score' in df_q.columns:
     df2 = df_q.sort_values('Total_Score', ascending=False).head(10).copy()
 
+    # 세부 점수 콼럼 (data_collector에서 저장된 경우 사용, 없으면 0)
+    for col in ['Score_Momentum','Score_Supply','Score_Volume','Score_Program']:
+        if col not in df2.columns:
+            df2[col] = 0.0
+
     # df_full_market에서 현재가/등락률 합치기
     if not df_m.empty and 'Code' in df_m.columns and 'Code' in df2.columns:
-        df2 = df2.merge(df_m[['Code','Price','ChagesRatio','Volume']], on='Code', how='left')
+        df2 = df2.merge(df_m[['Code','Price','ChagesRatio']], on='Code', how='left')
     else:
-        df2['Price'] = 0; df2['ChagesRatio'] = 0.0; df2['Volume'] = 0
+        df2['Price'] = 0; df2['ChagesRatio'] = 0.0
+    df2[['Price','ChagesRatio']] = df2[['Price','ChagesRatio']].fillna(0)
 
     def quant_grade(s):
         if s >= 90: return '🔥 강력매수'
@@ -113,17 +119,24 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
         values=df2['Total_Score'],
         marker=dict(colors=df2['Total_Score'], colorscale='Reds', showscale=False),
         text=df2['Total_Score'].apply(lambda x: f"{x:.1f}점"),
-        customdata=df2[['Code','Total_Score','Grade','Price','ChagesRatio','Volume']].values,
+        customdata=df2[[
+            'Code','Total_Score','Grade',
+            'Score_Momentum','Score_Supply','Score_Volume','Score_Program',
+            'Price','ChagesRatio'
+        ]].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[0]})<br>'
             '━━━━━━━━━━━━━━━<br>'
-            'Quant 점수: <b>%{customdata[1]:.1f}점</b><br>'
-            '평가: <b>%{customdata[2]}</b><br>'
+            'Quant 점수: <b>%{customdata[1]:.1f}점</b>  %{customdata[2]}<br>'
             '━━━━━━━━━━━━━━━<br>'
-            '현재가: %{customdata[3]:,}원<br>'
-            '등락률: %{customdata[4]:+.2f}%<br>'
-            '거래량: %{customdata[5]:,}주'
+            '📈 가격 모멘틴:  %{customdata[3]:.1f} / 25점<br>'
+            '👥 외국인+기관:  %{customdata[4]:.1f} / 35점<br>'
+            '📊 거래량 서지:  %{customdata[5]:.1f} / 25점<br>'
+            '🤖 프로그램 매수: %{customdata[6]:.1f} / 15점<br>'
+            '━━━━━━━━━━━━━━━<br>'
+            '현재가: %{customdata[7]:,}원 '
+            '(%{customdata[8]:+.2f}%)'
             '<extra></extra>'
         )
     ), row=1, col=2)
