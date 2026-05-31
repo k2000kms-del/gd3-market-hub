@@ -158,7 +158,7 @@ if not df_intraday.empty and 'Time' in df_intraday.columns:
             col = col_map[inv_name]
             if col not in df_mkt.columns:
                 continue
-            y_vals = to_num(df_mkt[col]).cumsum()  # 누적 순매수
+            y_vals = to_num(df_mkt[col])  # 이미 당일 누적값이므로 cumsum 불필요
             fig.add_trace(go.Scatter(
                 x=df_mkt['Time'],
                 y=y_vals,
