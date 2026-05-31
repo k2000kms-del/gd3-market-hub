@@ -14,18 +14,12 @@ st.set_page_config(
     initial_sidebar_state='collapsed'
 )
 
-# ── 구글 드라이브 파일 ID (Streamlit Secrets에서 읽기) ──────────
-# Streamlit Cloud > App settings > Secrets 에 아래 형식으로 입력:
-# DRIVE_ID_HIGH_DENSITY   = "파일ID"
-# DRIVE_ID_QUANT_FINAL    = "파일ID"
-# DRIVE_ID_FULL_MARKET    = "파일ID"
-# DRIVE_ID_MARKET_SUMMARY = "파일ID"
-
+# ── 구글 드라이브 파일 ID (공개 파일 - 직접 하드코딩) ────────────
 FILE_IDS = {
-    'df_high_density.csv':   st.secrets.get('DRIVE_ID_HIGH_DENSITY',   ''),
-    'df_quant_final.csv':    st.secrets.get('DRIVE_ID_QUANT_FINAL',    ''),
-    'df_full_market.csv':    st.secrets.get('DRIVE_ID_FULL_MARKET',    ''),
-    'df_market_summary.csv': st.secrets.get('DRIVE_ID_MARKET_SUMMARY', ''),
+    'df_high_density.csv':   '1UQTyfpFD2xuK-fKlq2RqK2MvCqxXaAB3',
+    'df_quant_final.csv':    '1eD7HHBnQ_7FYE5ZCpnjMgYcW_rmmAqjP',
+    'df_full_market.csv':    '1RA1PkDChDuLpj6YkmTb6uGfS6Nhpleve',
+    'df_market_summary.csv': '17F5LJf4UcA0neVw60oRCP2qk7PugRAok',
 }
 
 @st.cache_data(ttl=60)  # 60초마다 데이터 갱신
