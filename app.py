@@ -13,10 +13,11 @@ st.set_page_config(
 
 # ── 구글 드라이브 파일 ID (공개 파일 - 직접 하드코딩) ────────────
 FILE_IDS = {
-    'df_high_density.csv':   '1UQTyfpFD2xuK-fKlq2RqK2MvCqxXaAB3',
-    'df_quant_final.csv':    '1eD7HHBnQ_7FYE5ZCpnjMgYcW_rmmAqjP',
-    'df_full_market.csv':    '1RA1PkDChDuLpj6YkmTb6uGfS6Nhpleve',
-    'df_market_summary.csv': '17F5LJf4UcA0neVw60oRCP2qk7PugRAok',
+    'df_high_density.csv':    '1UQTyfpFD2xuK-fKlq2RqK2MvCqxXaAB3',
+    'df_quant_final.csv':     '1eD7HHBnQ_7FYE5ZCpnjMgYcW_rmmAqjP',
+    'df_full_market.csv':     '1RA1PkDChDuLpj6YkmTb6uGfS6Nhpleve',
+    'df_market_summary.csv':  '17F5LJf4UcA0neVw60oRCP2qk7PugRAok',
+    'df_supply_intraday.csv': '',  # Colab에서 수집 후 ID 입력 필요
 }
 
 @st.cache_data(ttl=60)  # 60초마다 데이터 갱신
@@ -24,14 +25,13 @@ def load_data():
     """구글 드라이브 공개 URL에서 직접 CSV 읽기 (gdown 불필요)"""
     dfs = {}
     for fname, fid in FILE_IDS.items():
-        if not fid:
+        if not fid:  # ID 없으면 빈 DataFrame
             dfs[fname] = pd.DataFrame()
             continue
         try:
             url = f'https://drive.google.com/uc?export=download&id={fid}'
             dfs[fname] = pd.read_csv(url)
-        except Exception as e:
-            st.warning(f'{fname} 로드 실패: {e}')
+        except Exception:
             dfs[fname] = pd.DataFrame()
     return dfs
 
@@ -39,10 +39,11 @@ def load_data():
 with st.spinner('📡 데이터 불러오는 중...'):
     data = load_data()
 
-df_hd      = data['df_high_density.csv']
-df_q       = data['df_quant_final.csv']
-df_m       = data['df_full_market.csv']
-df_summary = data['df_market_summary.csv']
+df_hd       = data['df_high_density.csv']
+df_q        = data['df_quant_final.csv']
+df_m        = data['df_full_market.csv']
+df_summary  = data['df_market_summary.csv']
+df_intraday = data['df_supply_intraday.csv']
 
 kr_scale = 'RdBu_r'
 
@@ -132,54 +133,59 @@ if not df_summary.empty:
         )
     ), row=2, col=1)
 
-# [Panel 5] 코스피/코스닥 수급 현황 막대 차트
-if not df_summary.empty and '외국인(억)' in df_summary.columns:
-    # 코스피·코스닥 행만 추출
-    markets = ['코스피', '코스닥']
-    df5 = df_summary[df_summary['지수/종목'].isin(markets)].copy()
+# [Panel 5] 코스피/코스닥 수급 실신 라인 차트 (1분 단위)
+if not df_intraday.empty and 'Time' in df_intraday.columns:
+    def to_num(s):
+        return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-    def to_num(series):
-        return pd.to_numeric(series.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    # 시장별 색상 정의
+    style = {
+        '코스피': {'외국인': ('#4e9ff5', 'solid'),
+                  '개인':   ('#ff6b6b', 'solid'),
+                  '기관':   ('#51cf66', 'solid')},
+        '코스닥': {'외국인': ('#74c0fc', 'dot'),
+                  '개인':   ('#ff8787', 'dot'),
+                  '기관':   ('#8ce99a', 'dot')},
+    }
+    col_map = {'외국인': 'Foreign_Net', '개인': 'Individual_Net', '기관': 'Institutional_Net'}
 
-    investor_cols = {'외국인(억)': '#4e9ff5', '개인(억)': '#ff6b6b', '기관(억)': '#51cf66'}
+    for market, inv_styles in style.items():
+        df_mkt = df_intraday[df_intraday['Market'] == market].copy()
+        if df_mkt.empty:
+            continue
+        df_mkt = df_mkt.sort_values('Time')
+        for inv_name, (color, dash) in inv_styles.items():
+            col = col_map[inv_name]
+            if col not in df_mkt.columns:
+                continue
+            y_vals = to_num(df_mkt[col]).cumsum()  # 누적 순매수
+            fig.add_trace(go.Scatter(
+                x=df_mkt['Time'],
+                y=y_vals,
+                name=f'{market} {inv_name}',
+                mode='lines',
+                line=dict(color=color, width=1.5, dash=dash),
+                showlegend=True
+            ), row=2, col=2)
 
-    for col, color in investor_cols.items():
-        vals = to_num(df5[col])
-        bar_colors = ['#e74c3c' if v > 0 else '#3498db' for v in vals]
-        fig.add_trace(go.Bar(
-            name=col.replace('(억)', ''),
-            x=df5['지수/종목'].tolist(),
-            y=vals.tolist(),
-            marker_color=bar_colors,
-            text=[f"{v:+,.0f}억" for v in vals],
-            textposition='outside',
-            marker_line_width=0,
-            legendgroup=col,
-            showlegend=False
-        ), row=2, col=2)
-
-    # 투자자 구분 레이블 추가
-    for i, (col, color) in enumerate(investor_cols.items()):
-        vals = to_num(df5[col])
-        fig.add_trace(go.Bar(
-            name=col.replace('(억)', ''),
-            x=[None], y=[None],
-            marker_color=color,
-            showlegend=True,
-            legendgroup=col
-        ), row=2, col=2)
-
-    fig.update_yaxes(title_text='순매수(억원)', row=2, col=2, zeroline=True,
-                     zerolinecolor='rgba(255,255,255,0.3)', zerolinewidth=1)
-    fig.update_xaxes(row=2, col=2)
+    fig.update_yaxes(
+        title_text='누적 순매수(억원)',
+        row=2, col=2,
+        zeroline=True,
+        zerolinecolor='rgba(255,255,255,0.25)',
+        zerolinewidth=1
+    )
 else:
-    # 데이터 없을 때 빈 안내 차트
-    fig.add_trace(go.Bar(
-        x=['코스피', '코스닥'],
-        y=[0, 0],
-        marker_color='#555555',
-        showlegend=False
-    ), row=2, col=2)
+    # 데이터 수집 전 안내
+    fig.add_annotation(
+        x=0.5, y=0.25,
+        xref='paper', yref='paper',
+        text='📡 수급 시계열 데이터 수집 중...<br>아래 Colab 코드를 실행해 주세요',
+        showarrow=False,
+        font=dict(size=12, color='#888888'),
+        align='center'
+    )
+
 
 # [Panel 6] 상승률 리더(15)
 if not df_m.empty and 'ChagesRatio' in df_m.columns:
