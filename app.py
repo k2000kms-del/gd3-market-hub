@@ -168,7 +168,7 @@ if p5_has_data:
                 x=df_qd['Time'], y=to_num(df_qd[col]),
                 name=f'코스닥 {name}', mode='lines',
                 line=dict(color=color, width=2, dash='dot'),
-                visible=False, showlegend=False
+                visible=False, showlegend=True  # 버튼 전환 시 범례 자동 표시
             ), row=2, col=2)
     kosdaq_end = len(fig.data)
 
