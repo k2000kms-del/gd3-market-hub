@@ -77,8 +77,17 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
         values=df1['Total_Combined_Net'].abs() + 1,
         marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df1['Disp'],
+        customdata=df1[['Price','Volume','Foreign_Net','Institutional_Net','Code']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
-        hovertemplate='<b>%{label}</b><br>등락률: %{text}<extra></extra>'
+        hovertemplate=(
+            '<b>%{label}</b> (%{customdata[4]})<br>'
+            '현재가: %{customdata[0]:,}원<br>'
+            '등락률: %{text}<br>'
+            '거래량: %{customdata[1]:,}<br>'
+            '외국인 순매수: %{customdata[2]:+,}주<br>'
+            '기관 순매수: %{customdata[3]:+,}주'
+            '<extra></extra>'
+        )
     ), row=1, col=1)
 
 # [Panel 2] Quant Buy TOP 10
@@ -89,8 +98,14 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
         values=df2['Total_Score'],
         marker=dict(colors=df2['Total_Score'], colorscale='Reds', showscale=False),
         text=df2['Total_Score'].apply(lambda x: f"{x:.1f}점"),
+        customdata=df2[['Code','Total_Score']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
-        hovertemplate='<b>%{label}</b><br>Quant점수: %{text}<extra></extra>'
+        hovertemplate=(
+            '<b>%{label}</b> (%{customdata[0]})<br>'
+            'Quant 점수: <b>%{customdata[1]:.1f}점</b><br>'
+            '※ 점수가 높을수록 매수 신호 강함'
+            '<extra></extra>'
+        )
     ), row=1, col=2)
 
 # [Panel 3] 거래량 리더(15)
@@ -101,8 +116,15 @@ if not df_m.empty and 'Volume' in df_m.columns:
         values=df3['Volume'],
         marker=dict(colors=df3['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df3['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
+        customdata=df3[['Code','Price','Volume','ChagesRatio']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
-        hovertemplate='<b>%{label}</b><br>등락률: %{text}<extra></extra>'
+        hovertemplate=(
+            '<b>%{label}</b> (%{customdata[0]})<br>'
+            '현재가: %{customdata[1]:,}원<br>'
+            '등락률: %{customdata[3]:+.2f}%<br>'
+            '거래량: %{customdata[2]:,}주'
+            '<extra></extra>'
+        )
     ), row=1, col=3)
 
 # [Panel 4] 시장 요약 테이블
@@ -155,7 +177,8 @@ if p5_has_data:
                 x=df_k['Time'], y=to_num(df_k[col]),
                 name=f'코스피 {name}', mode='lines',
                 line=dict(color=color, width=2),
-                visible=True, showlegend=True
+                visible=True, showlegend=True,
+                hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원<extra>코스피</extra>'
             ), row=2, col=2)
     kospi_end = len(fig.data)
 
@@ -168,7 +191,8 @@ if p5_has_data:
                 x=df_qd['Time'], y=to_num(df_qd[col]),
                 name=f'코스닥 {name}', mode='lines',
                 line=dict(color=color, width=2, dash='dot'),
-                visible=False, showlegend=True  # 버튼 전환 시 범례 자동 표시
+                visible=False, showlegend=True,
+                hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원<extra>코스닥</extra>'
             ), row=2, col=2)
     kosdaq_end = len(fig.data)
 
@@ -192,8 +216,15 @@ if not df_m.empty and 'ChagesRatio' in df_m.columns:
         values=df6['ChagesRatio'].abs() + 0.01,
         marker=dict(colors=df6['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df6['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
+        customdata=df6[['Code','Price','Volume','ChagesRatio']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
-        hovertemplate='<b>%{label}</b><br>등락률: %{text}<extra></extra>'
+        hovertemplate=(
+            '<b>%{label}</b> (%{customdata[0]})<br>'
+            '현재가: %{customdata[1]:,}원<br>'
+            '등락률: <b>%{customdata[3]:+.2f}%</b><br>'
+            '거래량: %{customdata[2]:,}주'
+            '<extra></extra>'
+        )
     ), row=2, col=3)
 
 # updatemenus 생성 (Panel 5 코스피/코스닥 전환 버튼)
@@ -254,7 +285,8 @@ fig.update_layout(
         font=dict(size=10),
         bgcolor='rgba(0,0,0,0)'
     ),
-    updatemenus=updatemenus
+    updatemenus=updatemenus,
+    hovermode='x unified'   # Panel5 라인차트: 시간축 통합 툰팟
 )
 
 st.plotly_chart(fig, use_container_width=True)
