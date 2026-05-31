@@ -133,59 +133,12 @@ if not df_summary.empty:
         )
     ), row=2, col=1)
 
-# [Panel 5] 코스피/코스닥 수급 실신 라인 차트 (1분 단위)
-if not df_intraday.empty and 'Time' in df_intraday.columns:
-    def to_num(s):
-        return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-
-    # 시장별 색상 정의
-    style = {
-        '코스피': {'외국인': ('#4e9ff5', 'solid'),
-                  '개인':   ('#ff6b6b', 'solid'),
-                  '기관':   ('#51cf66', 'solid')},
-        '코스닥': {'외국인': ('#74c0fc', 'dot'),
-                  '개인':   ('#ff8787', 'dot'),
-                  '기관':   ('#8ce99a', 'dot')},
-    }
-    col_map = {'외국인': 'Foreign_Net', '개인': 'Individual_Net', '기관': 'Institutional_Net'}
-
-    for market, inv_styles in style.items():
-        df_mkt = df_intraday[df_intraday['Market'] == market].copy()
-        if df_mkt.empty:
-            continue
-        df_mkt = df_mkt.sort_values('Time')
-        for inv_name, (color, dash) in inv_styles.items():
-            col = col_map[inv_name]
-            if col not in df_mkt.columns:
-                continue
-            y_vals = to_num(df_mkt[col])  # 이미 당일 누적값이므로 cumsum 불필요
-            fig.add_trace(go.Scatter(
-                x=df_mkt['Time'],
-                y=y_vals,
-                name=f'{market} {inv_name}',
-                mode='lines',
-                line=dict(color=color, width=1.5, dash=dash),
-                showlegend=True
-            ), row=2, col=2)
-
-    fig.update_yaxes(
-        title_text='누적 순매수(억원)',
-        row=2, col=2,
-        zeroline=True,
-        zerolinecolor='rgba(255,255,255,0.25)',
-        zerolinewidth=1
-    )
-else:
-    # 데이터 수집 전 안내
-    fig.add_annotation(
-        x=0.5, y=0.25,
-        xref='paper', yref='paper',
-        text='📡 수급 시계열 데이터 수집 중...<br>아래 Colab 코드를 실행해 주세요',
-        showarrow=False,
-        font=dict(size=12, color='#888888'),
-        align='center'
-    )
-
+# [Panel 5] 수급 현황 - 하단 탭으로 이동됨 (안내 텍스트)
+fig.add_annotation(
+    text='📈 코스피 / 코스닥 수급 툵<br>아래 탭에서 확인',
+    x=0.5, y=0.25, xref='paper', yref='paper',
+    showarrow=False, font=dict(size=13, color='#aaaaaa'), align='center'
+)
 
 # [Panel 6] 상승률 리더(15)
 if not df_m.empty and 'ChagesRatio' in df_m.columns:
@@ -215,7 +168,84 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
+# ── 코스피 / 코스닥 수급 상세 탭 ────────────────────────────────────────
+st.markdown('### 📈 코스피 / 코스닥 수급 흐름 (외국인 · 개인 · 기관)')
+tab_k, tab_q = st.tabs(['📊 코스피', '📊 코스닥'])
+
+def draw_supply_tab(market):
+    if df_intraday.empty or 'Time' not in df_intraday.columns:
+        st.info('📡 수급 데이터를 수집 중입니다. Colab에서 수집기를 실행해 주세요.')
+        return
+
+    df_mkt = df_intraday[df_intraday['Market'] == market].copy()
+    if df_mkt.empty:
+        st.info(f'{market} 데이터가 없습니다.')
+        return
+
+    df_mkt = df_mkt.sort_values('Time').reset_index(drop=True)
+
+    def to_n(s):
+        return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+    cfg = [
+        ('Foreign_Net',      '외국인', '#4e9ff5', 2.0),
+        ('Individual_Net',   '개인',   '#ff6b6b', 2.0),
+        ('Institutional_Net','기관',   '#51cf66', 2.0),
+    ]
+
+    fig2 = go.Figure()
+    for col, name, color, width in cfg:
+        if col in df_mkt.columns:
+            fig2.add_trace(go.Scatter(
+                x=df_mkt['Time'],
+                y=to_n(df_mkt[col]),
+                name=name,
+                mode='lines',
+                line=dict(color=color, width=width)
+            ))
+
+    # 0선 명시
+    fig2.add_hline(
+        y=0,
+        line_dash='dash',
+        line_color='rgba(255,255,255,0.25)',
+        line_width=1
+    )
+
+    # 수급 합계 지표 (우측 상단 표시)
+    last = df_mkt.iloc[-1]
+    for col, name, color, _ in cfg:
+        if col in df_mkt.columns:
+            val = to_n(df_mkt[col]).iloc[-1]
+            sign = '+' if val >= 0 else ''
+            fig2.add_annotation(
+                x=df_mkt['Time'].iloc[-1],
+                y=to_n(df_mkt[col]).iloc[-1],
+                text=f'  {name} {sign}{val:.0f}억',
+                showarrow=False,
+                font=dict(color=color, size=11),
+                xanchor='left'
+            )
+
+    fig2.update_layout(
+        template='plotly_dark',
+        height=380,
+        margin=dict(t=40, l=10, r=80, b=40),
+        yaxis_title='순매수(억원)',
+        xaxis_title='시간',
+        legend=dict(orientation='h', y=1.12, x=0, font=dict(size=11)),
+        hovermode='x unified'
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+with tab_k:
+    draw_supply_tab('코스피')
+
+with tab_q:
+    draw_supply_tab('코스닥')
+
 # 하단 갱신 버튼
+st.markdown('---')
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     if st.button('🔄 데이터 새로고침', use_container_width=True):
