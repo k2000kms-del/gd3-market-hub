@@ -17,7 +17,7 @@ FILE_IDS = {
     'df_quant_final.csv':     '1eD7HHBnQ_7FYE5ZCpnjMgYcW_rmmAqjP',
     'df_full_market.csv':     '1RA1PkDChDuLpj6YkmTb6uGfS6Nhpleve',
     'df_market_summary.csv':  '17F5LJf4UcA0neVw60oRCP2qk7PugRAok',
-    'df_supply_intraday.csv': '',  # Colab에서 수집 후 ID 입력 필요
+    'df_supply_intraday.csv': '1sYEK6PsAoH1ybupVbtQKnL289LCwnhvc',
 }
 
 @st.cache_data(ttl=60)  # 60초마다 데이터 갱신
