@@ -97,10 +97,10 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
     cp_col = 'Current_Price' if 'Current_Price' in df1.columns else ('Close' if 'Close' in df1.columns else 'Price')
     tv_col = 'Trade_Volume' if 'Trade_Volume' in df1.columns else ('Volume' if 'Volume' in df1.columns else 'Vol')
 
-    df1['Current_Price_Val'] = pd.to_numeric(df1.get(cp_col, 0), errors='coerce').fillna(0)
-    df1['Trade_Volume_Val']  = pd.to_numeric(df1.get(tv_col, 0), errors='coerce').fillna(0)
-    df1['Foreign_Net']   = pd.to_numeric(df1.get('Foreign_Net', 0), errors='coerce').fillna(0)
-    df1['Institutional_Net'] = pd.to_numeric(df1.get('Institutional_Net', 0), errors='coerce').fillna(0)
+    df1['Current_Price_Val'] = pd.to_numeric(df1[cp_col] if cp_col in df1.columns else 0, errors='coerce').fillna(0) if cp_col in df1.columns else 0
+    df1['Trade_Volume_Val']  = pd.to_numeric(df1[tv_col] if tv_col in df1.columns else 0, errors='coerce').fillna(0) if tv_col in df1.columns else 0
+    df1['Foreign_Net']   = pd.to_numeric(df1['Foreign_Net'], errors='coerce').fillna(0) if 'Foreign_Net' in df1.columns else 0
+    df1['Institutional_Net'] = pd.to_numeric(df1['Institutional_Net'], errors='coerce').fillna(0) if 'Institutional_Net' in df1.columns else 0
     df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
 
     fig.add_trace(go.Treemap(
@@ -133,8 +133,8 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
     else:
         df2['Close'] = 0
         df2['ChagesRatio'] = 0.0
-    df2['Close'] = pd.to_numeric(df2.get('Close', 0), errors='coerce').fillna(0)
-    df2['ChagesRatio'] = pd.to_numeric(df2.get('ChagesRatio', 0), errors='coerce').fillna(0)
+    df2['Close'] = pd.to_numeric(df2['Close'], errors='coerce').fillna(0) if 'Close' in df2.columns else 0
+    df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0) if 'ChagesRatio' in df2.columns else 0
 
     # 세부 점수 컬럼 (없으면 0으로 채움)
     for col in ['Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_Program']:
