@@ -384,15 +384,16 @@ if p5_has_data:
         x=0.34, y=0.56,
         xanchor='left',
         yanchor='top',
+        showactive=False,
         buttons=[
             dict(
-                label='코스피',
+                label='▶ 코스피',
                 method='update',
                 args=[{'visible': make_vis(True)},
                       {'legend.title.text': '코스피 수급'}]
             ),
             dict(
-                label='코스닥',
+                label='▶ 코스닥',
                 method='update',
                 args=[{'visible': make_vis(False)},
                       {'legend.title.text': '코스닥 수급'}]
@@ -403,7 +404,7 @@ if p5_has_data:
         borderwidth=1,
         font=dict(color='white', size=11),
         active=0,
-        pad={'r': 6, 't': 4, 'b': 4}
+        pad={'r': 8, 't': 5, 'b': 5, 'l': 8}
     )]
 else:
     updatemenus = []
