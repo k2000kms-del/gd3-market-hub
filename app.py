@@ -84,16 +84,21 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
     df1 = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
     df1['Code'] = df1['Code'].astype(str)
 
-    # df_full_market에서 ChagesRatio 가져오기 (Code 기준 merge)
-    if not df_m.empty and 'Code' in df_m.columns and 'ChagesRatio' in df_m.columns:
-        df1 = df1.merge(df_m[['Code', 'ChagesRatio']], on='Code', how='left')
-    else:
-        df1['ChagesRatio'] = 0.0
+    # df_full_market에서 ChagesRatio 가져오기 (단, 이미 없으면 가져옴)
+    if 'ChagesRatio' not in df1.columns:
+        if not df_m.empty and 'Code' in df_m.columns and 'ChagesRatio' in df_m.columns:
+            df1 = df1.merge(df_m[['Code', 'ChagesRatio']], on='Code', how='left')
+        else:
+            df1['ChagesRatio'] = 0.0
+
     df1['ChagesRatio'] = pd.to_numeric(df1['ChagesRatio'], errors='coerce').fillna(0)
 
-    # df_hd 자체 컬럼 활용
-    df1['Current_Price'] = pd.to_numeric(df1.get('Current_Price', 0), errors='coerce').fillna(0)
-    df1['Trade_Volume']  = pd.to_numeric(df1.get('Trade_Volume', 0), errors='coerce').fillna(0)
+    # 현재가 / 거래량 컬럼 찾기 (Current_Price가 없으면 Close, Trade_Volume이 없으면 Volume 사용)
+    cp_col = 'Current_Price' if 'Current_Price' in df1.columns else ('Close' if 'Close' in df1.columns else 'Price')
+    tv_col = 'Trade_Volume' if 'Trade_Volume' in df1.columns else ('Volume' if 'Volume' in df1.columns else 'Vol')
+
+    df1['Current_Price_Val'] = pd.to_numeric(df1.get(cp_col, 0), errors='coerce').fillna(0)
+    df1['Trade_Volume_Val']  = pd.to_numeric(df1.get(tv_col, 0), errors='coerce').fillna(0)
     df1['Foreign_Net']   = pd.to_numeric(df1.get('Foreign_Net', 0), errors='coerce').fillna(0)
     df1['Institutional_Net'] = pd.to_numeric(df1.get('Institutional_Net', 0), errors='coerce').fillna(0)
     df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
@@ -103,7 +108,7 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
         values=df1['Total_Combined_Net'].abs() + 1,
         marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df1['Disp'],
-        customdata=df1[['Current_Price', 'Trade_Volume', 'Foreign_Net', 'Institutional_Net', 'Code']].values,
+        customdata=df1[['Current_Price_Val', 'Trade_Volume_Val', 'Foreign_Net', 'Institutional_Net', 'Code']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[4]})<br>'
