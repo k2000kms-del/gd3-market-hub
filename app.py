@@ -22,10 +22,10 @@ FILE_IDS = {
 
 @st.cache_data(ttl=60)  # 60초마다 데이터 갱신
 def load_data():
-    """구글 드라이브 공개 URL에서 직접 CSV 읽기 (gdown 불필요)"""
+    """구글 드라이브 공개 URL에서 직접 CSV 읽기"""
     dfs = {}
     for fname, fid in FILE_IDS.items():
-        if not fid:  # ID 없으면 빈 DataFrame
+        if not fid:
             dfs[fname] = pd.DataFrame()
             continue
         try:
@@ -44,6 +44,14 @@ df_q        = data['df_quant_final.csv']
 df_m        = data['df_full_market.csv']
 df_summary  = data['df_market_summary.csv']
 df_intraday = data['df_supply_intraday.csv']
+
+# ── df_full_market 수치 컬럼 전처리 ──────────────────────────
+# 실제 컬럼: Code, Name, Market, Close, ChagesRatio, Volume 등
+if not df_m.empty:
+    for col in ['Close', 'ChagesRatio', 'Volume', 'Amount', 'Marcap']:
+        if col in df_m.columns:
+            df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
+    df_m['Code'] = df_m['Code'].astype(str)
 
 kr_scale = 'RdBu_r'
 
@@ -68,41 +76,34 @@ fig = make_subplots(
     )
 )
 
-# [Panel 1] 실시간 수급
+# [Panel 1] 실시간 수급 (df_high_density 기반)
+# 컬럼: Code, Foreign_Net, Institutional_Net, Personal_Net, Program_Net,
+#        Volume_Power, Trade_Volume, Trade_Amount, Current_Price,
+#        MA5_Disparity, MA20_Disparity, Name, Total_Combined_Net
 if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
     df1 = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
-    # df_hd에는 등락률/현재가 컬럼이 없으므로 df_full_market에서 merge
-    if not df_m.empty and 'Code' in df_m.columns and 'Code' in df1.columns:
-        # Code 컬럼 타입 통일 (str) → merge 시 타입 불일치 ValueError 방지
-        df1['Code'] = df1['Code'].astype(str)
-        # 현재가 컬럼: 'Close' 또는 'Price' 중 존재하는 것 사용
-        price_col = 'Close' if 'Close' in df_m.columns else ('Price' if 'Price' in df_m.columns else None)
-        m_cols = ['Code', 'ChagesRatio', 'Volume']
-        if price_col:
-            m_cols.append(price_col)
-        df_m_ref = df_m[m_cols].copy()
-        df_m_ref['Code'] = df_m_ref['Code'].astype(str)
-        df1 = df1.merge(df_m_ref, on='Code', how='left')
-        df1['ChagesRatio'] = pd.to_numeric(df1['ChagesRatio'], errors='coerce').fillna(0)
-        df1['Volume'] = pd.to_numeric(df1['Volume'], errors='coerce').fillna(0)
-        # 현재가를 'Close' 컬럼 이름으로 통일
-        if price_col and price_col != 'Close':
-            df1['Close'] = pd.to_numeric(df1[price_col], errors='coerce').fillna(0)
-        elif price_col:
-            df1['Close'] = pd.to_numeric(df1['Close'], errors='coerce').fillna(0)
-        else:
-            df1['Close'] = 0
+    df1['Code'] = df1['Code'].astype(str)
+
+    # df_full_market에서 ChagesRatio 가져오기 (Code 기준 merge)
+    if not df_m.empty and 'Code' in df_m.columns:
+        df1 = df1.merge(df_m[['Code', 'ChagesRatio']], on='Code', how='left')
     else:
         df1['ChagesRatio'] = 0.0
-        df1['Close'] = 0
-        df1['Volume'] = 0
+    df1['ChagesRatio'] = pd.to_numeric(df1['ChagesRatio'], errors='coerce').fillna(0)
+
+    # df_hd 자체 컬럼 활용
+    df1['Current_Price'] = pd.to_numeric(df1.get('Current_Price', 0), errors='coerce').fillna(0)
+    df1['Trade_Volume']  = pd.to_numeric(df1.get('Trade_Volume', 0), errors='coerce').fillna(0)
+    df1['Foreign_Net']   = pd.to_numeric(df1.get('Foreign_Net', 0), errors='coerce').fillna(0)
+    df1['Institutional_Net'] = pd.to_numeric(df1.get('Institutional_Net', 0), errors='coerce').fillna(0)
     df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
+
     fig.add_trace(go.Treemap(
         labels=df1['Name'], parents=[''] * len(df1),
         values=df1['Total_Combined_Net'].abs() + 1,
         marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df1['Disp'],
-        customdata=df1[['Close','Volume','Foreign_Net','Institutional_Net','Code']].values,
+        customdata=df1[['Current_Price', 'Trade_Volume', 'Foreign_Net', 'Institutional_Net', 'Code']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[4]})<br>'
@@ -115,21 +116,25 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
         )
     ), row=1, col=1)
 
-# [Panel 2] Quant Buy TOP 10
+# [Panel 2] Quant Buy TOP 10 (df_quant_final 기반)
+# 컬럼: Name, Code, Total_Score (세부 점수 없음)
 if not df_q.empty and 'Total_Score' in df_q.columns:
     df2 = df_q.sort_values('Total_Score', ascending=False).head(10).copy()
-
-    # 세부 점수 콼럼 (data_collector에서 저장된 경우 사용, 없으면 0)
-    for col in ['Score_Momentum','Score_Supply','Score_Volume','Score_Program']:
-        if col not in df2.columns:
-            df2[col] = 0.0
+    df2['Code'] = df2['Code'].astype(str)
 
     # df_full_market에서 현재가/등락률 합치기
-    if not df_m.empty and 'Code' in df_m.columns and 'Code' in df2.columns:
-        df2 = df2.merge(df_m[['Code','Price','ChagesRatio']], on='Code', how='left')
+    if not df_m.empty and 'Code' in df_m.columns:
+        df2 = df2.merge(df_m[['Code', 'Close', 'ChagesRatio']], on='Code', how='left')
     else:
-        df2['Price'] = 0; df2['ChagesRatio'] = 0.0
-    df2[['Price','ChagesRatio']] = df2[['Price','ChagesRatio']].fillna(0)
+        df2['Close'] = 0
+        df2['ChagesRatio'] = 0.0
+    df2['Close'] = pd.to_numeric(df2.get('Close', 0), errors='coerce').fillna(0)
+    df2['ChagesRatio'] = pd.to_numeric(df2.get('ChagesRatio', 0), errors='coerce').fillna(0)
+
+    # 세부 점수 컬럼 (없으면 0으로 채움)
+    for col in ['Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_Program']:
+        if col not in df2.columns:
+            df2[col] = 0.0
 
     def quant_grade(s):
         if s >= 90: return '🔥 강력매수'
@@ -145,9 +150,9 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
         marker=dict(colors=df2['Total_Score'], colorscale='Reds', showscale=False),
         text=df2['Total_Score'].apply(lambda x: f"{x:.1f}점"),
         customdata=df2[[
-            'Code','Total_Score','Grade',
-            'Score_Momentum','Score_Supply','Score_Volume','Score_Program',
-            'Price','ChagesRatio'
+            'Code', 'Total_Score', 'Grade',
+            'Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_Program',
+            'Close', 'ChagesRatio'
         ]].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
@@ -155,7 +160,7 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
             '━━━━━━━━━━━━━━━<br>'
             'Quant 점수: <b>%{customdata[1]:.1f}점</b>  %{customdata[2]}<br>'
             '━━━━━━━━━━━━━━━<br>'
-            '📈 가격 모멘틴:  %{customdata[3]:.1f} / 25점<br>'
+            '📈 가격 모멘텀:  %{customdata[3]:.1f} / 25점<br>'
             '👥 외국인+기관:  %{customdata[4]:.1f} / 35점<br>'
             '📊 거래량 서지:  %{customdata[5]:.1f} / 25점<br>'
             '🤖 프로그램 매수: %{customdata[6]:.1f} / 15점<br>'
@@ -166,7 +171,8 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
         )
     ), row=1, col=2)
 
-# [Panel 3] 거래량 리더(15)
+# [Panel 3] 거래량 리더(15) (df_full_market 기반)
+# 컬럼: Name, Code, Volume, Close, ChagesRatio
 if not df_m.empty and 'Volume' in df_m.columns:
     df3 = df_m.sort_values('Volume', ascending=False).head(15).copy()
     fig.add_trace(go.Treemap(
@@ -174,7 +180,7 @@ if not df_m.empty and 'Volume' in df_m.columns:
         values=df3['Volume'],
         marker=dict(colors=df3['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df3['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
-        customdata=df3[['Code','Price','Volume','ChagesRatio']].values,
+        customdata=df3[['Code', 'Close', 'Volume', 'ChagesRatio']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[0]})<br>'
@@ -185,14 +191,27 @@ if not df_m.empty and 'Volume' in df_m.columns:
         )
     ), row=1, col=3)
 
-# [Panel 4] 시장 요약 테이블
+# [Panel 4] 시장 요약 테이블 (df_market_summary 기반)
 if not df_summary.empty:
     def get_color(v):
         try:
-            f = float(str(v).replace(',', ''))
+            f = float(str(v).replace(',', '').replace('%', '').replace('+', ''))
             return 'red' if f > 0 else ('blue' if f < 0 else 'white')
         except:
             return 'white'
+
+    # 등락률 컬럼명 자동 탐색
+    chg_col = None
+    for candidate in ['등락률', 'ChagesRatio', 'ChangeRatio', 'Changes']:
+        if candidate in df_summary.columns:
+            chg_col = candidate
+            break
+
+    color_list = ['white'] * len(df_summary.columns)
+    if chg_col:
+        col_idx = list(df_summary.columns).index(chg_col)
+        color_list[col_idx] = [get_color(x) for x in df_summary[chg_col]]
+
     fig.add_trace(go.Table(
         header=dict(
             values=list(df_summary.columns),
@@ -203,17 +222,12 @@ if not df_summary.empty:
         cells=dict(
             values=[df_summary[c] for c in df_summary.columns],
             fill_color='#111111',
-            font=dict(
-                color=['white', 'white',
-                       [get_color(x) for x in df_summary['등락률']],
-                       'white', 'white', 'white', 'white'],
-                size=11
-            ),
+            font=dict(color=color_list, size=11),
             align='center'
         )
     ), row=2, col=1)
 
-# [Panel 5] 코스피/코스닥 수급 라인차트 (트레이스 수 동적 추적)
+# [Panel 5] 코스피/코스닥 수급 라인차트
 p5_has_data = not df_intraday.empty and 'Time' in df_intraday.columns
 
 if p5_has_data:
@@ -266,7 +280,8 @@ else:
         showarrow=False, font=dict(size=12, color='#888'), align='center'
     )
 
-# [Panel 6] 상승률 리더(15)
+# [Panel 6] 상승률 리더(15) (df_full_market 기반)
+# 컬럼: Name, Code, ChagesRatio, Close, Volume
 if not df_m.empty and 'ChagesRatio' in df_m.columns:
     df6 = df_m.sort_values('ChagesRatio', ascending=False).head(15).copy()
     fig.add_trace(go.Treemap(
@@ -274,7 +289,7 @@ if not df_m.empty and 'ChagesRatio' in df_m.columns:
         values=df6['ChagesRatio'].abs() + 0.01,
         marker=dict(colors=df6['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df6['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
-        customdata=df6[['Code','Price','Volume','ChagesRatio']].values,
+        customdata=df6[['Code', 'Close', 'Volume', 'ChagesRatio']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[0]})<br>'
@@ -287,10 +302,9 @@ if not df_m.empty and 'ChagesRatio' in df_m.columns:
 
 # updatemenus 생성 (Panel 5 코스피/코스닥 전환 버튼)
 if p5_has_data:
-    total_n = len(fig.data)  # Panel 6 포함한 전체 트레이스 수
+    total_n = len(fig.data)
 
     def make_vis(show_kospi):
-        """KOSPI를 보여줄지 KOSDAQ을 보여줄지 관리"""
         vis = []
         for i in range(total_n):
             if kospi_start <= i < kospi_end:
@@ -298,13 +312,13 @@ if p5_has_data:
             elif kosdaq_start <= i < kosdaq_end:
                 vis.append(not show_kospi)
             else:
-                vis.append(True)   # 다른 패널은 항상 표시
+                vis.append(True)
         return vis
 
     updatemenus = [dict(
         type='buttons',
         direction='right',
-        x=0.37, y=0.48,       # Panel 5 좌상단 (페이퍼 좌표)
+        x=0.37, y=0.48,
         xanchor='left',
         yanchor='bottom',
         buttons=[
@@ -344,7 +358,7 @@ fig.update_layout(
         bgcolor='rgba(0,0,0,0)'
     ),
     updatemenus=updatemenus,
-    hovermode='x unified'   # Panel5 라인차트: 시간축 통합 툰팟
+    hovermode='x unified'
 )
 
 st.plotly_chart(fig, use_container_width=True)
