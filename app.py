@@ -30,7 +30,22 @@ def load_data():
             continue
         try:
             url = f'https://drive.google.com/uc?export=download&id={fid}'
-            dfs[fname] = pd.read_csv(url)
+            # df_market_summary는 cp949 인코딩으로 저장될 수 있으므로 먼저 시도
+            if fname == 'df_market_summary.csv':
+                for enc in ['utf-8', 'cp949', 'euc-kr']:
+                    try:
+                        df_tmp = pd.read_csv(url, encoding=enc)
+                        # 첫 컬럼명이 깨지지 않았는지 확인 (ASCII 범위 바깥 Ethiopic 문자 방지)
+                        first_col = str(df_tmp.columns[0])
+                        if all(ord(c) < 0x1200 or (0xAC00 <= ord(c) <= 0xD7A3) or c in '/_- ' for c in first_col):
+                            dfs[fname] = df_tmp
+                            break
+                    except Exception:
+                        continue
+                else:
+                    dfs[fname] = pd.DataFrame()
+            else:
+                dfs[fname] = pd.read_csv(url)
         except Exception:
             dfs[fname] = pd.DataFrame()
     return dfs
@@ -201,9 +216,21 @@ if not df_summary.empty:
     def get_color(v):
         try:
             f = float(str(v).replace(',', '').replace('%', '').replace('+', ''))
-            return 'red' if f > 0 else ('blue' if f < 0 else 'white')
+            return '#ff6b6b' if f > 0 else ('#4e9ff5' if f < 0 else '#cccccc')
         except:
-            return 'white'
+            return '#cccccc'
+
+    # 컬럼명 정리: 깨진 문자(Ethiopic 등)가 포함된 경우 한글 폴백 적용
+    def is_broken(s):
+        """에티오피아 문자 등 비정상 유니코드 범위 감지"""
+        return any(0x1200 <= ord(c) <= 0x137F for c in str(s))
+
+    col_names = list(df_summary.columns)
+    # 3개 컬럼이면 종목/지수/등락률 순서로 폴백
+    fallback_cols = ['종목/종류', '지수', '등락률']
+    if len(col_names) == 3 and any(is_broken(c) for c in col_names):
+        df_summary.columns = fallback_cols
+        col_names = fallback_cols
 
     # 등락률 컬럼명 자동 탐색
     chg_col = None
@@ -212,23 +239,32 @@ if not df_summary.empty:
             chg_col = candidate
             break
 
-    color_list = ['white'] * len(df_summary.columns)
+    color_list = ['#cccccc'] * len(df_summary.columns)
     if chg_col:
         col_idx = list(df_summary.columns).index(chg_col)
         color_list[col_idx] = [get_color(x) for x in df_summary[chg_col]]
 
+    # 행별 배경색 (홀/짝 구분)
+    row_fill = ['#1a2332', '#111920'] * (len(df_summary) // 2 + 1)
+    row_fill = row_fill[:len(df_summary)]
+
     fig.add_trace(go.Table(
+        columnwidth=[2, 2, 1.5],
         header=dict(
-            values=list(df_summary.columns),
-            fill_color='#2c3e50',
-            font=dict(color='white', size=11),
-            align='center'
+            values=[f'<b>{c}</b>' for c in df_summary.columns],
+            fill_color='#1e3a5f',
+            line_color='#4e9ff5',
+            font=dict(color='#e0e8f0', size=12, family='malgun gothic, nanum gothic, sans-serif'),
+            align='center',
+            height=32
         ),
         cells=dict(
             values=[df_summary[c] for c in df_summary.columns],
-            fill_color='#111111',
-            font=dict(color=color_list, size=11),
-            align='center'
+            fill_color=[row_fill] * len(df_summary.columns),
+            line_color='rgba(78,159,245,0.2)',
+            font=dict(color=color_list, size=12, family='malgun gothic, nanum gothic, sans-serif'),
+            align='center',
+            height=28
         )
     ), row=2, col=1)
 
@@ -274,8 +310,14 @@ if p5_has_data:
     kosdaq_end = len(fig.data)
 
     fig.update_yaxes(
-        title_text='순매수(억원)', row=2, col=2,
-        zeroline=True, zerolinecolor='rgba(255,255,255,0.2)', zerolinewidth=1
+        ticksuffix='억',
+        zeroline=True, zerolinecolor='rgba(255,255,255,0.3)', zerolinewidth=1,
+        gridcolor='rgba(255,255,255,0.05)',
+        row=2, col=2
+    )
+    fig.update_xaxes(
+        tickangle=-30,
+        row=2, col=2
     )
 else:
     kospi_start = kospi_end = kosdaq_start = kosdaq_end = len(fig.data)
@@ -323,47 +365,51 @@ if p5_has_data:
     updatemenus = [dict(
         type='buttons',
         direction='right',
-        x=0.37, y=0.48,
+        x=0.365, y=0.55,
         xanchor='left',
-        yanchor='bottom',
+        yanchor='top',
         buttons=[
             dict(
-                label='📊 코스피',
+                label='코스피',
                 method='update',
                 args=[{'visible': make_vis(True)},
                       {'legend.title.text': '코스피 수급'}]
             ),
             dict(
-                label='📊 코스닥',
+                label='코스닥',
                 method='update',
                 args=[{'visible': make_vis(False)},
                       {'legend.title.text': '코스닥 수급'}]
             ),
         ],
-        bgcolor='#1e2a3a',
+        bgcolor='#0d1b2a',
         bordercolor='#4e9ff5',
         borderwidth=1,
         font=dict(color='white', size=11),
         active=0,
-        pad={'r': 4, 't': 4}
+        pad={'r': 6, 't': 4, 'b': 4}
     )]
 else:
     updatemenus = []
 
 fig.update_layout(
-    height=850,
+    height=900,
     template='plotly_dark',
-    margin=dict(t=50, l=10, r=10, b=10),
+    margin=dict(t=60, l=20, r=20, b=20),
     showlegend=True,
     legend=dict(
-        title=dict(text='코스피 수급', font=dict(size=10)),
+        title=dict(text='수급 구분', font=dict(size=10, color='#aabbcc')),
         orientation='h',
-        x=0.37, y=0.46,
+        x=0.365, y=0.43,
+        xanchor='left',
+        yanchor='top',
         font=dict(size=10),
-        bgcolor='rgba(0,0,0,0)'
+        bgcolor='rgba(0,0,0,0)',
+        tracegroupgap=0
     ),
     updatemenus=updatemenus,
-    hovermode='x unified'
+    hovermode='x unified',
+    font=dict(family='malgun gothic, nanum gothic, sans-serif')
 )
 
 st.plotly_chart(fig, use_container_width=True)
