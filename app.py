@@ -71,13 +71,23 @@ fig = make_subplots(
 # [Panel 1] 실시간 수급
 if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
     df1 = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
+    # df_hd에는 등락률/현재가 컬럼이 없으므로 df_full_market에서 merge
+    if not df_m.empty and 'Code' in df_m.columns and 'Code' in df1.columns:
+        df1 = df1.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Volume']], on='Code', how='left')
+        df1['ChagesRatio'] = pd.to_numeric(df1['ChagesRatio'], errors='coerce').fillna(0)
+        df1['Close'] = pd.to_numeric(df1['Close'], errors='coerce').fillna(0)
+        df1['Volume'] = pd.to_numeric(df1['Volume'], errors='coerce').fillna(0)
+    else:
+        df1['ChagesRatio'] = 0.0
+        df1['Close'] = df1.get('Current_Price', pd.Series([0] * len(df1))).fillna(0)
+        df1['Volume'] = df1.get('Trade_Volume', pd.Series([0] * len(df1))).fillna(0)
     df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
     fig.add_trace(go.Treemap(
         labels=df1['Name'], parents=[''] * len(df1),
         values=df1['Total_Combined_Net'].abs() + 1,
         marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df1['Disp'],
-        customdata=df1[['Price','Volume','Foreign_Net','Institutional_Net','Code']].values,
+        customdata=df1[['Close','Volume','Foreign_Net','Institutional_Net','Code']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[4]})<br>'
