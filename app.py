@@ -30,19 +30,17 @@ def load_data():
             continue
         try:
             url = f'https://drive.google.com/uc?export=download&id={fid}'
-            # df_market_summary는 cp949 인코딩으로 저장될 수 있으므로 먼저 시도
             if fname == 'df_market_summary.csv':
-                for enc in ['utf-8', 'cp949', 'euc-kr']:
+                # 인코딩 순차 시도: utf-8 → cp949 → latin-1 (어떤 인코딩이든 로드 성공 시 사용)
+                loaded = False
+                for enc in ['utf-8', 'cp949', 'euc-kr', 'latin-1']:
                     try:
-                        df_tmp = pd.read_csv(url, encoding=enc)
-                        # 첫 컬럼명이 깨지지 않았는지 확인 (ASCII 범위 바깥 Ethiopic 문자 방지)
-                        first_col = str(df_tmp.columns[0])
-                        if all(ord(c) < 0x1200 or (0xAC00 <= ord(c) <= 0xD7A3) or c in '/_- ' for c in first_col):
-                            dfs[fname] = df_tmp
-                            break
+                        dfs[fname] = pd.read_csv(url, encoding=enc)
+                        loaded = True
+                        break
                     except Exception:
                         continue
-                else:
+                if not loaded:
                     dfs[fname] = pd.DataFrame()
             else:
                 dfs[fname] = pd.read_csv(url)
@@ -220,17 +218,20 @@ if not df_summary.empty:
         except:
             return '#cccccc'
 
-    # 컬럼명 정리: 깨진 문자(Ethiopic 등)가 포함된 경우 한글 폴백 적용
-    def is_broken(s):
-        """에티오피아 문자 등 비정상 유니코드 범위 감지"""
-        return any(0x1200 <= ord(c) <= 0x137F for c in str(s))
-
-    col_names = list(df_summary.columns)
-    # 3개 컬럼이면 종목/지수/등락률 순서로 폴백
+    # 컬럼명 정리: 인코딩에 상관없이 3개 컬럼이면 한글 폴백
     fallback_cols = ['종목/종류', '지수', '등락률']
-    if len(col_names) == 3 and any(is_broken(c) for c in col_names):
+    if len(df_summary.columns) == 3:
         df_summary.columns = fallback_cols
-        col_names = fallback_cols
+    elif len(df_summary.columns) != 3:
+        # 컬럼 수가 다르다면 컬럼명이 깨진 것만 한글로 대체
+        def is_broken(s):
+            return any(0x1200 <= ord(c) <= 0x137F for c in str(s))
+        new_cols = list(df_summary.columns)
+        for i, c in enumerate(new_cols):
+            if is_broken(c):
+                if i < len(fallback_cols):
+                    new_cols[i] = fallback_cols[i]
+        df_summary.columns = new_cols
 
     # 등락률 컬럼명 자동 탐색
     chg_col = None
@@ -365,7 +366,7 @@ if p5_has_data:
     updatemenus = [dict(
         type='buttons',
         direction='right',
-        x=0.365, y=0.55,
+        x=0.34, y=0.56,
         xanchor='left',
         yanchor='top',
         buttons=[
@@ -400,7 +401,7 @@ fig.update_layout(
     legend=dict(
         title=dict(text='수급 구분', font=dict(size=10, color='#aabbcc')),
         orientation='h',
-        x=0.365, y=0.43,
+        x=0.34, y=0.40,
         xanchor='left',
         yanchor='top',
         font=dict(size=10),
