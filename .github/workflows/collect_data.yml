@@ -1,0 +1,37 @@
+name: 📡 시장 데이터 자동 수집
+
+on:
+  schedule:
+    # 평일(월~금) 한국 개장 시간 09:00~15:30 KST = UTC 00:00~06:30
+    # 30분 간격 실행: 매시 0분, 30분
+    - cron: '0,30 0,1,2,3,4,5,6 * * 1-5'
+  workflow_dispatch:  # 수동 실행 버튼 (테스트용)
+
+jobs:
+  collect-market-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # 10분 이상 걸리면 강제 종료
+
+    steps:
+      - name: 📥 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 🐍 Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 🚀 데이터 수집 실행
+        env:
+          KIS_APP_KEY:    ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+          GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
+        run: python data_collector.py
+
+      - name: 📋 실행 결과 요약
+        if: always()
+        run: echo "수집 완료 시각 $(date +'%Y-%m-%d %H:%M:%S KST')"
