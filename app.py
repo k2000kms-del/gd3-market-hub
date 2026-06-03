@@ -85,7 +85,7 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
     df1['Code'] = df1['Code'].astype(str)
 
     # df_full_market에서 ChagesRatio 가져오기 (Code 기준 merge)
-    if not df_m.empty and 'Code' in df_m.columns:
+    if not df_m.empty and 'Code' in df_m.columns and 'ChagesRatio' in df_m.columns:
         df1 = df1.merge(df_m[['Code', 'ChagesRatio']], on='Code', how='left')
     else:
         df1['ChagesRatio'] = 0.0
