@@ -73,14 +73,29 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
     df1 = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
     # df_hd에는 등락률/현재가 컬럼이 없으므로 df_full_market에서 merge
     if not df_m.empty and 'Code' in df_m.columns and 'Code' in df1.columns:
-        df1 = df1.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Volume']], on='Code', how='left')
+        # Code 컬럼 타입 통일 (str) → merge 시 타입 불일치 ValueError 방지
+        df1['Code'] = df1['Code'].astype(str)
+        # 현재가 컬럼: 'Close' 또는 'Price' 중 존재하는 것 사용
+        price_col = 'Close' if 'Close' in df_m.columns else ('Price' if 'Price' in df_m.columns else None)
+        m_cols = ['Code', 'ChagesRatio', 'Volume']
+        if price_col:
+            m_cols.append(price_col)
+        df_m_ref = df_m[m_cols].copy()
+        df_m_ref['Code'] = df_m_ref['Code'].astype(str)
+        df1 = df1.merge(df_m_ref, on='Code', how='left')
         df1['ChagesRatio'] = pd.to_numeric(df1['ChagesRatio'], errors='coerce').fillna(0)
-        df1['Close'] = pd.to_numeric(df1['Close'], errors='coerce').fillna(0)
         df1['Volume'] = pd.to_numeric(df1['Volume'], errors='coerce').fillna(0)
+        # 현재가를 'Close' 컬럼 이름으로 통일
+        if price_col and price_col != 'Close':
+            df1['Close'] = pd.to_numeric(df1[price_col], errors='coerce').fillna(0)
+        elif price_col:
+            df1['Close'] = pd.to_numeric(df1['Close'], errors='coerce').fillna(0)
+        else:
+            df1['Close'] = 0
     else:
         df1['ChagesRatio'] = 0.0
-        df1['Close'] = df1.get('Current_Price', pd.Series([0] * len(df1))).fillna(0)
-        df1['Volume'] = df1.get('Trade_Volume', pd.Series([0] * len(df1))).fillna(0)
+        df1['Close'] = 0
+        df1['Volume'] = 0
     df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
     fig.add_trace(go.Treemap(
         labels=df1['Name'], parents=[''] * len(df1),
