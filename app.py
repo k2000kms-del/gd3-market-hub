@@ -233,6 +233,21 @@ if not df_summary.empty:
                     new_cols[i] = fallback_cols[i]
         df_summary.columns = new_cols
 
+    # 행 데이터 값도 깨진 경우 한글로 치환 (CSV 파일 자체 인코딩 오류 방어)
+    # 첫 번째 컬럼(종목/종류)의 값이 깨진 문자인 경우 코스피/코스닥 순서로 매핑
+    def fix_row_value(val, idx):
+        s = str(val)
+        # 에티오피아 문자(U+1200~U+137F) 또는 기타 비정상 문자가 포함된 경우
+        if any(0x1200 <= ord(c) <= 0x137F for c in s) or any(0x0370 <= ord(c) <= 0x03FF for c in s):
+            known = ['코스피', '코스닥', 'USD/KRW']
+            return known[idx] if idx < len(known) else val
+        return val
+
+    if '종목/종류' in df_summary.columns:
+        df_summary['종목/종류'] = [
+            fix_row_value(v, i) for i, v in enumerate(df_summary['종목/종류'])
+        ]
+
     # 등락률 컬럼명 자동 탐색
     chg_col = None
     for candidate in ['등락률', 'ChagesRatio', 'ChangeRatio', 'Changes']:
