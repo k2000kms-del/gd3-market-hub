@@ -246,20 +246,30 @@ def collect_quant_final(df_hd, df_full):
         code = str(row.get('Code', '')).zfill(6)
         name = row.get('Name', '')
 
-        # 1. 가격 모멘텀 점수 (최대 20점)
-        # 등락률(ChagesRatio, %) 기준: +5% 이상 20점, -5% 이하 0점, 보합 10점
+        # 1. 가격 모멘텀 점수 (최대 20점) [개선: 당일(10점) + 5일 누적(10점) 혼합]
+        # 당일 등락률: +5% 이상 10점, -5% 이하 0점, 보합 5점
         change = float(row.get('ChagesRatio', 0))
-        score_momentum = min(20, max(0, change * 2 + 10))
+        score_day = min(10, max(0, change * 1 + 5))
+        # 5일 누적 모멘텀: FDR 조회 전이므로 일단 중립값 5점으로 초기화 (아래 FDR 블록에서 갱신)
+        score_5d = 5.0
+        score_momentum = score_day + score_5d  # FDR 블록에서 최종 갱신됨
 
-        # 2. 수급 점수 (최대 30점)
+        # 2. 수급 점수 (최대 30점) [개선: 시가총액 대비 순매수 비율 기준]
         # 외인+기관 합산 순매수 금액(원화) 기준. KIS API 순매수량은 주식수이므로 종가를 곱해 금액 계산.
         close = float(row.get('Close', 0))
         foreign_qty = float(row.get('Foreign_Net', 0))
         inst_qty = float(row.get('Institutional_Net', 0))
-        
+        marcap = float(row.get('Marcap', 0))
+
         net_buy_amount = (foreign_qty + inst_qty) * close
-        # 수급 점수 공식: +5억원 이상 30점, -5억원 이하 0점, 0원일 때 15점
-        score_supply = min(30, max(0, net_buy_amount / 100000000 * 3 + 15))
+        # 시가총액 대비 순매수 비율(%) 기준으로 평가하여 대형주/소형주 체급 차이를 공평하게 반영
+        # 비율 +0.05% 이상 30점, -0.05% 이하 0점, 0%일 때 15점
+        if marcap > 0:
+            net_ratio = (net_buy_amount / marcap) * 100  # 시가총액 대비 순매수 비율(%)
+            score_supply = min(30, max(0, net_ratio / 0.05 * 15 + 15))
+        else:
+            # 시가총액 정보가 없을 경우 절대 금액 방식 폴백 (+5억원 이상 30점)
+            score_supply = min(30, max(0, net_buy_amount / 100000000 * 3 + 15))
 
         # 기본 차트 점수 및 거래대금 증가율 초기화 (FDR 실패 대비)
         score_volume = 10.0
@@ -270,23 +280,42 @@ def collect_quant_final(df_hd, df_full):
         try:
             df_hist = fdr.DataReader(code, start_date)
             if not df_hist.empty and len(df_hist) >= 5:
-                # 3. 거래대금 증가율 점수 (최대 20점)
+                # 3. 거래대금 증가율 점수 (최대 20점) [개선: 절대 거래대금 최소 허들 적용]
                 # 거래대금 = 종가 * 거래량
                 df_hist['Amount_Hist'] = df_hist['Close'] * df_hist['Volume']
                 today_amount = df_hist['Amount_Hist'].iloc[-1]
-                
+
                 # 최근 20일 평균 거래대금 계산 (당일 제외한 최근 20일)
                 hist_len = len(df_hist)
                 avg_range = df_hist['Amount_Hist'].iloc[max(0, hist_len-21):hist_len-1]
                 avg_amount = avg_range.mean() if not avg_range.empty else today_amount
-                
-                if avg_amount > 0:
-                    surge_ratio = today_amount / avg_amount
+
+                # [핵심 개선] 절대 거래대금 최소 허들: 당일 거래대금 10억원 미만이면 소외주 펌핑으로 판단, 최대 5점 제한
+                MIN_AMOUNT_THRESHOLD = 1_000_000_000  # 10억원
+                if today_amount < MIN_AMOUNT_THRESHOLD:
+                    # 소외주: 거래 자체가 미미하므로 배율이 높아도 최대 5점 이하로 제한
+                    score_volume = min(5, max(0, (today_amount / MIN_AMOUNT_THRESHOLD) * 5))
                 else:
-                    surge_ratio = 1.0
-                
-                # 거래대금 증가율 점수 공식: 2배 이상 20점, 1배(평균)일 때 10점, 0배일 때 0점
-                score_volume = min(20, max(0, (surge_ratio - 1.0) * 10 + 10))
+                    if avg_amount > 0:
+                        surge_ratio = today_amount / avg_amount
+                    else:
+                        surge_ratio = 1.0
+                    # 거래대금 증가율 점수 공식: 2배 이상 20점, 1배(평균)일 때 10점, 0배일 때 0점
+                    score_volume = min(20, max(0, (surge_ratio - 1.0) * 10 + 10))
+
+                # [개선] 가격 모멘텀 점수 - 5일 누적 등락률 파트 갱신
+                # 최근 5일(오늘 포함) 종가 기준 누적 수익률 계산
+                if len(df_hist) >= 6:
+                    price_5d_ago = float(df_hist['Close'].iloc[-6])  # 5거래일 전 종가
+                    price_now = float(df_hist['Close'].iloc[-1])
+                    change_5d = ((price_now - price_5d_ago) / price_5d_ago * 100) if price_5d_ago > 0 else 0
+                    # 5일 누적 +10% 이상 10점, -10% 이하 0점, 0%일 때 5점
+                    score_5d = min(10, max(0, change_5d * 0.5 + 5))
+                else:
+                    score_5d = 5.0  # 이력 부족 시 중립값
+
+                # 최종 모멘텀 점수 재계산 (당일 10점 + 5일 누적 10점)
+                score_momentum = min(20, max(0, score_day + score_5d))
 
                 # 4. 차트 기술적 점수 (최대 30점)
                 # (1) 이동평균선 점수 (최대 15점)
