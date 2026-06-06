@@ -150,14 +150,14 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
     df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0) if 'ChagesRatio' in df2.columns else 0
 
     # 세부 점수 컬럼 (없으면 0으로 채움)
-    for col in ['Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_Program']:
+    for col in ['Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_MA', 'Score_Candle']:
         if col not in df2.columns:
             df2[col] = 0.0
 
     def quant_grade(s):
-        if s >= 90: return '🔥 강력매수'
-        if s >= 80: return '⭐ 매수'
-        if s >= 70: return '👀 관심'
+        if s >= 80: return '🔥 강력매수'
+        if s >= 65: return '⭐ 매수'
+        if s >= 50: return '👀 관심'
         return '🔍 검토'
 
     df2['Grade'] = df2['Total_Score'].apply(quant_grade)
@@ -169,7 +169,7 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
         text=df2['Total_Score'].apply(lambda x: f"{x:.1f}점"),
         customdata=df2[[
             'Code', 'Total_Score', 'Grade',
-            'Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_Program',
+            'Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_MA', 'Score_Candle',
             'Close', 'ChagesRatio'
         ]].values,
         texttemplate='<b>%{label}</b><br>%{text}',
@@ -178,13 +178,14 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
             '━━━━━━━━━━━━━━━<br>'
             'Quant 점수: <b>%{customdata[1]:.1f}점</b>  %{customdata[2]}<br>'
             '━━━━━━━━━━━━━━━<br>'
-            '📈 가격 모멘텀:  %{customdata[3]:.1f} / 25점<br>'
-            '👥 외국인+기관:  %{customdata[4]:.1f} / 35점<br>'
-            '📊 거래량 서지:  %{customdata[5]:.1f} / 25점<br>'
-            '🤖 프로그램 매수: %{customdata[6]:.1f} / 15점<br>'
+            '📈 가격 모멘텀:  %{customdata[3]:.1f} / 20점<br>'
+            '👥 외국인+기관:  %{customdata[4]:.1f} / 30점<br>'
+            '📊 거래대금 서지:  %{customdata[5]:.1f} / 20점<br>'
+            '🧭 이평선 추세:  %{customdata[6]:.1f} / 15점<br>'
+            '🕯️ 캔들 시그널:  %{customdata[7]:.1f} / 15점<br>'
             '━━━━━━━━━━━━━━━<br>'
-            '현재가: %{customdata[7]:,}원 '
-            '(%{customdata[8]:+.2f}%)'
+            '현재가: %{customdata[8]:,}원 '
+            '(%{customdata[9]:+.2f}%)'
             '<extra></extra>'
         )
     ), row=1, col=2)

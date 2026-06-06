@@ -232,36 +232,124 @@ def collect_high_density(token, df_full):
 
 
 def collect_quant_final(df_hd, df_full):
-    """Quant 점수 계산"""
-    print('🎯 Quant 점수 계산 중...')
+    """Quant 점수 계산 (차트 분석 및 금액 수급 반영)"""
+    print('🎯 차트 기반 Quant 점수 계산 중...')
     if df_hd.empty:
         return pd.DataFrame()
 
     rows = []
-    for _, row in df_hd.iterrows():
-        # 간단한 Quant 점수 계산
-        change  = float(row.get('ChagesRatio', 0))
-        foreign = float(row.get('Foreign_Net', 0))
-        inst    = float(row.get('Institutional_Net', 0))
-        prog    = float(row.get('Program_Net', 0))
-        volume  = float(row.get('Volume', 0))
+    # 30일 가격 이력을 조회하기 위해 시작 날짜 계산 (안전하게 50일 전으로 설정)
+    start_date = (datetime.now() - timedelta(days=50)).strftime('%Y-%m-%d')
 
-        # 점수 계산 (각 항목 최대 25점)
-        score_momentum = min(25, max(0, change * 5 + 12.5))
-        score_supply   = min(35, max(0, (foreign + inst) / 1000 + 17.5))
-        score_volume   = min(25, max(0, volume / 1000000 * 5 + 12.5))
-        score_program  = min(15, max(0, prog / 500 + 7.5))
-        total_score    = score_momentum + score_supply + score_volume + score_program
+    for _, row in df_hd.iterrows():
+        code = str(row.get('Code', '')).zfill(6)
+        name = row.get('Name', '')
+
+        # 1. 가격 모멘텀 점수 (최대 20점)
+        # 등락률(ChagesRatio, %) 기준: +5% 이상 20점, -5% 이하 0점, 보합 10점
+        change = float(row.get('ChagesRatio', 0))
+        score_momentum = min(20, max(0, change * 2 + 10))
+
+        # 2. 수급 점수 (최대 30점)
+        # 외인+기관 합산 순매수 금액(원화) 기준. KIS API 순매수량은 주식수이므로 종가를 곱해 금액 계산.
+        close = float(row.get('Close', 0))
+        foreign_qty = float(row.get('Foreign_Net', 0))
+        inst_qty = float(row.get('Institutional_Net', 0))
+        
+        net_buy_amount = (foreign_qty + inst_qty) * close
+        # 수급 점수 공식: +5억원 이상 30점, -5억원 이하 0점, 0원일 때 15점
+        score_supply = min(30, max(0, net_buy_amount / 100000000 * 3 + 15))
+
+        # 기본 차트 점수 및 거래대금 증가율 초기화 (FDR 실패 대비)
+        score_volume = 10.0
+        score_ma = 7.5
+        score_candle = 7.5
+
+        # fdr을 통한 일봉 데이터 조회 (MA 및 캔들, 거래대금 증가율 계산용)
+        try:
+            df_hist = fdr.DataReader(code, start_date)
+            if not df_hist.empty and len(df_hist) >= 5:
+                # 3. 거래대금 증가율 점수 (최대 20점)
+                # 거래대금 = 종가 * 거래량
+                df_hist['Amount_Hist'] = df_hist['Close'] * df_hist['Volume']
+                today_amount = df_hist['Amount_Hist'].iloc[-1]
+                
+                # 최근 20일 평균 거래대금 계산 (당일 제외한 최근 20일)
+                hist_len = len(df_hist)
+                avg_range = df_hist['Amount_Hist'].iloc[max(0, hist_len-21):hist_len-1]
+                avg_amount = avg_range.mean() if not avg_range.empty else today_amount
+                
+                if avg_amount > 0:
+                    surge_ratio = today_amount / avg_amount
+                else:
+                    surge_ratio = 1.0
+                
+                # 거래대금 증가율 점수 공식: 2배 이상 20점, 1배(평균)일 때 10점, 0배일 때 0점
+                score_volume = min(20, max(0, (surge_ratio - 1.0) * 10 + 10))
+
+                # 4. 차트 기술적 점수 (최대 30점)
+                # (1) 이동평균선 점수 (최대 15점)
+                ma5 = df_hist['Close'].rolling(5).mean().iloc[-1]
+                ma20 = df_hist['Close'].rolling(20).mean().iloc[-1] if len(df_hist) >= 20 else ma5
+                today_close = df_hist['Close'].iloc[-1]
+
+                if today_close > ma5 > ma20:
+                    score_ma = 15.0  # 강한 정배열
+                elif today_close > ma5 and today_close <= ma20:
+                    score_ma = 10.0  # 단기 반등
+                elif today_close > ma20 and today_close <= ma5:
+                    score_ma = 8.0   # 눌림목 조정
+                else:
+                    score_ma = 0.0   # 역배열/약세
+
+                # (2) 캔들 패턴 점수 (최대 15점)
+                o = float(df_hist['Open'].iloc[-1])
+                h = float(df_hist['High'].iloc[-1])
+                l = float(df_hist['Low'].iloc[-1])
+                c = float(df_hist['Close'].iloc[-1])
+
+                body = c - o
+                rng = h - l if h - l > 0 else 1.0
+                lower_shadow = min(o, c) - l
+                upper_shadow = h - max(o, c)
+
+                if body > 0:  # 양봉
+                    if lower_shadow > body * 0.5:
+                        score_candle = 15.0  # 아래꼬리가 긴 망치형 양봉 (매수세 강함)
+                    elif upper_shadow > body:
+                        score_candle = 8.0   # 위꼬리가 긴 양봉 (매물 저항)
+                    else:
+                        score_candle = 12.0  # 일반 양봉 / 장대양봉
+                elif body == 0:  # 도지형
+                    if lower_shadow > rng * 0.5:
+                        score_candle = 10.0  # 밑꼬리가 긴 도지
+                    else:
+                        score_candle = 5.0   # 일반 도지
+                else:  # 음봉
+                    if lower_shadow > abs(body) * 1.5:
+                        score_candle = 8.0   # 아래꼬리가 매우 긴 음봉 (저점 매수세 유입)
+                    else:
+                        score_candle = 0.0   # 일반 음봉 / 장대음봉 (매도세 지배)
+
+        except Exception as e:
+            print(f'  ⚠️ [{name}] 가격 이력 조회 실패: {e}')
+
+        # 합산 점수
+        total_score = score_momentum + score_supply + score_volume + score_ma + score_candle
 
         rows.append({
-            'Code':             row.get('Code', ''),
-            'Name':             row.get('Name', ''),
+            'Code':             code,
+            'Name':             name,
             'Total_Score':      round(total_score, 1),
             'Score_Momentum':   round(score_momentum, 1),
             'Score_Supply':     round(score_supply, 1),
             'Score_Volume':     round(score_volume, 1),
-            'Score_Program':    round(score_program, 1),
+            'Score_MA':         round(score_ma, 1),
+            'Score_Candle':     round(score_candle, 1),
+            'Close':            close,
+            'ChagesRatio':      change,
         })
+        time.sleep(0.05) # 서버 부하 방지 및 FDR 호출 조절
 
     df = pd.DataFrame(rows).sort_values('Total_Score', ascending=False)
     print(f'  → {len(df)}개 종목')
