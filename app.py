@@ -116,15 +116,17 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
     df1['Institutional_Net'] = pd.to_numeric(df1['Institutional_Net'], errors='coerce').fillna(0) if 'Institutional_Net' in df1.columns else 0
     df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
 
+    if 'Sector' not in df1.columns: df1['Sector'] = '-'
     fig.add_trace(go.Treemap(
         labels=df1['Name'], parents=[''] * len(df1),
         values=df1['Total_Combined_Net'].abs() + 1,
         marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df1['Disp'],
-        customdata=df1[['Current_Price_Val', 'Trade_Volume_Val', 'Foreign_Net', 'Institutional_Net', 'Code']].values,
+        customdata=df1[['Current_Price_Val', 'Trade_Volume_Val', 'Foreign_Net', 'Institutional_Net', 'Code', 'Sector']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[4]})<br>'
+            '업종: %{customdata[5]}<br>'
             '현재가: %{customdata[0]:,}원<br>'
             '등락률: %{text}<br>'
             '거래량: %{customdata[1]:,}<br>'
@@ -162,6 +164,7 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
 
     df2['Grade'] = df2['Total_Score'].apply(quant_grade)
 
+    if 'Sector' not in df2.columns: df2['Sector'] = '-'
     fig.add_trace(go.Treemap(
         labels=df2['Name'], parents=[''] * len(df2),
         values=df2['Total_Score'],
@@ -170,11 +173,12 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
         customdata=df2[[
             'Code', 'Total_Score', 'Grade',
             'Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_Program',
-            'Close', 'ChagesRatio'
+            'Close', 'ChagesRatio', 'Sector'
         ]].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[0]})<br>'
+            '업종: %{customdata[9]}<br>'
             '━━━━━━━━━━━━━━━<br>'
             'Quant 점수: <b>%{customdata[1]:.1f}점</b>  %{customdata[2]}<br>'
             '━━━━━━━━━━━━━━━<br>'
@@ -196,15 +200,17 @@ if not df_m.empty and 'Amount' in df_m.columns:
     # 거래대금을 '억원' 단위로 변환
     df3['Amount_100M'] = df3['Amount'] / 100000000
     
+    if 'Sector' not in df3.columns: df3['Sector'] = '-'
     fig.add_trace(go.Treemap(
         labels=df3['Name'], parents=[''] * len(df3),
         values=df3['Amount'],
         marker=dict(colors=df3['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df3['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
-        customdata=df3[['Code', 'Close', 'Amount_100M', 'ChagesRatio']].values,
+        customdata=df3[['Code', 'Close', 'Amount_100M', 'ChagesRatio', 'Sector']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[0]})<br>'
+            '업종: %{customdata[4]}<br>'
             '현재가: %{customdata[1]:,}원<br>'
             '등락률: %{customdata[3]:+.2f}%<br>'
             '거래대금: %{customdata[2]:,.0f}억원'
@@ -350,15 +356,17 @@ else:
 # 컬럼: Name, Code, ChagesRatio, Close, Volume
 if not df_m.empty and 'ChagesRatio' in df_m.columns:
     df6 = df_m.sort_values('ChagesRatio', ascending=False).head(15).copy()
+    if 'Sector' not in df6.columns: df6['Sector'] = '-'
     fig.add_trace(go.Treemap(
         labels=df6['Name'], parents=[''] * len(df6),
         values=df6['ChagesRatio'].abs() + 0.01,
         marker=dict(colors=df6['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df6['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
-        customdata=df6[['Code', 'Close', 'Volume', 'ChagesRatio']].values,
+        customdata=df6[['Code', 'Close', 'Volume', 'ChagesRatio', 'Sector']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[0]})<br>'
+            '업종: %{customdata[4]}<br>'
             '현재가: %{customdata[1]:,}원<br>'
             '등락률: <b>%{customdata[3]:+.2f}%</b><br>'
             '거래량: %{customdata[2]:,}주'
