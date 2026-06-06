@@ -82,7 +82,7 @@ fig = make_subplots(
     subplot_titles=(
         '📊 실시간 수급(외/기/프)',
         '🎯 Quant Buy TOP 10',
-        '🔥 거래량 리더(15)',
+        '🔥 거래대금 리더(15)',
         '📉 시장 요약 및 수급',
         '📈 코스피/코스닥 수급 현황',
         '🚀 상승률 리더(15)'
@@ -189,22 +189,25 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
         )
     ), row=1, col=2)
 
-# [Panel 3] 거래량 리더(15) (df_full_market 기반)
-# 컬럼: Name, Code, Volume, Close, ChagesRatio
-if not df_m.empty and 'Volume' in df_m.columns:
-    df3 = df_m.sort_values('Volume', ascending=False).head(15).copy()
+# [Panel 3] 거래대금 리더(15) (df_full_market 기반)
+# 컬럼: Name, Code, Amount, Close, ChagesRatio
+if not df_m.empty and 'Amount' in df_m.columns:
+    df3 = df_m.sort_values('Amount', ascending=False).head(15).copy()
+    # 거래대금을 '억원' 단위로 변환
+    df3['Amount_100M'] = df3['Amount'] / 100000000
+    
     fig.add_trace(go.Treemap(
         labels=df3['Name'], parents=[''] * len(df3),
-        values=df3['Volume'],
+        values=df3['Amount'],
         marker=dict(colors=df3['ChagesRatio'], colorscale=kr_scale, cmid=0),
         text=df3['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
-        customdata=df3[['Code', 'Close', 'Volume', 'ChagesRatio']].values,
+        customdata=df3[['Code', 'Close', 'Amount_100M', 'ChagesRatio']].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
             '<b>%{label}</b> (%{customdata[0]})<br>'
             '현재가: %{customdata[1]:,}원<br>'
             '등락률: %{customdata[3]:+.2f}%<br>'
-            '거래량: %{customdata[2]:,}주'
+            '거래대금: %{customdata[2]:,.0f}억원'
             '<extra></extra>'
         )
     ), row=1, col=3)
