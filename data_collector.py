@@ -378,12 +378,9 @@ def collect_supply_intraday(token):
                     'Institutional_Net': int(item.get('orgn_ntby_tr_pbmn', 0)) // 100000000,
                 })
         except Exception as e:
-            print(f'  ❌ {market_name} 수급 조회 오류: {e}')
-            # 오류 시 현재 시간 기준 0 데이터 추가
-            rows.append({
-                'Time': now_str, 'Market': market_name,
-                'Foreign_Net': 0, 'Individual_Net': 0, 'Institutional_Net': 0
-            })
+            print(f'  ❌ {market_name} 수급 조회 에러: {e}')
+            # 주말/에러 시 0을 넣지 않고 패스하여, 기존 금요일 데이터가 덮어씌워지지 않도록 함
+            pass
 
     df = pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=['Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net']
