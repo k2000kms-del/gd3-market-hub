@@ -167,6 +167,18 @@ def collect_full_market():
         df_kq = fdr.StockListing('KOSDAQ')
         df_all = pd.concat([df_ks, df_kq], ignore_index=True)
 
+        # ── [종목 필터링] 부실/특수 종목 제외 ──
+        if 'Name' in df_all.columns:
+            # 스팩, ETN, ETF, 우선주(우, 우B 등), 리츠, 인프라 등 제외
+            junk_patterns = '스팩|SPAC|ETN|ETF|제[0-9]+호|우$|우[A-Z]$|리츠|인프라'
+            df_all = df_all[~df_all['Name'].str.contains(junk_patterns, regex=True, na=False)]
+        
+        if 'Volume' in df_all.columns:
+            # 거래량 0인 종목 제외 (거래정지 등)
+            df_all = df_all[df_all['Volume'] > 0]
+            
+        df_all = df_all.reset_index(drop=True)
+
         # 컬럼 정리
         col_map = {
             'Symbol': 'Code', 'Name': 'Name', 'Market': 'Market',
