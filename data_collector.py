@@ -89,6 +89,30 @@ def fetch_stock_supply(token, stock_code):
         return {'Foreign_Net': 0, 'Institutional_Net': 0, 'Program_Net': 0}
 
 
+def fetch_stock_sector(token, stock_code):
+    """KIS API: 종목의 HTS 업종명 조회 (bstp_kor_isnm)"""
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'authorization': f'Bearer {token}',
+            'appkey': APP_KEY,
+            'appsecret': APP_SECRET,
+            'tr_id': 'FHKST01010100',
+        }
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': stock_code,
+        }
+        res = requests.get(
+            f'{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-price',
+            headers=headers, params=params
+        )
+        data = res.json().get('output', {})
+        return data.get('bstp_kor_isnm', '').strip()
+    except Exception:
+        return ''
+
+
 def fetch_market_index(token, market_code='0001'):
     """KIS API: 코스피/코스닥 지수 조회"""
     try:
@@ -287,7 +311,7 @@ def _classify_sector(code, name, fdr_sector="", fdr_industry=""):
         '138930': '금융', '139130': '금융',
         # 에너지/정유
         '096770': '에너지', '010950': '에너지', '078930': '에너지',
-        '267250': '에너지', '011070': '에너지',
+        '267250': '에너지',
         # 항공/운송
         '003490': '항공운송', '020560': '항공운송', '011200': '항공운송',
         '000120': '항공운송',
@@ -336,7 +360,7 @@ def _classify_sector(code, name, fdr_sector="", fdr_industry=""):
     return '기타'
 
 
-def collect_quant_final(df_hd, df_full):
+def collect_quant_final(token, df_hd, df_full):
     """Quant 점수 계산 - 선행 매수 타이밍 포착 전용 스크리너
 
     [목적]
@@ -677,6 +701,18 @@ def collect_quant_final(df_hd, df_full):
         fdr_sector = row.get('FDR_Sector', '')
         fdr_industry = row.get('FDR_Industry', '')
         sector = _classify_sector(code, name, fdr_sector, fdr_industry)
+
+        # 만약 로컬/FDR 분류에서 '기타'로 분류되었을 경우, KIS HTS API 실시간 조회 폴백 (10-15개 소수 종목만 동적 호출)
+        if sector == '기타':
+            import time
+            hts_sector = fetch_stock_sector(token, code)
+            if hts_sector:
+                # HTS 업종명을 기반으로 9대 핵심 섹터 분류 재시도
+                sector = _classify_sector(code, name, hts_sector)
+                if sector == '기타':
+                    sector = hts_sector  # 재분류 불가 시 HTS 업종명 그대로 사용 (기타 방지)
+            time.sleep(0.05)  # TPS 방지
+
         sector_mult = get_sector_multiplier(sector)
 
         # ── 변동성 조정 패널티 (리스크 조정 수익률 관점) ──────────────
@@ -891,7 +927,7 @@ def main():
     df_full     = collect_full_market()
     df_intraday = collect_supply_intraday(token)
     df_hd       = collect_high_density(token, df_full)
-    df_quant    = collect_quant_final(df_hd, df_full)
+    df_quant    = collect_quant_final(token, df_hd, df_full)
     df_summary  = collect_market_summary(token, df_intraday)
 
     # Google Drive 업로드
