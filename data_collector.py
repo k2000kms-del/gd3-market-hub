@@ -19,7 +19,7 @@ from io import BytesIO
 # ── Google Drive API 관련 ────────────────────────────────────────
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 
 # ── KIS API 설정 (환경변수에서 읽기) ────────────────────────────
 APP_KEY    = os.environ.get('KIS_APP_KEY', '')
@@ -136,14 +136,14 @@ def fetch_market_investor(token, market_div='J'):
 
 # ── Google Drive 업로드 ──────────────────────────────────────────
 def get_drive_service():
-    """Google Drive API 서비스 객체 생성 (Service Account)"""
-    sa_json_str = os.environ.get('GDRIVE_SA_JSON', '')
-    if not sa_json_str:
-        raise ValueError('GDRIVE_SA_JSON 환경변수가 설정되지 않았습니다.')
+    """Google Drive API 서비스 객체 생성 (OAuth 2.0)"""
+    token_json_str = os.environ.get('GDRIVE_OAUTH_TOKEN', '')
+    if not token_json_str:
+        raise ValueError('GDRIVE_OAUTH_TOKEN 환경변수가 설정되지 않았습니다.')
 
-    sa_info = json.loads(sa_json_str)
-    creds = service_account.Credentials.from_service_account_info(
-        sa_info,
+    token_info = json.loads(token_json_str)
+    creds = Credentials.from_authorized_user_info(
+        token_info,
         scopes=['https://www.googleapis.com/auth/drive']
     )
     return build('drive', 'v3', credentials=creds)
