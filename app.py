@@ -154,10 +154,22 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
     df2['Close'] = pd.to_numeric(df2['Close'], errors='coerce').fillna(0) if 'Close' in df2.columns else 0
     df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0) if 'ChagesRatio' in df2.columns else 0
 
-    # 세부 점수 컬럼 (없으면 0으로 채움)
+    # 세부 점수 및 매크로/리스크 보정 컬럼 (없으면 기본값 채움 - 하방 호환성 확보)
     for col in ['Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_MA', 'Score_Candle']:
         if col not in df2.columns:
             df2[col] = 0.0
+
+    for col in ['Sector', 'Sector_Mult', 'Vol_Penalty', 'Market_Penalty', 'Market_Condition']:
+        if col not in df2.columns:
+            if col == 'Sector':
+                df2[col] = '기타'
+            elif col in ['Sector_Mult', 'Vol_Penalty', 'Market_Penalty']:
+                df2[col] = 1.0
+            elif col == 'Market_Condition':
+                df2[col] = '중립 (평가 정보 없음)'
+
+    # 원점수 합계 계산
+    df2['Raw_Score'] = df2['Score_Momentum'] + df2['Score_Supply'] + df2['Score_Volume'] + df2['Score_MA'] + df2['Score_Candle']
 
     def quant_grade(s):
         if s >= 80: return '🔥 강력매수'
@@ -175,7 +187,8 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
         customdata=df2[[
             'Code', 'Total_Score', 'Grade',
             'Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_MA', 'Score_Candle',
-            'Close', 'ChagesRatio'
+            'Close', 'ChagesRatio', 'Raw_Score', 'Vol_Penalty', 'Sector', 'Sector_Mult',
+            'Market_Penalty', 'Market_Condition'
         ]].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
@@ -188,6 +201,12 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
             '📊 거래대금 증가율:  %{customdata[5]:.1f} / 20점<br>'
             '🧭 이평선 추세:  %{customdata[6]:.1f} / 15점<br>'
             '🕯️ 캔들 시그널:  %{customdata[7]:.1f} / 15점<br>'
+            '━━━━━━━━━━━━━━━<br>'
+            '원점수 합계: %{customdata[10]:.1f}점<br>'
+            '🛡️ 변동성 패널티: x%{customdata[11]:.2f}<br>'
+            '⚙️ 섹터 가중치: %{customdata[12]} (x%{customdata[13]:.2f})<br>'
+            '🚨 시장 패널티: x%{customdata[14]:.2f}<br>'
+            '🗺️ 시장 국면: %{customdata[15]}<br>'
             '━━━━━━━━━━━━━━━<br>'
             '현재가: %{customdata[8]:,}원 '
             '(%{customdata[9]:+.2f}%)'

@@ -694,6 +694,7 @@ def collect_quant_final(df_hd, df_full):
             'Sector':           sector,          # 섹터 분류
             'Sector_Mult':      sector_mult,     # 섹터 가중치 계수
             'Vol_Penalty':      vol_penalty,     # 변동성 패널티 계수
+            'Market_Penalty':   market_penalty,  # 시장 패널티 계수
             'Market_Condition': market_condition,
         })
         time.sleep(0.05) # 서버 부하 방지 및 FDR 호출 조절
