@@ -12,6 +12,7 @@ import json
 import requests
 import pandas as pd
 import numpy as np
+import time
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 from io import BytesIO
