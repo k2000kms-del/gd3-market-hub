@@ -334,11 +334,16 @@ def collect_quant_final(df_hd, df_full):
     - Score_MA       (15점): 이평선 배열 + 60일선 필터 + 이격도/수렴 보정 → 추세 구조 확인
     - Score_Candle   (15점): 당일 캔들 매수세 강도 → 진입 타이밍 최적화
 
-    [매크로 보정 로직 - 지정학·환율·유가 충격 대응]
-    - 시장 국면 다층 패널티: 당일 + 3일 + 5일 누적 낙폭 중 가장 강한 패널티 선택
-    - USD/KRW 환율 급등 감지: 환율 5일 +3% 이상 시 섹터별 차등 적용 (반도체 수혜, 내수 패널티)
+    [매크로 보정 로직 - 3중 레이어 사이드카 대응 구조]
+    ● Layer 1 - 방향성 패널티: 당일/3일/5일 누적 낙폭 기반 (기존 방식)
+    ● Layer 2 - 변동성 레짐 패널티: 10일 일간 변동성(σ) 기반 (신규)
+      → 사이드카처럼 매수/매도가 교대로 발생해 방향성이 상쇄될 때도 포착
+      → σ > 2.0% (연환산 ~32%) 이면 고변동성 레짐으로 별도 패널티 부여
+    ● Layer 3 - 장중 충격 감지: 당일 고저폭/전일종가 비율 기반 (신규)
+      → 사이드카가 장중 발동되었으나 종가가 회복된 경우에도 감지
+    - USD/KRW 환율 급등 감지: 환율 5일 +3% 이상 시 섹터별 차등 적용
     - 유가 급등 감지: 정유 에너지 섹터 수혜 / 항공·운송 패널티
-    - 종목별 변동성 조정: 20일 연환산 변동성 30% 초과 시 점수 하향 (리스크 조정)
+    - 종목별 변동성 조정: 20일 연환산 변동성 30% 초과 시 점수 하향
     - 섹터 가중치: 매크로 국면에 따라 섹터별 점수 계수를 차등 적용
     - 이중 신호 중복 보정: 거래대금 급증과 가격 급등이 동시에 만점일 때 과대평가 방지
     """
@@ -346,53 +351,88 @@ def collect_quant_final(df_hd, df_full):
     if df_hd.empty:
         return pd.DataFrame()
 
-    # ── 매크로 팩터 사전 수집 (시장 국면 + 환율 + 유가) ─────────────
-    market_penalty = 1.0
+    # ── 매크로 팩터 사전 수집 ────────────────────────────────────────
+    # Layer 1: 방향성 패널티 (누적 낙폭)
+    layer1_penalty = 1.0
+    # Layer 2: 변동성 레짐 패널티 (방향성과 독립적 - 사이드카 상쇄 문제 해결)
+    layer2_vol_regime = 1.0
+    # Layer 3: 당일 장중 충격 감지 패널티
+    layer3_intraday = 1.0
+
     market_condition = '중립'
-    usd_krw_chg_5d = 0.0   # 환율 5일 변동률(%)
-    oil_surge = False      # 유가 급등 여부 (에너지 섹터 ETF 대용)
+    usd_krw_chg_5d = 0.0
+    oil_surge = False
 
     try:
-        start_mkt = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
+        start_mkt = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
         df_ks  = fdr.DataReader('KS11', start_mkt)
         df_kq  = fdr.DataReader('KQ11', start_mkt)
         df_usd = fdr.DataReader('USD/KRW', start_mkt)
 
-        # 당일 등락률
         def last_chg(df):
             return float(df['Change'].iloc[-1] * 100) if not df.empty and 'Change' in df.columns else 0
 
-        ks_1d  = last_chg(df_ks)
-        kq_1d  = last_chg(df_kq)
-        avg_1d = (ks_1d + kq_1d) / 2
-
-        # 3일 누적 등락률
         def cumret(df, n):
-            if len(df) < n + 1:
-                return 0
+            if len(df) < n + 1: return 0
             p0 = float(df['Close'].iloc[-(n+1)])
             p1 = float(df['Close'].iloc[-1])
             return ((p1 - p0) / p0 * 100) if p0 > 0 else 0
 
-        ks_3d  = cumret(df_ks, 3)
-        kq_3d  = cumret(df_kq, 3)
-        avg_3d = (ks_3d + kq_3d) / 2
+        ks_1d = last_chg(df_ks); kq_1d = last_chg(df_kq); avg_1d = (ks_1d + kq_1d) / 2
+        avg_3d = (cumret(df_ks, 3) + cumret(df_kq, 3)) / 2
+        avg_5d = (cumret(df_ks, 5) + cumret(df_kq, 5)) / 2
 
-        ks_5d  = cumret(df_ks, 5)
-        kq_5d  = cumret(df_kq, 5)
-        avg_5d = (ks_5d + kq_5d) / 2
-
-        # 다층 시장 국면 판단: 당일/3일/5일 중 가장 심각한 조건 적용
+        # ── Layer 1: 방향성 패널티 (기존 로직 유지) ──────────────────
         if avg_1d <= -1.5 or avg_3d <= -3.0 or avg_5d <= -5.0:
-            market_penalty = 0.75  # 강한 패널티: 지정학·충격 국면
-            market_condition = f'위기 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
+            layer1_penalty = 0.80
+            market_condition = f'하락위기 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
         elif avg_1d <= -0.5 or avg_3d <= -1.5 or avg_5d <= -3.0:
-            market_penalty = 0.88
+            layer1_penalty = 0.90
             market_condition = f'약세 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
         elif avg_1d >= 1.0 and avg_3d >= 2.0:
             market_condition = f'강세 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
         else:
             market_condition = f'중립 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
+
+        # ── Layer 2: 변동성 레짐 패널티 (사이드카 상쇄 핵심 해결) ──────
+        # 최근 10일 KOSPI 일간 수익률의 표준편차로 레짐 판별
+        # → 매수/매도 사이드카가 교대로 발생해 방향성이 0%에 수렴해도
+        #   변동성(σ)은 높게 유지되므로 이 레이어에서 독립적으로 포착
+        if len(df_ks) >= 11:
+            ks_10d_std = df_ks['Change'].tail(10).std() * 100  # 일간 σ (%)
+            kq_10d_std = df_kq['Change'].tail(10).std() * 100
+            avg_10d_std = (ks_10d_std + kq_10d_std) / 2
+
+            if avg_10d_std >= 2.5:
+                # 일간 σ ≥ 2.5% (연환산 ≈ 40%↑): 사이드카 빈발 극단 레짐
+                layer2_vol_regime = 0.80
+                market_condition += f' | ⚡극단변동성(σ={avg_10d_std:.1f}%)'
+            elif avg_10d_std >= 2.0:
+                # 일간 σ ≥ 2.0% (연환산 ≈ 32%↑): 고변동성 레짐
+                layer2_vol_regime = 0.88
+                market_condition += f' | 고변동성(σ={avg_10d_std:.1f}%)'
+            elif avg_10d_std >= 1.5:
+                # 일간 σ ≥ 1.5% (연환산 ≈ 24%↑): 주의 레짐
+                layer2_vol_regime = 0.95
+                market_condition += f' | 주의(σ={avg_10d_std:.1f}%)'
+
+        # ── Layer 3: 당일 장중 충격 감지 ─────────────────────────────
+        # 고가-저가 폭이 전일 종가 대비 4% 이상이면 장중 사이드카 수준의
+        # 극단 변동이 발생했을 가능성이 높음 (종가 회복 여부와 무관하게 감지)
+        if len(df_ks) >= 2:
+            ks_h  = float(df_ks['High'].iloc[-1])
+            ks_l  = float(df_ks['Low'].iloc[-1])
+            ks_pc = float(df_ks['Close'].iloc[-2])
+            intraday_range = ((ks_h - ks_l) / ks_pc * 100) if ks_pc > 0 else 0
+            if intraday_range >= 5.0:
+                # 코스피 당일 고저폭 5% 이상: 사이드카 발동 수준의 장중 충격
+                layer3_intraday = 0.88
+                market_condition += f' | 장중충격(범위{intraday_range:.1f}%)'
+            elif intraday_range >= 3.5:
+                layer3_intraday = 0.94
+
+        # 최종 시장 패널티: 3개 레이어 곱셈 적용
+        market_penalty = round(layer1_penalty * layer2_vol_regime * layer3_intraday, 3)
 
         # USD/KRW 5일 변동률 계산
         if not df_usd.empty and len(df_usd) >= 6:
@@ -400,17 +440,16 @@ def collect_quant_final(df_hd, df_full):
             usd_p1 = float(df_usd['Close'].iloc[-1])
             usd_krw_chg_5d = ((usd_p1 - usd_p0) / usd_p0 * 100) if usd_p0 > 0 else 0
 
-        # 유가 급등 감지 (S-Oil(096770) 주가로 에너지 국면 대용)
-        # 에너지 관련 ETF 또는 주요 정유주 5일 수익률로 유가 방향 추정
+        # 유가 급등 감지
         try:
-            df_oil_proxy = fdr.DataReader('096770', start_mkt)  # S-Oil 대용
+            df_oil_proxy = fdr.DataReader('096770', start_mkt)
             if not df_oil_proxy.empty and len(df_oil_proxy) >= 6:
-                oil_ret = cumret(df_oil_proxy, 5)
-                oil_surge = oil_ret >= 5.0  # 5일 5% 이상 급등이면 유가 급등 국면
+                oil_surge = cumret(df_oil_proxy, 5) >= 5.0
         except:
             oil_surge = False
 
-        print(f'  📊 시장 국면: {market_condition} (계수: x{market_penalty})')
+        print(f'  📊 시장 국면: {market_condition}')
+        print(f'  🔢 패널티: L1(방향)x{layer1_penalty} × L2(변동성)x{layer2_vol_regime} × L3(장중)x{layer3_intraday} = x{market_penalty}')
         print(f'  💱 USD/KRW 5일 변동: {usd_krw_chg_5d:+.2f}% | 유가급등: {oil_surge}')
     except Exception as e:
         print(f'  ⚠️ 매크로 데이터 조회 실패 (기본값 적용): {e}')
