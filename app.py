@@ -64,7 +64,11 @@ if not df_m.empty:
     for col in ['Close', 'ChagesRatio', 'Volume', 'Amount', 'Marcap']:
         if col in df_m.columns:
             df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
-    df_m['Code'] = df_m['Code'].astype(str)
+
+# 모든 데이터프레임의 종목코드(Code) 규격화 (6자리 문자열 패딩)
+for df_temp in [df_hd, df_q, df_m, df_summary, df_intraday]:
+    if df_temp is not None and not df_temp.empty and 'Code' in df_temp.columns:
+        df_temp['Code'] = df_temp['Code'].astype(str).str.split('.').str[0].str.zfill(6)
 
 kr_scale = 'RdBu_r'
 
@@ -138,7 +142,7 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
 # 컬럼: Name, Code, Total_Score (세부 점수 없음)
 if not df_q.empty and 'Total_Score' in df_q.columns:
     df2 = df_q.sort_values('Total_Score', ascending=False).head(10).copy()
-    df2['Code'] = df2['Code'].astype(str)
+    df2['Code'] = df2['Code'].astype(str).str.split('.').str[0].str.zfill(6)
 
     # df_full_market에서 현재가/등락률 합치기 (최신 가격 반영 및 merge 충돌 방지)
     if not df_m.empty and 'Code' in df_m.columns:
