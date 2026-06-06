@@ -1,0 +1,5 @@
+Code | Name | FDR Sector | FDR Industry | Classified Sector
+066570 | LG전자 |  |  | 기타
+009150 | 삼성전기 |  |  | 기타
+402340 | SK스퀘어 |  |  | 기타
+011070 | LG이노텍 |  |  | 에너지
