@@ -185,7 +185,7 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
             '━━━━━━━━━━━━━━━<br>'
             '📈 가격 모멘텀:  %{customdata[3]:.1f} / 20점<br>'
             '👥 외국인+기관:  %{customdata[4]:.1f} / 30점<br>'
-            '📊 거래대금 서지:  %{customdata[5]:.1f} / 20점<br>'
+            '📊 거래대금 증가율:  %{customdata[5]:.1f} / 20점<br>'
             '🧭 이평선 추세:  %{customdata[6]:.1f} / 15점<br>'
             '🕯️ 캔들 시그널:  %{customdata[7]:.1f} / 15점<br>'
             '━━━━━━━━━━━━━━━<br>'
