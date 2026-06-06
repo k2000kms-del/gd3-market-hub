@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,7 +37,15 @@ jobs:
         run: python data_collector.py
 
       - name: Run specific stocks check
-        run: python check_specific_stocks.py
+        run: python check_specific_stocks.py > output_sectors.txt
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add output_sectors.txt
+          git commit -m "chore: update output_sectors.txt [skip ci]" || exit 0
+          git push origin main
 
       - name: Summarize execution
         if: always()
