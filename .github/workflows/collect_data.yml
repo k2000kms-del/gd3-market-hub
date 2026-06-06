@@ -33,6 +33,9 @@ jobs:
           GDRIVE_OAUTH_TOKEN: ${{ secrets.GDRIVE_OAUTH_TOKEN }}
         run: python data_collector.py
 
+      - name: Run specific stocks check
+        run: python check_specific_stocks.py
+
       - name: Summarize execution
         if: always()
         run: echo "Collection completed at $(date +'%Y-%m-%d %H:%M:%S KST')"
