@@ -186,21 +186,6 @@ def collect_full_market():
             'Volume': 'Volume', 'Amount': 'Amount', 'Marcap': 'Marcap'
         }
         df_all = df_all.rename(columns={k: v for k, v in col_map.items() if k in df_all.columns})
-        
-        # ── [섹터 정보 병합] KRX-DESC 데이터 사용 ──
-        try:
-            df_desc = fdr.StockListing('KRX-DESC')
-            code_col = 'Code' if 'Code' in df_desc.columns else ('Symbol' if 'Symbol' in df_desc.columns else None)
-            if code_col and 'Sector' in df_desc.columns:
-                df_desc = df_desc.rename(columns={code_col: 'Code'})
-                df_all = df_all.merge(df_desc[['Code', 'Sector']], on='Code', how='left')
-                df_all['Sector'] = df_all['Sector'].fillna('기타').replace('', '기타')
-            else:
-                df_all['Sector'] = '기타'
-        except Exception as e:
-            print(f'  ⚠️ 섹터 정보 수집 실패: {e}')
-            df_all['Sector'] = '기타'
-
         for col in ['Close', 'ChagesRatio', 'Volume', 'Amount', 'Marcap']:
             if col in df_all.columns:
                 df_all[col] = pd.to_numeric(df_all[col], errors='coerce').fillna(0)
@@ -230,7 +215,6 @@ def collect_high_density(token, df_full):
             'Code': code,
             'Name': row.get('Name', ''),
             'Market': row.get('Market', ''),
-            'Sector': row.get('Sector', '기타'),
             'Close': row.get('Close', 0),
             'ChagesRatio': row.get('ChagesRatio', 0),
             'Volume': row.get('Volume', 0),
@@ -272,7 +256,6 @@ def collect_quant_final(df_hd, df_full):
         rows.append({
             'Code':             row.get('Code', ''),
             'Name':             row.get('Name', ''),
-            'Sector':           row.get('Sector', '기타'),
             'Total_Score':      round(total_score, 1),
             'Score_Momentum':   round(score_momentum, 1),
             'Score_Supply':     round(score_supply, 1),

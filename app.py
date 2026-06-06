@@ -68,50 +68,6 @@ if not df_m.empty:
 
 kr_scale = 'RdBu_r'
 
-def build_grouped_treemap(df, name_col, sector_col, value_col, color_col, get_text_fn, get_hover_fn, root_label="시장 전체", colorscale=kr_scale, cmid=0):
-    if sector_col not in df.columns:
-        df = df.copy()
-        df[sector_col] = '기타'
-    
-    ids, labels, parents, values, colors, customdatas, text_arr = [], [], [], [], [], [], []
-    
-    # 1. Root
-    ids.append(root_label); labels.append(root_label); parents.append("")
-    values.append(0); colors.append(0)
-    text_arr.append(""); customdatas.append(["<b>시장 전체</b>"])
-    
-    # 2. Sectors
-    for sector, group in df.groupby(sector_col):
-        s_val = group[value_col].sum()
-        s_col = group[color_col].mean()
-        ids.append(f"SEC_{sector}"); labels.append(sector); parents.append(root_label)
-        values.append(0); colors.append(s_col)
-        text_arr.append(f"{len(group)}종목")
-        customdatas.append([f"<b>[{sector}]</b><br>평균 등락: {s_col:+.2f}%<br>포함 종목: {len(group)}개"])
-        
-    # 3. Leaves
-    for _, row in df.iterrows():
-        c_id = str(row.get('Code', row[name_col]))
-        sector = row[sector_col]
-        ids.append(c_id); labels.append(row[name_col]); parents.append(f"SEC_{sector}")
-        values.append(row[value_col]); colors.append(row[color_col])
-        text_arr.append(get_text_fn(row))
-        customdatas.append([get_hover_fn(row)])
-        
-    marker_dict = dict(colors=colors, colorscale=colorscale)
-    if cmid is not None:
-        marker_dict['cmid'] = cmid
-        
-    return go.Treemap(
-        ids=ids, labels=labels, parents=parents, values=values,
-        marker=marker_dict,
-        text=text_arr,
-        customdata=customdatas,
-        texttemplate='<b>%{label}</b><br>%{text}',
-        hovertemplate='%{customdata[0]}<extra></extra>',
-        branchvalues='remainder'
-    )
-
 # ── 6분할 레이아웃 ────────────────────────────────────────────
 fig = make_subplots(
     rows=2, cols=3,
@@ -160,20 +116,23 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
     df1['Institutional_Net'] = pd.to_numeric(df1['Institutional_Net'], errors='coerce').fillna(0) if 'Institutional_Net' in df1.columns else 0
     df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
 
-    df1['Value_Abs'] = df1['Total_Combined_Net'].abs() + 1
-    
-    def get_text_1(row):
-        return row['Disp']
-    def get_hover_1(row):
-        return (f"<b>{row['Name']}</b> ({row['Code']})<br>"
-                f"현재가: {row['Current_Price_Val']:,}원<br>"
-                f"등락률: {row['Disp']}<br>"
-                f"거래량: {row['Trade_Volume_Val']:,}<br>"
-                f"외국인 순매수: {row['Foreign_Net']:+,}주<br>"
-                f"기관 순매수: {row['Institutional_Net']:+,}주")
-                
-    trace1 = build_grouped_treemap(df1, 'Name', 'Sector', 'Value_Abs', 'ChagesRatio', get_text_1, get_hover_1)
-    fig.add_trace(trace1, row=1, col=1)
+    fig.add_trace(go.Treemap(
+        labels=df1['Name'], parents=[''] * len(df1),
+        values=df1['Total_Combined_Net'].abs() + 1,
+        marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
+        text=df1['Disp'],
+        customdata=df1[['Current_Price_Val', 'Trade_Volume_Val', 'Foreign_Net', 'Institutional_Net', 'Code']].values,
+        texttemplate='<b>%{label}</b><br>%{text}',
+        hovertemplate=(
+            '<b>%{label}</b> (%{customdata[4]})<br>'
+            '현재가: %{customdata[0]:,}원<br>'
+            '등락률: %{text}<br>'
+            '거래량: %{customdata[1]:,}<br>'
+            '외국인 순매수: %{customdata[2]:+,}주<br>'
+            '기관 순매수: %{customdata[3]:+,}주'
+            '<extra></extra>'
+        )
+    ), row=1, col=1)
 
 # [Panel 2] Quant Buy TOP 10 (df_quant_final 기반)
 # 컬럼: Name, Code, Total_Score (세부 점수 없음)
@@ -203,22 +162,32 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
 
     df2['Grade'] = df2['Total_Score'].apply(quant_grade)
 
-    def get_text_2(row):
-        return f"{row['Total_Score']:.1f}점"
-    def get_hover_2(row):
-        return (f"<b>{row['Name']}</b> ({row['Code']})<br>"
-                f"━━━━━━━━━━━━━━━<br>"
-                f"Quant 점수: <b>{row['Total_Score']:.1f}점</b>  {row['Grade']}<br>"
-                f"━━━━━━━━━━━━━━━<br>"
-                f"📈 가격 모멘텀:  {row['Score_Momentum']:.1f} / 25점<br>"
-                f"👥 외국인+기관:  {row['Score_Supply']:.1f} / 35점<br>"
-                f"📊 거래량 서지:  {row['Score_Volume']:.1f} / 25점<br>"
-                f"🤖 프로그램 매수: {row['Score_Program']:.1f} / 15점<br>"
-                f"━━━━━━━━━━━━━━━<br>"
-                f"현재가: {row['Close']:,}원 ({row['ChagesRatio']:+.2f}%)")
-                
-    trace2 = build_grouped_treemap(df2, 'Name', 'Sector', 'Total_Score', 'Total_Score', get_text_2, get_hover_2, colorscale='Reds', cmid=None)
-    fig.add_trace(trace2, row=1, col=2)
+    fig.add_trace(go.Treemap(
+        labels=df2['Name'], parents=[''] * len(df2),
+        values=df2['Total_Score'],
+        marker=dict(colors=df2['Total_Score'], colorscale='Reds', showscale=False),
+        text=df2['Total_Score'].apply(lambda x: f"{x:.1f}점"),
+        customdata=df2[[
+            'Code', 'Total_Score', 'Grade',
+            'Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_Program',
+            'Close', 'ChagesRatio'
+        ]].values,
+        texttemplate='<b>%{label}</b><br>%{text}',
+        hovertemplate=(
+            '<b>%{label}</b> (%{customdata[0]})<br>'
+            '━━━━━━━━━━━━━━━<br>'
+            'Quant 점수: <b>%{customdata[1]:.1f}점</b>  %{customdata[2]}<br>'
+            '━━━━━━━━━━━━━━━<br>'
+            '📈 가격 모멘텀:  %{customdata[3]:.1f} / 25점<br>'
+            '👥 외국인+기관:  %{customdata[4]:.1f} / 35점<br>'
+            '📊 거래량 서지:  %{customdata[5]:.1f} / 25점<br>'
+            '🤖 프로그램 매수: %{customdata[6]:.1f} / 15점<br>'
+            '━━━━━━━━━━━━━━━<br>'
+            '현재가: %{customdata[7]:,}원 '
+            '(%{customdata[8]:+.2f}%)'
+            '<extra></extra>'
+        )
+    ), row=1, col=2)
 
 # [Panel 3] 거래대금 리더(15) (df_full_market 기반)
 # 컬럼: Name, Code, Amount, Close, ChagesRatio
@@ -227,16 +196,21 @@ if not df_m.empty and 'Amount' in df_m.columns:
     # 거래대금을 '억원' 단위로 변환
     df3['Amount_100M'] = df3['Amount'] / 100000000
     
-    def get_text_3(row):
-        return f"{row['ChagesRatio']:+.2f}%"
-    def get_hover_3(row):
-        return (f"<b>{row['Name']}</b> ({row['Code']})<br>"
-                f"현재가: {row['Close']:,}원<br>"
-                f"등락률: {row['ChagesRatio']:+.2f}%<br>"
-                f"거래대금: {row['Amount_100M']:,.0f}억원")
-
-    trace3 = build_grouped_treemap(df3, 'Name', 'Sector', 'Amount', 'ChagesRatio', get_text_3, get_hover_3)
-    fig.add_trace(trace3, row=1, col=3)
+    fig.add_trace(go.Treemap(
+        labels=df3['Name'], parents=[''] * len(df3),
+        values=df3['Amount'],
+        marker=dict(colors=df3['ChagesRatio'], colorscale=kr_scale, cmid=0),
+        text=df3['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
+        customdata=df3[['Code', 'Close', 'Amount_100M', 'ChagesRatio']].values,
+        texttemplate='<b>%{label}</b><br>%{text}',
+        hovertemplate=(
+            '<b>%{label}</b> (%{customdata[0]})<br>'
+            '현재가: %{customdata[1]:,}원<br>'
+            '등락률: %{customdata[3]:+.2f}%<br>'
+            '거래대금: %{customdata[2]:,.0f}억원'
+            '<extra></extra>'
+        )
+    ), row=1, col=3)
 
 # [Panel 4] 시장 요약 테이블 (df_market_summary 기반)
 if not df_summary.empty:
@@ -376,18 +350,21 @@ else:
 # 컬럼: Name, Code, ChagesRatio, Close, Volume
 if not df_m.empty and 'ChagesRatio' in df_m.columns:
     df6 = df_m.sort_values('ChagesRatio', ascending=False).head(15).copy()
-    df6['Value_Abs'] = df6['ChagesRatio'].abs() + 0.01
-    
-    def get_text_6(row):
-        return f"{row['ChagesRatio']:+.2f}%"
-    def get_hover_6(row):
-        return (f"<b>{row['Name']}</b> ({row['Code']})<br>"
-                f"현재가: {row['Close']:,}원<br>"
-                f"등락률: <b>{row['ChagesRatio']:+.2f}%</b><br>"
-                f"거래량: {row['Volume']:,}주")
-
-    trace6 = build_grouped_treemap(df6, 'Name', 'Sector', 'Value_Abs', 'ChagesRatio', get_text_6, get_hover_6)
-    fig.add_trace(trace6, row=2, col=3)
+    fig.add_trace(go.Treemap(
+        labels=df6['Name'], parents=[''] * len(df6),
+        values=df6['ChagesRatio'].abs() + 0.01,
+        marker=dict(colors=df6['ChagesRatio'], colorscale=kr_scale, cmid=0),
+        text=df6['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
+        customdata=df6[['Code', 'Close', 'Volume', 'ChagesRatio']].values,
+        texttemplate='<b>%{label}</b><br>%{text}',
+        hovertemplate=(
+            '<b>%{label}</b> (%{customdata[0]})<br>'
+            '현재가: %{customdata[1]:,}원<br>'
+            '등락률: <b>%{customdata[3]:+.2f}%</b><br>'
+            '거래량: %{customdata[2]:,}주'
+            '<extra></extra>'
+        )
+    ), row=2, col=3)
 
 # updatemenus 생성 (Panel 5 코스피/코스닥 전환 버튼)
 if p5_has_data:
