@@ -140,8 +140,9 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
     df2 = df_q.sort_values('Total_Score', ascending=False).head(10).copy()
     df2['Code'] = df2['Code'].astype(str)
 
-    # df_full_market에서 현재가/등락률 합치기
+    # df_full_market에서 현재가/등락률 합치기 (최신 가격 반영 및 merge 충돌 방지)
     if not df_m.empty and 'Code' in df_m.columns:
+        df2 = df2.drop(columns=['Close', 'ChagesRatio'], errors='ignore')
         df2 = df2.merge(df_m[['Code', 'Close', 'ChagesRatio']], on='Code', how='left')
     else:
         df2['Close'] = 0
