@@ -239,8 +239,8 @@ def collect_quant_final(df_hd, df_full):
         return pd.DataFrame()
 
     rows = []
-    # 30일 가격 이력을 조회하기 위해 시작 날짜 계산 (안전하게 50일 전으로 설정)
-    start_date = (datetime.now() - timedelta(days=50)).strftime('%Y-%m-%d')
+    # 60일선(MA60) 및 가격 이력을 충분히 조회하기 위해 시작 날짜 계산 (안전하게 100일 전으로 설정)
+    start_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
 
     for _, row in df_hd.iterrows():
         code = str(row.get('Code', '')).zfill(6)
@@ -292,18 +292,40 @@ def collect_quant_final(df_hd, df_full):
                 # (1) 이동평균선 점수 (최대 15점)
                 ma5 = df_hist['Close'].rolling(5).mean().iloc[-1]
                 ma20 = df_hist['Close'].rolling(20).mean().iloc[-1] if len(df_hist) >= 20 else ma5
+                ma60 = df_hist['Close'].rolling(60).mean().iloc[-1] if len(df_hist) >= 60 else ma20
                 today_close = df_hist['Close'].iloc[-1]
 
-                if today_close > ma5 > ma20:
-                    score_ma = 15.0  # 완벽한 정배열
+                # 기본 이평선 배열 점수 산정 (최대 15점)
+                if today_close > ma5 > ma20 and ma20 > ma60:
+                    score_ma = 15.0  # 완벽한 정배열 우상향
+                elif today_close > ma5 > ma20 and ma20 <= ma60:
+                    score_ma = 13.0  # 단기 정배열 안착 (장기선 아래)
                 elif today_close > ma5 and today_close > ma20 and ma5 <= ma20:
-                    score_ma = 13.0  # 역배열 상태에서 강한 돌파 (골든크로스 직전)
+                    score_ma = 12.0  # 강한 역배열 돌파 (골든크로스 직전)
                 elif today_close > ma5 and today_close <= ma20:
-                    score_ma = 10.0  # 단기 반등 (5일선 돌파)
+                    score_ma = 9.0   # 단기 반등 (5일선 돌파)
                 elif today_close > ma20 and today_close <= ma5:
-                    score_ma = 8.0   # 눌림목 조정 (20일선 지지)
+                    score_ma = 7.0   # 눌림목 지지 (20일선 지지)
                 else:
-                    score_ma = 0.0   # 완전한 역배열/하락세
+                    score_ma = 0.0   # 완전 역배열 및 하락세
+
+                # 고도화 가감점 필터 적용
+                # 1) 대세 하락 필터: 60일선 아래에 있을 때 최대 점수 8점으로 제한
+                if today_close <= ma60:
+                    score_ma = min(8.0, score_ma)
+
+                # 2) 이격도 과열 감점: 20일선 대비 주가 괴리율이 15% 이상일 때 4점 감점
+                disparity = (today_close / ma20) * 100 if ma20 > 0 else 100
+                if disparity >= 115:
+                    score_ma -= 4.0
+
+                # 3) 수렴 돌파 가점: 5일선과 20일선이 3% 이내로 수렴한 상태에서 종가가 두 선을 모두 상회할 때 +2점 가점
+                ma_spread = abs(ma5 - ma20) / ma20 if ma20 > 0 else 1.0
+                if ma_spread <= 0.03 and today_close > ma5 and today_close > ma20:
+                    score_ma += 2.0
+
+                # 0~15점 범위 보정
+                score_ma = min(15.0, max(0.0, score_ma))
 
                 # (2) 캔들 패턴 점수 (최대 15점)
                 o = float(df_hist['Open'].iloc[-1])
