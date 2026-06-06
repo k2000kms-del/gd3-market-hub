@@ -1,0 +1,31 @@
+name: 📊 2026년 퀀트 백테스트
+
+on:
+  workflow_dispatch:  # 수동 실행 전용
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # 백테스트는 최대 30분
+
+    steps:
+      - name: 📥 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 🐍 Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 🧪 백테스트 실행
+        env:
+          GDRIVE_OAUTH_TOKEN: ${{ secrets.GDRIVE_OAUTH_TOKEN }}
+        run: python backtest_2026.py
+
+      - name: 📋 실행 완료 로그
+        if: always()
+        run: echo "백테스트 완료 시각 $(date +'%Y-%m-%d %H:%M:%S KST')"
