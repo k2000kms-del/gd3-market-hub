@@ -264,6 +264,62 @@ def collect_high_density(token, df_full):
     return df
 
 
+# ── 섹터 분류 함수 ────────────────────────────────────────────────
+def _classify_sector(code, name):
+    """종목 코드/이름 기반 섹터 분류
+    반환값: 섹터 문자열 (반도체, 자동차, 금융, 에너지, 항공운송, 바이오, 통신, 내수, 건설, 기타)
+    """
+    # 주요 종목 코드 직접 매핑 (정확도 최우선)
+    sector_by_code = {
+        # 반도체
+        '005930': '반도체', '000660': '반도체', '042700': '반도체',
+        '240810': '반도체', '403870': '반도체', '090360': '반도체',
+        '005290': '반도체', '357780': '반도체', '054730': '반도체',
+        '104830': '반도체', '000990': '반도체', '336370': '반도체',
+        # 자동차
+        '005380': '자동차', '000270': '자동차', '012330': '자동차',
+        '011210': '자동차', '161390': '자동차', '204320': '자동차',
+        # 금융
+        '055550': '금융', '105560': '금융', '086790': '금융',
+        '316140': '금융', '032830': '금융', '000810': '금융',
+        '138930': '금융', '139130': '금융',
+        # 에너지/정유
+        '096770': '에너지', '010950': '에너지', '078930': '에너지',
+        '267250': '에너지', '011070': '에너지',
+        # 항공/운송
+        '003490': '항공운송', '020560': '항공운송', '011200': '항공운송',
+        '000120': '항공운송',
+        # 바이오
+        '207940': '바이오', '068270': '바이오', '000100': '바이오',
+        '128940': '바이오', '326030': '바이오',
+        # 통신
+        '017670': '통신', '030200': '통신', '032640': '통신',
+        # 건설
+        '028260': '건설', '000720': '건설', '375500': '건설',
+        '010140': '건설',
+    }
+    if code in sector_by_code:
+        return sector_by_code[code]
+
+    # 이름 패턴 기반 분류 (코드 매핑 미존재 시)
+    name_patterns = [
+        ('반도체', ['반도체', '실리콘', '웨이퍼', '파운드리', '식각', 'hbm', 'dram', 'nand']),
+        ('자동차', ['자동차', '모터스', '모비스', '타이어', '부품']),
+        ('금융',   ['금융', '은행', '증권', '보험', '캐피탈', '카드']),
+        ('에너지', ['에너지', '정유', '오일', '가스', '石油']),
+        ('항공운송',['항공', '에어', '해운', '물류', '운송']),
+        ('바이오', ['바이오', '제약', '의약', '셀', '헬스', '테라퓨틱']),
+        ('통신',   ['텔레콤', 'kt', '유플러스', '통신']),
+        ('건설',   ['건설', '물산', '이앤씨', '산업개발']),
+        ('내수',   ['식품', '유통', '마트', '백화점', '패션', '의류']),
+    ]
+    name_lower = name.lower()
+    for sector, keywords in name_patterns:
+        if any(kw in name_lower for kw in keywords):
+            return sector
+    return '기타'
+
+
 def collect_quant_final(df_hd, df_full):
     """Quant 점수 계산 - 선행 매수 타이밍 포착 전용 스크리너
 
@@ -278,38 +334,117 @@ def collect_quant_final(df_hd, df_full):
     - Score_MA       (15점): 이평선 배열 + 60일선 필터 + 이격도/수렴 보정 → 추세 구조 확인
     - Score_Candle   (15점): 당일 캔들 매수세 강도 → 진입 타이밍 최적화
 
-    [핵심 보정 로직]
-    - 시장 국면 패널티: 코스피/코스닥 동반 약세 시 전체 점수 자동 하향 조정
+    [매크로 보정 로직 - 지정학·환율·유가 충격 대응]
+    - 시장 국면 다층 패널티: 당일 + 3일 + 5일 누적 낙폭 중 가장 강한 패널티 선택
+    - USD/KRW 환율 급등 감지: 환율 5일 +3% 이상 시 섹터별 차등 적용 (반도체 수혜, 내수 패널티)
+    - 유가 급등 감지: 정유 에너지 섹터 수혜 / 항공·운송 패널티
+    - 종목별 변동성 조정: 20일 연환산 변동성 30% 초과 시 점수 하향 (리스크 조정)
+    - 섹터 가중치: 매크로 국면에 따라 섹터별 점수 계수를 차등 적용
     - 이중 신호 중복 보정: 거래대금 급증과 가격 급등이 동시에 만점일 때 과대평가 방지
     """
     print('🎯 선행 매수 퀀트 스코어 계산 중...')
     if df_hd.empty:
         return pd.DataFrame()
 
-    # ── 시장 국면 사전 파악 (전체 점수 조정 계수 산출) ──────────────
-    market_penalty = 1.0   # 기본값: 패널티 없음 (1.0 = 100%)
+    # ── 매크로 팩터 사전 수집 (시장 국면 + 환율 + 유가) ─────────────
+    market_penalty = 1.0
     market_condition = '중립'
-    try:
-        start_mkt = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
-        df_ks = fdr.DataReader('KS11', start_mkt)
-        df_kq = fdr.DataReader('KQ11', start_mkt)
-        ks_chg = float(df_ks['Change'].iloc[-1] * 100) if not df_ks.empty and 'Change' in df_ks.columns else 0
-        kq_chg = float(df_kq['Change'].iloc[-1] * 100) if not df_kq.empty and 'Change' in df_kq.columns else 0
-        avg_chg = (ks_chg + kq_chg) / 2
+    usd_krw_chg_5d = 0.0   # 환율 5일 변동률(%)
+    oil_surge = False      # 유가 급등 여부 (에너지 섹터 ETF 대용)
 
-        if avg_chg <= -1.5:
-            market_penalty = 0.8   # 시장 급락: 전체 점수 20% 하향 → 매수 신호 보수적으로 처리
-            market_condition = f'급락 ({avg_chg:.2f}%)'
-        elif avg_chg <= -0.5:
-            market_penalty = 0.9   # 시장 약세: 전체 점수 10% 하향
-            market_condition = f'약세 ({avg_chg:.2f}%)'
-        elif avg_chg >= 1.0:
-            market_condition = f'강세 ({avg_chg:.2f}%)'
+    try:
+        start_mkt = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
+        df_ks  = fdr.DataReader('KS11', start_mkt)
+        df_kq  = fdr.DataReader('KQ11', start_mkt)
+        df_usd = fdr.DataReader('USD/KRW', start_mkt)
+
+        # 당일 등락률
+        def last_chg(df):
+            return float(df['Change'].iloc[-1] * 100) if not df.empty and 'Change' in df.columns else 0
+
+        ks_1d  = last_chg(df_ks)
+        kq_1d  = last_chg(df_kq)
+        avg_1d = (ks_1d + kq_1d) / 2
+
+        # 3일 누적 등락률
+        def cumret(df, n):
+            if len(df) < n + 1:
+                return 0
+            p0 = float(df['Close'].iloc[-(n+1)])
+            p1 = float(df['Close'].iloc[-1])
+            return ((p1 - p0) / p0 * 100) if p0 > 0 else 0
+
+        ks_3d  = cumret(df_ks, 3)
+        kq_3d  = cumret(df_kq, 3)
+        avg_3d = (ks_3d + kq_3d) / 2
+
+        ks_5d  = cumret(df_ks, 5)
+        kq_5d  = cumret(df_kq, 5)
+        avg_5d = (ks_5d + kq_5d) / 2
+
+        # 다층 시장 국면 판단: 당일/3일/5일 중 가장 심각한 조건 적용
+        if avg_1d <= -1.5 or avg_3d <= -3.0 or avg_5d <= -5.0:
+            market_penalty = 0.75  # 강한 패널티: 지정학·충격 국면
+            market_condition = f'위기 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
+        elif avg_1d <= -0.5 or avg_3d <= -1.5 or avg_5d <= -3.0:
+            market_penalty = 0.88
+            market_condition = f'약세 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
+        elif avg_1d >= 1.0 and avg_3d >= 2.0:
+            market_condition = f'강세 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
         else:
-            market_condition = f'중립 ({avg_chg:.2f}%)'
-        print(f'  📊 시장 국면: {market_condition} (점수 계수: x{market_penalty})')
+            market_condition = f'중립 (1d:{avg_1d:.1f}% 3d:{avg_3d:.1f}% 5d:{avg_5d:.1f}%)'
+
+        # USD/KRW 5일 변동률 계산
+        if not df_usd.empty and len(df_usd) >= 6:
+            usd_p0 = float(df_usd['Close'].iloc[-6])
+            usd_p1 = float(df_usd['Close'].iloc[-1])
+            usd_krw_chg_5d = ((usd_p1 - usd_p0) / usd_p0 * 100) if usd_p0 > 0 else 0
+
+        # 유가 급등 감지 (S-Oil(096770) 주가로 에너지 국면 대용)
+        # 에너지 관련 ETF 또는 주요 정유주 5일 수익률로 유가 방향 추정
+        try:
+            df_oil_proxy = fdr.DataReader('096770', start_mkt)  # S-Oil 대용
+            if not df_oil_proxy.empty and len(df_oil_proxy) >= 6:
+                oil_ret = cumret(df_oil_proxy, 5)
+                oil_surge = oil_ret >= 5.0  # 5일 5% 이상 급등이면 유가 급등 국면
+        except:
+            oil_surge = False
+
+        print(f'  📊 시장 국면: {market_condition} (계수: x{market_penalty})')
+        print(f'  💱 USD/KRW 5일 변동: {usd_krw_chg_5d:+.2f}% | 유가급등: {oil_surge}')
     except Exception as e:
-        print(f'  ⚠️ 시장 국면 조회 실패 (기본값 적용): {e}')
+        print(f'  ⚠️ 매크로 데이터 조회 실패 (기본값 적용): {e}')
+
+    # ── 섹터별 가중치 산출 (매크로 국면 연동) ────────────────────────
+    def get_sector_multiplier(sector):
+        """매크로 환경에 따른 섹터별 점수 가중치 반환"""
+        m = 1.0  # 기본 중립
+
+        # 환율 급등 국면 (USD/KRW +3% 이상): 수출주 수혜, 내수 패널티
+        if usd_krw_chg_5d >= 3.0:
+            if sector == '반도체':   m *= 1.10  # 달러 매출 → 환차익 수혜
+            elif sector == '자동차': m *= 1.05  # 수출 수혜
+            elif sector in ('내수', '바이오', '건설'): m *= 0.90  # 수입 원가↑
+
+        # 환율 급락 국면 (USD/KRW -3% 이하): 반대 적용
+        elif usd_krw_chg_5d <= -3.0:
+            if sector == '반도체':   m *= 0.93
+            elif sector in ('내수',): m *= 1.05
+
+        # 유가 급등 국면: 정유 수혜 / 항공·운송 패널티
+        if oil_surge:
+            if sector == '에너지':     m *= 1.10
+            elif sector == '항공운송': m *= 0.82  # 항공유 원가 급등
+            elif sector == '반도체':   m *= 0.95  # 전력비 부담
+
+        # 시장 위기 국면: 금융·방어주 상대 강세
+        if market_penalty <= 0.80:
+            if sector == '금융':       m *= 0.95  # 금리 불확실성
+            if sector == '통신':       m *= 1.03  # 경기 방어
+
+        return round(m, 3)
+
+    print(f'  📊 시장 국면: {market_condition} (점수 계수: x{market_penalty})')
 
     rows = []
     # 60일선(MA60) 및 가격 이력을 충분히 조회하기 위해 시작 날짜 계산 (안전하게 100일 전으로 설정)
@@ -477,18 +612,34 @@ def collect_quant_final(df_hd, df_full):
             print(f'  ⚠️ [{name}] 가격 이력 조회 실패: {e}')
 
         # ── 이중 신호 중복 측정 보정 ──────────────────────────────────
-        # Score_Volume(거래대금 급증)과 Score_Momentum(가격 급등)은 동일한 매수세를
-        # 서로 다른 지표로 중복 측정하는 경향이 있음.
-        # 두 점수가 동시에 15점 이상(고득점)이면 초과분의 40%를 상호 조정하여 과대평가 방지.
         if score_volume >= 15 and score_momentum >= 15:
             excess_v = score_volume - 15
             excess_m = score_momentum - 15
             score_volume   = max(15, score_volume   - excess_v * 0.4)
             score_momentum = max(15, score_momentum - excess_m * 0.4)
 
-        # ── 합산 점수 + 시장 국면 패널티 적용 ────────────────────────
-        raw_score = score_momentum + score_supply + score_volume + score_ma + score_candle
-        total_score = round(raw_score * market_penalty, 1)
+        # ── 섹터 분류 및 매크로 가중치 적용 ──────────────────────────
+        sector = _classify_sector(code, name)
+        sector_mult = get_sector_multiplier(sector)
+
+        # ── 변동성 조정 패널티 (리스크 조정 수익률 관점) ──────────────
+        # 20일 연환산 변동성(σ)이 30% 초과 시 고변동성 종목 점수 하향
+        # 급등락장에서 변동성 큰 종목의 역선택 문제를 방지함
+        vol_penalty = 1.0
+        try:
+            if 'df_hist' in dir() and df_hist is not None and len(df_hist) >= 20:
+                daily_returns = df_hist['Close'].pct_change().dropna()
+                vol_20d = daily_returns.tail(20).std() * (252 ** 0.5)  # 연환산 변동성
+                if vol_20d > 0.5:    vol_penalty = 0.80  # 50% 초과: 극고변동성 강한 패널티
+                elif vol_20d > 0.35: vol_penalty = 0.90  # 35~50%: 고변동성 패널티
+                elif vol_20d > 0.25: vol_penalty = 0.95  # 25~35%: 약한 패널티
+        except:
+            vol_penalty = 1.0
+
+        # ── 합산 점수 + 전체 보정 계수 적용 ──────────────────────────
+        # 적용 순서: 원점수 → 이중신호보정 → 변동성조정 → 섹터가중치 → 시장국면패널티
+        raw_score   = score_momentum + score_supply + score_volume + score_ma + score_candle
+        total_score = round(raw_score * vol_penalty * sector_mult * market_penalty, 1)
 
         rows.append({
             'Code':             code,
@@ -501,7 +652,10 @@ def collect_quant_final(df_hd, df_full):
             'Score_Candle':     round(score_candle, 1),
             'Close':            close,
             'ChagesRatio':      change,
-            'Market_Condition': market_condition,  # 시장 국면 상태 기록
+            'Sector':           sector,          # 섹터 분류
+            'Sector_Mult':      sector_mult,     # 섹터 가중치 계수
+            'Vol_Penalty':      vol_penalty,     # 변동성 패널티 계수
+            'Market_Condition': market_condition,
         })
         time.sleep(0.05) # 서버 부하 방지 및 FDR 호출 조절
 
