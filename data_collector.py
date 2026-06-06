@@ -295,13 +295,15 @@ def collect_quant_final(df_hd, df_full):
                 today_close = df_hist['Close'].iloc[-1]
 
                 if today_close > ma5 > ma20:
-                    score_ma = 15.0  # 강한 정배열
+                    score_ma = 15.0  # 완벽한 정배열
+                elif today_close > ma5 and today_close > ma20 and ma5 <= ma20:
+                    score_ma = 13.0  # 역배열 상태에서 강한 돌파 (골든크로스 직전)
                 elif today_close > ma5 and today_close <= ma20:
-                    score_ma = 10.0  # 단기 반등
+                    score_ma = 10.0  # 단기 반등 (5일선 돌파)
                 elif today_close > ma20 and today_close <= ma5:
-                    score_ma = 8.0   # 눌림목 조정
+                    score_ma = 8.0   # 눌림목 조정 (20일선 지지)
                 else:
-                    score_ma = 0.0   # 역배열/약세
+                    score_ma = 0.0   # 완전한 역배열/하락세
 
                 # (2) 캔들 패턴 점수 (최대 15점)
                 o = float(df_hist['Open'].iloc[-1])
