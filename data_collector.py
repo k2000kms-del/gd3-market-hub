@@ -177,7 +177,12 @@ def collect_full_market():
         if 'Volume' in df_all.columns:
             # 거래량 0인 종목 제외 (거래정지 등)
             df_all = df_all[df_all['Volume'] > 0]
-            
+
+        # [퀄리티 필터] 시가총액 500억원 미만 극소형주 제외
+        # 선행 매수 목적상 재무 건전성이 일정 수준 이상인 종목만 대상으로 함
+        if 'Marcap' in df_all.columns:
+            df_all = df_all[pd.to_numeric(df_all['Marcap'], errors='coerce').fillna(0) >= 50_000_000_000]
+
         df_all = df_all.reset_index(drop=True)
 
         # 컬럼 정리
@@ -199,15 +204,42 @@ def collect_full_market():
 
 
 def collect_high_density(token, df_full):
-    """KIS API: 수급 상위 종목 데이터 수집"""
+    """KIS API: 수급 상위 종목 데이터 수집
+
+    [목적] 선행 매수 타이밍 포착을 위한 후보군 확대 전략:
+    - Pool A: 거래대금 절대 상위 50개 (시장 주도 종목)
+    - Pool B: 시가총액 대비 거래대금 회전율 상위 20개 (아직 주목받지 않은 선행 이동 종목)
+    두 풀을 합산(중복 제거)하여 최대 70개 종목을 수급 분석 대상으로 삼음.
+    """
     print('📡 수급 상위 종목 데이터 수집 중...')
     if df_full.empty:
         return pd.DataFrame()
 
-    # 거래대금 상위 30개 종목 대상
-    top_stocks = df_full.nlargest(30, 'Amount') if 'Amount' in df_full.columns else df_full.head(30)
-    rows = []
+    # ── Pool A: 거래대금 절대 상위 50개 (시장 주도·핫 종목) ──
+    pool_a = df_full.nlargest(50, 'Amount') if 'Amount' in df_full.columns else df_full.head(50)
 
+    # ── Pool B: 시가총액 대비 거래대금 회전율 상위 20개 (선행 포착) ──
+    # 아직 거래대금 절대규모는 크지 않지만 시총 대비 거래가 활발해지는 종목을 조기에 포착
+    pool_b = pd.DataFrame()
+    try:
+        df_remaining = df_full[~df_full.index.isin(pool_a.index)].copy()
+        if 'Marcap' in df_remaining.columns and 'Amount' in df_remaining.columns:
+            df_remaining['Marcap_num'] = pd.to_numeric(df_remaining['Marcap'], errors='coerce').fillna(0)
+            df_remaining['Amount_num'] = pd.to_numeric(df_remaining['Amount'], errors='coerce').fillna(0)
+            # 최소 거래대금 10억 이상이고 시총이 있는 종목만 대상
+            df_remaining = df_remaining[
+                (df_remaining['Marcap_num'] > 0) & (df_remaining['Amount_num'] >= 1_000_000_000)
+            ]
+            df_remaining['TurnoverRatio'] = df_remaining['Amount_num'] / df_remaining['Marcap_num']
+            pool_b = df_remaining.nlargest(20, 'TurnoverRatio')
+    except Exception as e:
+        print(f'  ⚠️ Pool B 선행 포착 조회 실패: {e}')
+
+    # ── 두 풀 합산 및 중복 제거 ──
+    top_stocks = pd.concat([pool_a, pool_b]).drop_duplicates(subset=['Code']).reset_index(drop=True)
+    print(f'  → Pool A: {len(pool_a)}개, Pool B: {len(pool_b)}개, 합산: {len(top_stocks)}개 종목 대상')
+
+    rows = []
     for _, row in top_stocks.iterrows():
         code = str(row.get('Code', '')).zfill(6)
         supply = fetch_stock_supply(token, code)
@@ -228,15 +260,56 @@ def collect_high_density(token, df_full):
         })
 
     df = pd.DataFrame(rows)
-    print(f'  → {len(df)}개 종목')
+    print(f'  → {len(df)}개 종목 수급 수집 완료')
     return df
 
 
 def collect_quant_final(df_hd, df_full):
-    """Quant 점수 계산 (차트 분석 및 금액 수급 반영)"""
-    print('🎯 차트 기반 Quant 점수 계산 중...')
+    """Quant 점수 계산 - 선행 매수 타이밍 포착 전용 스크리너
+
+    [목적]
+    이 함수는 단순한 당일 강세 종목 선별이 아닌, 아직 시장의 본격적인 주목을 받기 전
+    '선행 매수(Early Entry)' 타이밍을 포착하기 위한 종합 퀀트 스코어를 산출합니다.
+
+    [점수 구성 - 총 100점 만점]
+    - Score_Momentum (20점): 당일 등락률(10) + 5거래일 누적 추세(10) → 지속적 상승 흐름 확인
+    - Score_Supply   (30점): 시가총액 대비 외인+기관 순매수 비율 → 스마트머니 선행 유입 포착
+    - Score_Volume   (20점): 평균 대비 거래대금 급증률 (최소 10억 허들) → 관심도 증가 조기 감지
+    - Score_MA       (15점): 이평선 배열 + 60일선 필터 + 이격도/수렴 보정 → 추세 구조 확인
+    - Score_Candle   (15점): 당일 캔들 매수세 강도 → 진입 타이밍 최적화
+
+    [핵심 보정 로직]
+    - 시장 국면 패널티: 코스피/코스닥 동반 약세 시 전체 점수 자동 하향 조정
+    - 이중 신호 중복 보정: 거래대금 급증과 가격 급등이 동시에 만점일 때 과대평가 방지
+    """
+    print('🎯 선행 매수 퀀트 스코어 계산 중...')
     if df_hd.empty:
         return pd.DataFrame()
+
+    # ── 시장 국면 사전 파악 (전체 점수 조정 계수 산출) ──────────────
+    market_penalty = 1.0   # 기본값: 패널티 없음 (1.0 = 100%)
+    market_condition = '중립'
+    try:
+        start_mkt = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
+        df_ks = fdr.DataReader('KS11', start_mkt)
+        df_kq = fdr.DataReader('KQ11', start_mkt)
+        ks_chg = float(df_ks['Change'].iloc[-1] * 100) if not df_ks.empty and 'Change' in df_ks.columns else 0
+        kq_chg = float(df_kq['Change'].iloc[-1] * 100) if not df_kq.empty and 'Change' in df_kq.columns else 0
+        avg_chg = (ks_chg + kq_chg) / 2
+
+        if avg_chg <= -1.5:
+            market_penalty = 0.8   # 시장 급락: 전체 점수 20% 하향 → 매수 신호 보수적으로 처리
+            market_condition = f'급락 ({avg_chg:.2f}%)'
+        elif avg_chg <= -0.5:
+            market_penalty = 0.9   # 시장 약세: 전체 점수 10% 하향
+            market_condition = f'약세 ({avg_chg:.2f}%)'
+        elif avg_chg >= 1.0:
+            market_condition = f'강세 ({avg_chg:.2f}%)'
+        else:
+            market_condition = f'중립 ({avg_chg:.2f}%)'
+        print(f'  📊 시장 국면: {market_condition} (점수 계수: x{market_penalty})')
+    except Exception as e:
+        print(f'  ⚠️ 시장 국면 조회 실패 (기본값 적용): {e}')
 
     rows = []
     # 60일선(MA60) 및 가격 이력을 충분히 조회하기 위해 시작 날짜 계산 (안전하게 100일 전으로 설정)
@@ -403,13 +476,24 @@ def collect_quant_final(df_hd, df_full):
         except Exception as e:
             print(f'  ⚠️ [{name}] 가격 이력 조회 실패: {e}')
 
-        # 합산 점수
-        total_score = score_momentum + score_supply + score_volume + score_ma + score_candle
+        # ── 이중 신호 중복 측정 보정 ──────────────────────────────────
+        # Score_Volume(거래대금 급증)과 Score_Momentum(가격 급등)은 동일한 매수세를
+        # 서로 다른 지표로 중복 측정하는 경향이 있음.
+        # 두 점수가 동시에 15점 이상(고득점)이면 초과분의 40%를 상호 조정하여 과대평가 방지.
+        if score_volume >= 15 and score_momentum >= 15:
+            excess_v = score_volume - 15
+            excess_m = score_momentum - 15
+            score_volume   = max(15, score_volume   - excess_v * 0.4)
+            score_momentum = max(15, score_momentum - excess_m * 0.4)
+
+        # ── 합산 점수 + 시장 국면 패널티 적용 ────────────────────────
+        raw_score = score_momentum + score_supply + score_volume + score_ma + score_candle
+        total_score = round(raw_score * market_penalty, 1)
 
         rows.append({
             'Code':             code,
             'Name':             name,
-            'Total_Score':      round(total_score, 1),
+            'Total_Score':      total_score,
             'Score_Momentum':   round(score_momentum, 1),
             'Score_Supply':     round(score_supply, 1),
             'Score_Volume':     round(score_volume, 1),
@@ -417,6 +501,7 @@ def collect_quant_final(df_hd, df_full):
             'Score_Candle':     round(score_candle, 1),
             'Close':            close,
             'ChagesRatio':      change,
+            'Market_Condition': market_condition,  # 시장 국면 상태 기록
         })
         time.sleep(0.05) # 서버 부하 방지 및 FDR 호출 조절
 
