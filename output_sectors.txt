@@ -1,5 +1,5 @@
-Code | Name | FDR Sector | FDR Industry | Classified Sector
-066570 | LG전자 |  |  | 기타
-009150 | 삼성전기 |  |  | 기타
-402340 | SK스퀘어 |  |  | 기타
-011070 | LG이노텍 |  |  | 에너지
+Columns:
+['Code', 'ISU_CD', 'Name', 'Market', 'Dept', 'Close', 'ChangeCode', 'Changes', 'ChagesRatio', 'Open', 'High', 'Low', 'Volume', 'Amount', 'Marcap', 'Stocks', 'MarketId']
+
+First row:
+{'Code': '005930', 'ISU_CD': 'KR7005930003', 'Name': '삼성전자', 'Market': 'KOSPI', 'Dept': nan, 'Close': 329000, 'ChangeCode': '2', 'Changes': -22500, 'ChagesRatio': -6.4, 'Open': 333500, 'High': 343000, 'Low': 325000, 'Volume': 33725012, 'Amount': 11191087320641, 'Marcap': 1923425662032000, 'Stocks': 5846278608, 'MarketId': 'STK'}
