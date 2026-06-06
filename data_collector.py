@@ -332,29 +332,44 @@ def collect_quant_final(df_hd, df_full):
                 h = float(df_hist['High'].iloc[-1])
                 l = float(df_hist['Low'].iloc[-1])
                 c = float(df_hist['Close'].iloc[-1])
+                prev_close = float(df_hist['Close'].iloc[-2]) if len(df_hist) >= 2 else o
 
-                body = c - o
-                rng = h - l if h - l > 0 else 1.0
-                lower_shadow = min(o, c) - l
-                upper_shadow = h - max(o, c)
+                # 점상한가 / 점하한가 예외 처리 (고가와 저가가 같은 경우)
+                if h == l:
+                    if c > prev_close:
+                        score_candle = 15.0  # 점상한가 (매수세 최강)
+                    else:
+                        score_candle = 0.0   # 점하한가 (매도세 최강)
+                else:
+                    body = c - o
+                    rng = h - l
+                    lower_shadow = min(o, c) - l
+                    upper_shadow = h - max(o, c)
 
-                if body > 0:  # 양봉
-                    if lower_shadow > body * 0.5:
-                        score_candle = 15.0  # 아래꼬리가 긴 망치형 양봉 (매수세 강함)
-                    elif upper_shadow > body:
-                        score_candle = 8.0   # 위꼬리가 긴 양봉 (매물 저항)
-                    else:
-                        score_candle = 12.0  # 일반 양봉 / 장대양봉
-                elif body == 0:  # 도지형
-                    if lower_shadow > rng * 0.5:
-                        score_candle = 10.0  # 밑꼬리가 긴 도지
-                    else:
-                        score_candle = 5.0   # 일반 도지
-                else:  # 음봉
-                    if lower_shadow > abs(body) * 1.5:
-                        score_candle = 8.0   # 아래꼬리가 매우 긴 음봉 (저점 매수세 유입)
-                    else:
-                        score_candle = 0.0   # 일반 음봉 / 장대음봉 (매도세 지배)
+                    # 1) 도지형 판별 임계값 도입 (시가 대비 몸통 크기가 0.2% 이하인 경우 도지로 분류)
+                    is_doji = (abs(body) / o <= 0.002) if o > 0 else (body == 0)
+
+                    if is_doji:
+                        if lower_shadow > rng * 0.5:
+                            score_candle = 10.0  # 밑꼬리가 긴 도지 (지지세 유입)
+                        else:
+                            score_candle = 5.0   # 일반 도지
+                    elif body > 0:  # 양봉
+                        if lower_shadow > body * 0.5:
+                            score_candle = 15.0  # 아래꼬리가 긴 망치형 양봉 (매수세 강함)
+                        elif upper_shadow > body and (body / o >= 0.005):
+                            # 몸통이 시가 대비 0.5% 이상으로 유의미할 때만 위꼬리 감점 적용
+                            score_candle = 8.0   # 위꼬리가 긴 양봉 (매물 저항)
+                        elif upper_shadow > body * 2:
+                            # 몸통이 미세할 때는 위꼬리가 몸통의 2배 이상일 때만 감점
+                            score_candle = 8.0
+                        else:
+                            score_candle = 12.0  # 일반 양봉 / 장대양봉
+                    else:  # 음봉
+                        if lower_shadow > abs(body) * 1.5:
+                            score_candle = 8.0   # 아래꼬리가 매우 긴 음봉 (저점 매수세 유입)
+                        else:
+                            score_candle = 0.0   # 일반 음봉 / 장대음봉 (매도세 지배)
 
         except Exception as e:
             print(f'  ⚠️ [{name}] 가격 이력 조회 실패: {e}')
