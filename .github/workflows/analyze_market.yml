@@ -1,4 +1,4 @@
-name: 📈 2026년 증시 종합 분석
+﻿name: 2026 Market Analysis
 
 on:
   push:
@@ -12,23 +12,23 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: 📥 저장소 체크아웃
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🐍 Python 3.11 설정
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 📦 패키지 설치
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: 📊 2026 증시 분석 실행
+      - name: Run 2026 market analysis
         env:
           GDRIVE_OAUTH_TOKEN: ${{ secrets.GDRIVE_OAUTH_TOKEN }}
         run: python analyze_market_2026.py
 
-      - name: 📋 완료 로그
+      - name: Log completion
         if: always()
-        run: echo "분석 완료 $(date +'%Y-%m-%d %H:%M:%S')"
+        run: echo "Analysis completed at $(date +'%Y-%m-%d %H:%M:%S')"
