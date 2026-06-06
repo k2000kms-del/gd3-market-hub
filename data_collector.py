@@ -93,6 +93,27 @@ def fetch_stock_supply(token, stock_code):
         }
 
 
+def fetch_kis_sector(token, stock_code):
+    """KIS API: 종목별 기본 시세(업종 포함) 조회"""
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'authorization': f'Bearer {token}',
+            'appkey': APP_KEY,
+            'appsecret': APP_SECRET,
+            'tr_id': 'FHKST01010100',
+        }
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': stock_code,
+        }
+        res = requests.get(
+            f'{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-price',
+            headers=headers, params=params
+        )
+        return res.json().get('output', {}).get('bstp_kor_isnm', '')
+    except Exception:
+        return ''
 
 
 def fetch_market_index(token, market_code='0001'):
@@ -443,28 +464,31 @@ def main():
     df_quant    = collect_quant_final(df_hd, df_full)
     df_summary  = collect_market_summary(token, df_intraday)
 
-    # ── 핵심 종목 KRX 업종 연동 ──
-    print('\n[한국거래소(KRX) 업종 연동]')
-    try:
-        df_desc = fdr.StockListing('KRX-DESC')
-        code_col = 'Code' if 'Code' in df_desc.columns else ('Symbol' if 'Symbol' in df_desc.columns else None)
-        if code_col and 'Sector' in df_desc.columns:
-            df_desc[code_col] = df_desc[code_col].astype(str).str.zfill(6)
-            sector_map = df_desc.set_index(code_col)['Sector'].to_dict()
-        else:
-            sector_map = {}
-        print(f'  → KRX 마스터 매핑 완료 ({len(sector_map)}개)')
-    except Exception as e:
-        print(f'  ⚠️ KRX 업종 수집 실패: {e}')
-        sector_map = {}
+    # ── 핵심 종목 KIS 업종 연동 ──
+    print('\n[KIS 업종 핀셋 수집]')
+    target_codes = set()
+    if not df_hd.empty: target_codes.update(df_hd['Code'].astype(str).tolist())
+    if not df_quant.empty: target_codes.update(df_quant['Code'].astype(str).tolist())
+    if not df_full.empty:
+        target_codes.update(df_full.nlargest(15, 'Amount')['Code'].astype(str).tolist())
+        target_codes.update(df_full.nlargest(15, 'ChagesRatio')['Code'].astype(str).tolist())
+    
+    sector_map = {}
+    print(f'  → 대상 종목 수: {len(target_codes)}개')
+    for idx, code in enumerate(target_codes):
+        code_str = str(code).zfill(6)
+        sector_map[code_str] = fetch_kis_sector(token, code_str)
+        time.sleep(0.06) # Rate limit: 20/sec
+        if (idx+1) % 20 == 0:
+            print(f'  ... {idx+1}/{len(target_codes)} 진행중')
 
     # df_full, df_hd, df_quant에 Sector 병합
     if not df_full.empty:
-        df_full['Sector'] = df_full['Code'].astype(str).str.zfill(6).map(sector_map).fillna('-').replace('', '-')
+        df_full['Sector'] = df_full['Code'].astype(str).str.zfill(6).map(sector_map).fillna('-')
     if not df_hd.empty:
-        df_hd['Sector'] = df_hd['Code'].astype(str).str.zfill(6).map(sector_map).fillna('-').replace('', '-')
+        df_hd['Sector'] = df_hd['Code'].astype(str).str.zfill(6).map(sector_map).fillna('-')
     if not df_quant.empty:
-        df_quant['Sector'] = df_quant['Code'].astype(str).str.zfill(6).map(sector_map).fillna('-').replace('', '-')
+        df_quant['Sector'] = df_quant['Code'].astype(str).str.zfill(6).map(sector_map).fillna('-')
 
     # Google Drive 업로드
     print('\n🚀 Google Drive 업로드 시작...')
