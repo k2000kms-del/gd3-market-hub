@@ -293,9 +293,6 @@ def collect_quant_final(df_hd, df_full):
                 ma5 = df_hist['Close'].rolling(5).mean().iloc[-1]
                 ma20 = df_hist['Close'].rolling(20).mean().iloc[-1] if len(df_hist) >= 20 else ma5
                 today_close = df_hist['Close'].iloc[-1]
-                
-                if code == '240810':
-                    print(f'=== DEBUG Wonik IPS === Close: {today_close}, MA5: {ma5}, MA20: {ma20}')
 
                 if today_close > ma5 > ma20:
                     score_ma = 15.0  # 완벽한 정배열
