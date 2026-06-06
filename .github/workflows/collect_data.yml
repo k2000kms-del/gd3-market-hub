@@ -1,6 +1,8 @@
-﻿name: Market Data Auto Collector
+name: Market Data Auto Collector
 
 on:
+  push:
+    branches: [ main ]
   schedule:
     # Run every 30 minutes during Korean market hours (09:00~15:30 KST = 00:00~06:30 UTC) on weekdays (Mon-Fri)
     - cron: '0,30 0,1,2,3,4,5,6 * * 1-5'
