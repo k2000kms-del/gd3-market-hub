@@ -70,6 +70,16 @@ for df_temp in [df_hd, df_q, df_m, df_summary, df_intraday]:
     if df_temp is not None and not df_temp.empty and 'Code' in df_temp.columns:
         df_temp['Code'] = df_temp['Code'].astype(str).str.split('.').str[0].str.zfill(6)
 
+# ── 사이드바 정렬 옵션 ──
+st.sidebar.title("🎛️ 대시보드 설정")
+st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
+q_sort_by = st.sidebar.radio(
+    "정렬 기준 선택",
+    ["Quant 점수 순", "거래대금 순"],
+    index=0,
+    help="Quant Buy TOP 10 종목을 정렬하는 기준을 선택합니다."
+)
+
 kr_scale = 'RdBu_r'
 
 # ── 6분할 레이아웃 ────────────────────────────────────────────
@@ -85,7 +95,7 @@ fig = make_subplots(
     ],
     subplot_titles=(
         '📊 실시간 수급(외/기/프)',
-        '🎯 Quant Buy TOP 10',
+        f'🎯 Quant Buy TOP 10 ({q_sort_by})',
         '🔥 거래대금 리더(15)',
         '📉 시장 요약 및 수급',
         '📈 코스피/코스닥 수급 현황',
@@ -141,18 +151,26 @@ if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
 # [Panel 2] Quant Buy TOP 10 (df_quant_final 기반)
 # 컬럼: Name, Code, Total_Score (세부 점수 없음)
 if not df_q.empty and 'Total_Score' in df_q.columns:
-    df2 = df_q.sort_values('Total_Score', ascending=False).head(10).copy()
+    df2 = df_q.copy()
     df2['Code'] = df2['Code'].astype(str).str.split('.').str[0].str.zfill(6)
 
-    # df_full_market에서 현재가/등락률 합치기 (최신 가격 반영 및 merge 충돌 방지)
+    # df_full_market에서 현재가/등락률/거래대금 합치기 (최신 가격 및 거래대금 반영 및 merge 충돌 방지)
     if not df_m.empty and 'Code' in df_m.columns:
-        df2 = df2.drop(columns=['Close', 'ChagesRatio'], errors='ignore')
-        df2 = df2.merge(df_m[['Code', 'Close', 'ChagesRatio']], on='Code', how='left')
+        df2 = df2.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
+        df2 = df2.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
     else:
         df2['Close'] = 0
         df2['ChagesRatio'] = 0.0
-    df2['Close'] = pd.to_numeric(df2['Close'], errors='coerce').fillna(0) if 'Close' in df2.columns else 0
-    df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0) if 'ChagesRatio' in df2.columns else 0
+        df2['Amount'] = 0.0
+    df2['Close'] = pd.to_numeric(df2['Close'], errors='coerce').fillna(0)
+    df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0)
+    df2['Amount'] = pd.to_numeric(df2['Amount'], errors='coerce').fillna(0)
+
+    # 정렬 및 상위 10개 종목 추출
+    if q_sort_by == "거래대금 순" and 'Amount' in df2.columns:
+        df2 = df2.sort_values('Amount', ascending=False).head(10).copy()
+    else:
+        df2 = df2.sort_values('Total_Score', ascending=False).head(10).copy()
 
     # 세부 점수 및 매크로/리스크 보정 컬럼 (없으면 기본값 채움 - 하방 호환성 확보)
     for col in ['Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_MA', 'Score_Candle']:
@@ -171,6 +189,9 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
     # 원점수 합계 계산
     df2['Raw_Score'] = df2['Score_Momentum'] + df2['Score_Supply'] + df2['Score_Volume'] + df2['Score_MA'] + df2['Score_Candle']
 
+    # 거래대금 단위 억 원 환산 (시각화용)
+    df2['Amount_Billion'] = (df2['Amount'] / 100_000_000).round(1)
+
     def quant_grade(s):
         if s >= 80: return '🔥 강력매수'
         if s >= 65: return '⭐ 매수'
@@ -179,16 +200,22 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
 
     df2['Grade'] = df2['Total_Score'].apply(quant_grade)
 
+    # Treemap 블록의 크기(value) 설정
+    if q_sort_by == "거래대금 순" and 'Amount' in df2.columns:
+        treemap_values = df2['Amount'] + 1
+    else:
+        treemap_values = df2['Total_Score']
+
     fig.add_trace(go.Treemap(
         labels=df2['Name'], parents=[''] * len(df2),
-        values=df2['Total_Score'],
+        values=treemap_values,
         marker=dict(colors=df2['Total_Score'], colorscale='Reds', showscale=False),
         text=df2['Total_Score'].apply(lambda x: f"{x:.1f}점"),
         customdata=df2[[
             'Code', 'Total_Score', 'Grade',
             'Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_MA', 'Score_Candle',
             'Close', 'ChagesRatio', 'Raw_Score', 'Vol_Penalty', 'Sector', 'Sector_Mult',
-            'Market_Penalty', 'Market_Condition'
+            'Market_Penalty', 'Market_Condition', 'Amount_Billion'
         ]].values,
         texttemplate='<b>%{label}</b><br>%{text}',
         hovertemplate=(
@@ -208,8 +235,8 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
             '🚨 시장 패널티: x%{customdata[14]:.2f}<br>'
             '🗺️ 시장 국면: %{customdata[15]}<br>'
             '━━━━━━━━━━━━━━━<br>'
-            '현재가: %{customdata[8]:,}원 '
-            '(%{customdata[9]:+.2f}%)'
+            '💵 당일 거래대금: <b>%{customdata[16]:,.1f}억원</b><br>'
+            '현재가: %{customdata[8]:,}원 (%{customdata[9]:+.2f}%)'
             '<extra></extra>'
         )
     ), row=1, col=2)

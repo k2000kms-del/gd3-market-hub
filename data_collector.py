@@ -257,6 +257,8 @@ def collect_high_density(token, df_full):
             'Institutional_Net':  supply['Institutional_Net'],
             'Program_Net':        supply['Program_Net'],
             'Total_Combined_Net': supply['Foreign_Net'] + supply['Institutional_Net'],
+            'FDR_Sector':         row.get('Sector', ''),
+            'FDR_Industry':       row.get('Industry', ''),
         })
 
     df = pd.DataFrame(rows)
@@ -265,9 +267,9 @@ def collect_high_density(token, df_full):
 
 
 # ── 섹터 분류 함수 ────────────────────────────────────────────────
-def _classify_sector(code, name):
-    """종목 코드/이름 기반 섹터 분류
-    반환값: 섹터 문자열 (반도체, 자동차, 금융, 에너지, 항공운송, 바이오, 통신, 내수, 건설, 기타)
+def _classify_sector(code, name, fdr_sector="", fdr_industry=""):
+    """종목 코드/이름/FDR 분류 기반 섹터 분류
+    반환값: 섹터 문자열 (반도체, 자동차, 금융, 에너지, 항공운송, 바이오, 통신, 내수, 건설, 기타 공식 업종명)
     """
     # 주요 종목 코드 직접 매핑 (정확도 최우선)
     sector_by_code = {
@@ -301,22 +303,36 @@ def _classify_sector(code, name):
     if code in sector_by_code:
         return sector_by_code[code]
 
-    # 이름 패턴 기반 분류 (코드 매핑 미존재 시)
-    name_patterns = [
-        ('반도체', ['반도체', '실리콘', '웨이퍼', '파운드리', '식각', 'hbm', 'dram', 'nand']),
-        ('자동차', ['자동차', '모터스', '모비스', '타이어', '부품']),
-        ('금융',   ['금융', '은행', '증권', '보험', '캐피탈', '카드']),
-        ('에너지', ['에너지', '정유', '오일', '가스', '石油']),
-        ('항공운송',['항공', '에어', '해운', '물류', '운송']),
-        ('바이오', ['바이오', '제약', '의약', '셀', '헬스', '테라퓨틱']),
-        ('통신',   ['텔레콤', 'kt', '유플러스', '통신']),
-        ('건설',   ['건설', '물산', '이앤씨', '산업개발']),
-        ('내수',   ['식품', '유통', '마트', '백화점', '패션', '의류']),
-    ]
-    name_lower = name.lower()
-    for sector, keywords in name_patterns:
-        if any(kw in name_lower for kw in keywords):
-            return sector
+    # 이름 및 FDR 분류 정보를 모두 고려한 통합 검색 텍스트 생성
+    check_str = f"{fdr_sector} {fdr_industry} {name}".lower()
+
+    if any(kw in check_str for kw in ['반도체', 'semiconductor', '웨이퍼', '파운드리', '식각', 'hbm', 'dram', 'nand', 'ic', '칩']):
+        return '반도체'
+    if any(kw in check_str for kw in ['자동차', '모터스', '모비스', '타이어', '부품', '완성차', 'automotive']):
+        return '자동차'
+    if any(kw in check_str for kw in ['금융', '은행', '증권', '보험', '캐피탈', '카드', '지주회사', 'financial', 'bank']):
+        if '금융' in check_str or '은행' in check_str or '카드' in check_str or '투자' in check_str:
+            return '금융'
+    if any(kw in check_str for kw in ['에너지', '정유', '오일', '가스', '석유', '석탄', '발전', '전력', 'energy', 'oil']):
+        return '에너지'
+    if any(kw in check_str for kw in ['항공', '에어', '해운', '물류', '운송', '택배', 'shipping', 'transport']):
+        return '항공운송'
+    if any(kw in check_str for kw in ['바이오', '제약', '의약', '셀', '헬스', '테라퓨틱', '의료기기', 'bio', 'pharma']):
+        return '바이오'
+    if any(kw in check_str for kw in ['텔레콤', 'telecom', '통신']):
+        return '통신'
+    if any(kw in check_str for kw in ['건설', '물산', '이앤씨', '산업개발', '건축', '토목', 'construction']):
+        return '건설'
+    if any(kw in check_str for kw in ['식품', '유통', '마트', '백화점', '패션', '의류', '화장품', '소매', '식음료', 'cosmetic', 'retail']):
+        return '내수'
+
+    # 매크로 가중치 적용 9대 섹터에 속하지 않는 경우, '기타'로 뭉뚱그리지 않고 FDR 제공 업종명 또는 상세 산업명을 명시
+    if fdr_sector:
+        return fdr_sector
+    if fdr_industry:
+        ind = fdr_industry.split(',')[0].strip()
+        return ind[:15]
+
     return '기타'
 
 
@@ -658,7 +674,9 @@ def collect_quant_final(df_hd, df_full):
             score_momentum = max(15, score_momentum - excess_m * 0.4)
 
         # ── 섹터 분류 및 매크로 가중치 적용 ──────────────────────────
-        sector = _classify_sector(code, name)
+        fdr_sector = row.get('FDR_Sector', '')
+        fdr_industry = row.get('FDR_Industry', '')
+        sector = _classify_sector(code, name, fdr_sector, fdr_industry)
         sector_mult = get_sector_multiplier(sector)
 
         # ── 변동성 조정 패널티 (리스크 조정 수익률 관점) ──────────────
@@ -680,6 +698,9 @@ def collect_quant_final(df_hd, df_full):
         raw_score   = score_momentum + score_supply + score_volume + score_ma + score_candle
         total_score = round(raw_score * vol_penalty * sector_mult * market_penalty, 1)
 
+        # FDR 당일 거래대금(today_amount)이 산출되어 있으면 사용, 없으면 df_hd의 Amount 사용 (단위: 원)
+        amount = today_amount if 'today_amount' in locals() and today_amount > 0 else float(row.get('Amount', 0))
+
         rows.append({
             'Code':             code,
             'Name':             name,
@@ -691,6 +712,7 @@ def collect_quant_final(df_hd, df_full):
             'Score_Candle':     round(score_candle, 1),
             'Close':            close,
             'ChagesRatio':      change,
+            'Amount':           amount,          # 거래대금 컬럼 추가
             'Sector':           sector,          # 섹터 분류
             'Sector_Mult':      sector_mult,     # 섹터 가중치 계수
             'Vol_Penalty':      vol_penalty,     # 변동성 패널티 계수
