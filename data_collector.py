@@ -123,7 +123,7 @@ def fetch_market_investor(token, market_div='J'):
         }
         params = {
             'FID_COND_MRKT_DIV_CODE': market_div,
-            'FID_INPUT_DATE_1': datetime.now().strftime('%Y%m%d'),
+            'FID_INPUT_DATE_1': (datetime.now() - timedelta(days=max(0, datetime.now().weekday() - 4))).strftime('%Y%m%d'),
         }
         res = requests.get(
             f'{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor',
@@ -263,9 +263,11 @@ def collect_market_summary(token, df_intraday):
 
     # FinanceDataReader로 지수 조회
     try:
-        df_ks = fdr.DataReader('KS11', datetime.now().strftime('%Y-%m-%d'))
-        df_kq = fdr.DataReader('KQ11', datetime.now().strftime('%Y-%m-%d'))
-        df_usd = fdr.DataReader('USD/KRW', datetime.now().strftime('%Y-%m-%d'))
+        # 최근 7일치 데이터를 불러와 마지막 데이터(최신 종가)를 사용
+        start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        df_ks = fdr.DataReader('KS11', start_date)
+        df_kq = fdr.DataReader('KQ11', start_date)
+        df_usd = fdr.DataReader('USD/KRW', start_date)
 
         def last(df, col='Close'):
             return float(df[col].iloc[-1]) if not df.empty and col in df.columns else 0
@@ -356,7 +358,8 @@ def collect_supply_intraday(token):
             params = {
                 'FID_COND_MRKT_DIV_CODE': 'U',
                 'FID_INPUT_ISCD': market,
-                'FID_INPUT_DATE_1': datetime.now().strftime('%Y%m%d'),
+                # 주말일 경우 가장 최근 금요일(또는 그 이전)을 타겟으로 함
+                'FID_INPUT_DATE_1': (datetime.now() - timedelta(days=max(0, datetime.now().weekday() - 4))).strftime('%Y%m%d'),
             }
             res = requests.get(
                 f'{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor-time-itemlist',
