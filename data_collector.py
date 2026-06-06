@@ -204,8 +204,8 @@ def collect_high_density(token, df_full):
     if df_full.empty:
         return pd.DataFrame()
 
-    # 거래량 상위 30개 종목 대상
-    top_stocks = df_full.nlargest(30, 'Volume') if 'Volume' in df_full.columns else df_full.head(30)
+    # 거래대금 상위 30개 종목 대상
+    top_stocks = df_full.nlargest(30, 'Amount') if 'Amount' in df_full.columns else df_full.head(30)
     rows = []
 
     for _, row in top_stocks.iterrows():
