@@ -218,8 +218,8 @@ if not df_summary.empty:
         except:
             return '#cccccc'
 
-    # 컬럼명 정리: 인코딩에 상관없이 3개 컬럼이면 한글 폴백
-    fallback_cols = ['종목/종류', '지수', '등락률']
+    # 컬럼명 정리: 인코딩에 상관없이 전체 컬럼을 한글 폴백으로 덮어씌움
+    fallback_cols = ['종목/종류', '지수', '등락률', '추이', '외국인(억)', '개인(억)', '기관(억)']
     if len(df_summary.columns) == 3:
         df_summary.columns = fallback_cols
     elif len(df_summary.columns) != 3:
@@ -265,7 +265,7 @@ if not df_summary.empty:
     row_fill = row_fill[:len(df_summary)]
 
     fig.add_trace(go.Table(
-        columnwidth=[2, 2, 1.5],
+        columnwidth=[1.5, 1.5, 1.5, 0.8, 1.2, 1.2, 1.2],
         header=dict(
             values=[f'<b>{c}</b>' for c in df_summary.columns],
             fill_color='#1e3a5f',
