@@ -532,6 +532,10 @@ def collect_quant_final(token, df_hd, df_full):
     for _, row in df_hd.iterrows():
         code = str(row.get('Code', '')).zfill(6)
         name = row.get('Name', '')
+        
+        # 이전 루프의 변수 오염을 막기 위한 초기화
+        df_hist = None
+        today_amount = 0
 
         # 1. 가격 모멘텀 점수 (최대 20점) [개선: 당일(10점) + 5일 누적(10점) 혼합]
         # 당일 등락률: +5% 이상 10점, -5% 이하 0점, 보합 5점
@@ -704,7 +708,6 @@ def collect_quant_final(token, df_hd, df_full):
 
         # 만약 로컬/FDR 분류에서 '기타'로 분류되었을 경우, KIS HTS API 실시간 조회 폴백 (10-15개 소수 종목만 동적 호출)
         if sector == '기타':
-            import time
             hts_sector = fetch_stock_sector(token, code)
             if hts_sector:
                 # HTS 업종명을 기반으로 9대 핵심 섹터 분류 재시도
@@ -720,7 +723,7 @@ def collect_quant_final(token, df_hd, df_full):
         # 급등락장에서 변동성 큰 종목의 역선택 문제를 방지함
         vol_penalty = 1.0
         try:
-            if 'df_hist' in dir() and df_hist is not None and len(df_hist) >= 20:
+            if df_hist is not None and len(df_hist) >= 20:
                 daily_returns = df_hist['Close'].pct_change().dropna()
                 vol_20d = daily_returns.tail(20).std() * (252 ** 0.5)  # 연환산 변동성
                 if vol_20d > 0.5:    vol_penalty = 0.80  # 50% 초과: 극고변동성 강한 패널티
@@ -735,7 +738,7 @@ def collect_quant_final(token, df_hd, df_full):
         total_score = round(raw_score * vol_penalty * sector_mult * market_penalty, 1)
 
         # FDR 당일 거래대금(today_amount)이 산출되어 있으면 사용, 없으면 df_hd의 Amount 사용 (단위: 원)
-        amount = today_amount if 'today_amount' in locals() and today_amount > 0 else float(row.get('Amount', 0))
+        amount = today_amount if today_amount > 0 else float(row.get('Amount', 0))
 
         rows.append({
             'Code':             code,
