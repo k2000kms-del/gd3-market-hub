@@ -209,421 +209,343 @@ if _search_q:
 
 kr_scale = 'RdBu_r'
 
-# ── 6분할 레이아웃 ────────────────────────────────────────────
-fig = make_subplots(
-    rows=2, cols=3,
-    column_widths=[0.33, 0.33, 0.34],
-    row_heights=[0.5, 0.5],
-    vertical_spacing=0.08,
-    horizontal_spacing=0.07,  # 가로막대 차트 라벨 잘림 방지를 위해 폭 확대
-    specs=[
-        [{'type': 'treemap'}, {'type': 'xy'},      {'type': 'xy'}],
-        [{'type': 'table'},   {'type': 'xy'},      {'type': 'xy'}]
-    ],
-    subplot_titles=(
-        '📊 실시간 수급(외/기/프)',
-        f'🎯 Quant Buy TOP 10 ({q_sort_by})',
-        '🔥 거래대금 리더(12)',
-        '📉 시장 요약 및 수급',
-        '📈 코스피/코스닥 수급 현황',
-        '🚀 상승률 리더(12)'
+# ── 클릭 이벤트 공통 핸들러 함수 ─────────────────────────────
+def handle_chart_click(event_data):
+    if event_data and hasattr(event_data, 'selection') and event_data.selection and event_data.selection.points:
+        pt = event_data.selection.points[0]
+        # Treemap은 label, Bar 차트는 y에 레이블이 얹혀 리턴됨
+        clicked_name = pt.get('label', '') or pt.get('y', '')
+        cd = pt.get('customdata', [])
+        
+        found_code = None
+        if len(cd) > 0:
+            for val in cd:
+                v_str = str(val).split('.')[0].zfill(6)
+                if v_str.isdigit() and len(v_str) == 6:
+                    found_code = v_str
+                    break
+        if not found_code and clicked_name and not df_m.empty:
+            match = df_m[df_m['Name'] == clicked_name]
+            if not match.empty:
+                found_code = str(match.iloc[0]['Code']).zfill(6)
+        if found_code:
+            st.session_state.sel_code = found_code
+            st.session_state.sel_name = clicked_name or found_code
+            st.rerun()
+
+# ── 개별 차트 6분할 레이아웃 (st.columns 분리) ───────────────
+st.markdown("### 📊 실시간 시장 종합 대시보드")
+st.caption("차트 내부의 막대(종목)를 클릭하면, 아래에서 즉시 해당 종목의 일봉 차트를 볼 수 있습니다.")
+
+row1_col1, row1_col2, row1_col3 = st.columns(3)
+row2_col1, row2_col2, row2_col3 = st.columns(3)
+
+# ── [Panel 1] 실시간 수급 (Treemap) ─────────────────────────
+with row1_col1:
+    st.markdown("##### 📊 실시간 수급 (외/기/프)")
+    fig_p1 = go.Figure()
+    if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
+        df1 = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
+        df1['Code'] = df1['Code'].astype(str)
+        if 'ChagesRatio' not in df1.columns:
+            if not df_m.empty and 'Code' in df_m.columns and 'ChagesRatio' in df_m.columns:
+                df1 = df1.merge(df_m[['Code', 'ChagesRatio']], on='Code', how='left')
+            else:
+                df1['ChagesRatio'] = 0.0
+        df1['ChagesRatio'] = pd.to_numeric(df1['ChagesRatio'], errors='coerce').fillna(0)
+        cp_col = 'Current_Price' if 'Current_Price' in df1.columns else ('Close' if 'Close' in df1.columns else 'Price')
+        tv_col = 'Trade_Volume' if 'Trade_Volume' in df1.columns else ('Volume' if 'Volume' in df1.columns else 'Vol')
+        df1['Current_Price_Val'] = pd.to_numeric(df1[cp_col], errors='coerce').fillna(0) if cp_col in df1.columns else 0
+        df1['Trade_Volume_Val']  = pd.to_numeric(df1[tv_col], errors='coerce').fillna(0) if tv_col in df1.columns else 0
+        df1['Foreign_Net']   = pd.to_numeric(df1['Foreign_Net'], errors='coerce').fillna(0) if 'Foreign_Net' in df1.columns else 0
+        df1['Institutional_Net'] = pd.to_numeric(df1['Institutional_Net'], errors='coerce').fillna(0) if 'Institutional_Net' in df1.columns else 0
+        df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
+        
+        fig_p1.add_trace(go.Treemap(
+            labels=df1['Name'], parents=[''] * len(df1),
+            values=df1['Total_Combined_Net'].abs() + 1,
+            marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
+            text=df1['Disp'],
+            customdata=df1[['Current_Price_Val', 'Trade_Volume_Val', 'Foreign_Net', 'Institutional_Net', 'Code']].values,
+            texttemplate='<b>%{label}</b><br>%{text}',
+            hovertemplate=(
+                '<b>%{label}</b> (%{customdata[4]})<br>'
+                '현재가: %{customdata[0]:,}원<br>'
+                '등락률: %{text}<br>'
+                '거래량: %{customdata[1]:,}<br>'
+                '외국인 순매수: %{customdata[2]:+,}주<br>'
+                '기관 순매수: %{customdata[3]:+,}주'
+                '<extra></extra>'
+            )
+        ))
+    fig_p1.update_layout(
+        height=320,
+        template='plotly_dark',
+        margin=dict(t=10, b=10, l=10, r=10),
+        clickmode='event+select',
+        font=dict(family='malgun gothic, nanum gothic, sans-serif')
     )
-)
+    ev_p1 = st.plotly_chart(fig_p1, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p1_chart_{st.session_state.chart_key_index}")
+    handle_chart_click(ev_p1)
 
-# [Panel 1] 실시간 수급 (df_high_density 기반)
-# 컬럼: Code, Foreign_Net, Institutional_Net, Personal_Net, Program_Net,
-#        Volume_Power, Trade_Volume, Trade_Amount, Current_Price,
-#        MA5_Disparity, MA20_Disparity, Name, Total_Combined_Net
-if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
-    df1 = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
-    df1['Code'] = df1['Code'].astype(str)
-
-    # df_full_market에서 ChagesRatio 가져오기 (단, 이미 없으면 가져옴)
-    if 'ChagesRatio' not in df1.columns:
-        if not df_m.empty and 'Code' in df_m.columns and 'ChagesRatio' in df_m.columns:
-            df1 = df1.merge(df_m[['Code', 'ChagesRatio']], on='Code', how='left')
+# ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
+with row1_col2:
+    st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
+    fig_p2 = go.Figure()
+    if not df_q.empty and 'Total_Score' in df_q.columns:
+        df2 = df_q.copy()
+        df2['Code'] = df2['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+        if not df_m.empty and 'Code' in df_m.columns:
+            df2 = df2.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
+            df2 = df2.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
         else:
-            df1['ChagesRatio'] = 0.0
+            df2['Close'] = 0
+            df2['ChagesRatio'] = 0.0
+            df2['Amount'] = 0.0
+        df2['Close'] = pd.to_numeric(df2['Close'], errors='coerce').fillna(0)
+        df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0)
+        df2['Amount'] = pd.to_numeric(df2['Amount'], errors='coerce').fillna(0)
 
-    df1['ChagesRatio'] = pd.to_numeric(df1['ChagesRatio'], errors='coerce').fillna(0)
+        if q_sort_by == "거래대금 순" and 'Amount' in df2.columns:
+            df2 = df2.sort_values('Amount', ascending=True).tail(10).copy()
+            x_val = df2['Amount'] / 1e8
+            hover_label = '거래대금: %{x:,.1f}억원'
+            text_labels = df2['Amount'].apply(lambda x: f" {x/1e8:,.0f}억")
+        else:
+            df2 = df2.sort_values('Total_Score', ascending=True).tail(10).copy()
+            x_val = df2['Total_Score']
+            hover_label = 'Quant 점수: %{x:.1f}점'
+            text_labels = df2['Total_Score'].apply(lambda x: f" {x:.1f}점")
 
-    # 현재가 / 거래량 컬럼 찾기 (Current_Price가 없으면 Close, Trade_Volume이 없으면 Volume 사용)
-    cp_col = 'Current_Price' if 'Current_Price' in df1.columns else ('Close' if 'Close' in df1.columns else 'Price')
-    tv_col = 'Trade_Volume' if 'Trade_Volume' in df1.columns else ('Volume' if 'Volume' in df1.columns else 'Vol')
+        fig_p2.add_trace(go.Bar(
+            y=df2['Name'],
+            x=x_val,
+            orientation='h',
+            marker=dict(
+                colorscale='Reds',
+                color=df2['Total_Score'],
+                showscale=False,
+                line=dict(color='rgba(255,255,255,0.1)', width=1)
+            ),
+            text=text_labels,
+            textposition='outside',
+            customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score']].values,
+            hovertemplate=(
+                '<b>%{y}</b> (%{customdata[0]})<br>'
+                '━━━━━━━━━━━━━━━<br>'
+                + hover_label + '<br>'
+                '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)<br>'
+                'Quant 종합 점수: %{customdata[3]:.1f}점'
+                '<extra></extra>'
+            )
+        ))
+    fig_p2.update_layout(
+        height=320,
+        template='plotly_dark',
+        margin=dict(t=10, b=10, l=10, r=30),
+        clickmode='event+select',
+        font=dict(family='malgun gothic, nanum gothic, sans-serif')
+    )
+    ev_p2 = st.plotly_chart(fig_p2, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p2_chart_{st.session_state.chart_key_index}")
+    handle_chart_click(ev_p2)
 
-    df1['Current_Price_Val'] = pd.to_numeric(df1[cp_col] if cp_col in df1.columns else 0, errors='coerce').fillna(0) if cp_col in df1.columns else 0
-    df1['Trade_Volume_Val']  = pd.to_numeric(df1[tv_col] if tv_col in df1.columns else 0, errors='coerce').fillna(0) if tv_col in df1.columns else 0
-    df1['Foreign_Net']   = pd.to_numeric(df1['Foreign_Net'], errors='coerce').fillna(0) if 'Foreign_Net' in df1.columns else 0
-    df1['Institutional_Net'] = pd.to_numeric(df1['Institutional_Net'], errors='coerce').fillna(0) if 'Institutional_Net' in df1.columns else 0
-    df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
+# ── [Panel 3] 거래대금 리더 (Horizontal Bar) ─────────────────
+with row1_col3:
+    st.markdown("##### 🔥 거래대금 리더 (12)")
+    fig_p3 = go.Figure()
+    if not df_m.empty and 'Amount' in df_m.columns:
+        df3 = df_m.sort_values('Amount', ascending=True).tail(12).copy()
+        df3['Amount_100M'] = df3['Amount'] / 100000000
+        
+        fig_p3.add_trace(go.Bar(
+            y=df3['Name'],
+            x=df3['Amount_100M'],
+            orientation='h',
+            marker=dict(
+                colorscale=kr_scale,
+                color=df3['ChagesRatio'],
+                cmid=0,
+                showscale=False,
+                line=dict(color='rgba(255,255,255,0.1)', width=1)
+            ),
+            text=df3['Amount_100M'].apply(lambda x: f" {x:,.0f}억"),
+            textposition='outside',
+            customdata=df3[['Code', 'Close', 'ChagesRatio']].values,
+            hovertemplate=(
+                '<b>%{y}</b> (%{customdata[0]})<br>'
+                '거래대금: %{x:,.0f}억원<br>'
+                '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)'
+                '<extra></extra>'
+            )
+        ))
+    fig_p3.update_layout(
+        height=320,
+        template='plotly_dark',
+        margin=dict(t=10, b=10, l=10, r=30),
+        clickmode='event+select',
+        font=dict(family='malgun gothic, nanum gothic, sans-serif')
+    )
+    ev_p3 = st.plotly_chart(fig_p3, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p3_chart_{st.session_state.chart_key_index}")
+    handle_chart_click(ev_p3)
 
-    fig.add_trace(go.Treemap(
-        labels=df1['Name'], parents=[''] * len(df1),
-        values=df1['Total_Combined_Net'].abs() + 1,
-        marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
-        text=df1['Disp'],
-        customdata=df1[['Current_Price_Val', 'Trade_Volume_Val', 'Foreign_Net', 'Institutional_Net', 'Code']].values,
-        texttemplate='<b>%{label}</b><br>%{text}',
-        hovertemplate=(
-            '<b>%{label}</b> (%{customdata[4]})<br>'
-            '현재가: %{customdata[0]:,}원<br>'
-            '등락률: %{text}<br>'
-            '거래량: %{customdata[1]:,}<br>'
-            '외국인 순매수: %{customdata[2]:+,}주<br>'
-            '기관 순매수: %{customdata[3]:+,}주'
-            '<extra></extra>'
-        )
-    ), row=1, col=1)
+# ── [Panel 4] 시장 요약 테이블 ──────────────────────────────
+with row2_col1:
+    st.markdown("##### 📉 시장 요약")
+    fig_p4 = go.Figure()
+    if not df_summary.empty:
+        def get_color(v):
+            try:
+                f = float(str(v).replace(',', '').replace('%', '').replace('+', ''))
+                return '#ff6b6b' if f > 0 else ('#4e9ff5' if f < 0 else '#cccccc')
+            except:
+                return '#cccccc'
+        fallback_cols = ['종목/종류', '지수', '등락률', '추이', '외국인(억)', '개인(억)', '기관(억)']
+        if len(df_summary.columns) == 3:
+            df_summary.columns = fallback_cols
+        elif len(df_summary.columns) != 3:
+            def is_broken(s):
+                return any(0x1200 <= ord(c) <= 0x137F for c in str(s))
+            new_cols = list(df_summary.columns)
+            for i, c in enumerate(new_cols):
+                if is_broken(c):
+                    if i < len(fallback_cols):
+                        new_cols[i] = fallback_cols[i]
+            df_summary.columns = new_cols
 
-# [Panel 2] Quant Buy TOP 10 (df_quant_final 기반)
-# 컬럼: Name, Code, Total_Score (세부 점수 없음)
-if not df_q.empty and 'Total_Score' in df_q.columns:
-    df2 = df_q.copy()
-    df2['Code'] = df2['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+        def fix_row_value(val, idx):
+            s = str(val)
+            if any(0x1200 <= ord(c) <= 0x137F for c in s) or any(0x0370 <= ord(c) <= 0x03FF for c in s):
+                known = ['코스피', '코스닥', 'USD/KRW']
+                return known[idx] if idx < len(known) else val
+            return val
 
-    # df_full_market에서 현재가/등락률/거래대금 합치기
-    if not df_m.empty and 'Code' in df_m.columns:
-        df2 = df2.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
-        df2 = df2.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
-    else:
-        df2['Close'] = 0
-        df2['ChagesRatio'] = 0.0
-        df2['Amount'] = 0.0
-    df2['Close'] = pd.to_numeric(df2['Close'], errors='coerce').fillna(0)
-    df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0)
-    df2['Amount'] = pd.to_numeric(df2['Amount'], errors='coerce').fillna(0)
+        if '종목/종류' in df_summary.columns:
+            df_summary['종목/종류'] = [
+                fix_row_value(v, i) for i, v in enumerate(df_summary['종목/종류'])
+            ]
 
-    # 정렬 및 상위 10개 종목 추출 (가로막대는 아래에서 위로 쌓이므로 ascending=True 정렬)
-    if q_sort_by == "거래대금 순" and 'Amount' in df2.columns:
-        df2 = df2.sort_values('Amount', ascending=True).tail(10).copy()
-        x_val = df2['Amount'] / 1e8  # 억원
-        hover_label = '거래대금: %{x:,.1f}억원'
-        text_labels = df2['Amount'].apply(lambda x: f" {x/1e8:,.0f}억")
-    else:
-        df2 = df2.sort_values('Total_Score', ascending=True).tail(10).copy()
-        x_val = df2['Total_Score']
-        hover_label = 'Quant 점수: %{x:.1f}점'
-        text_labels = df2['Total_Score'].apply(lambda x: f" {x:.1f}점")
+        chg_col = None
+        for candidate in ['등락률', 'ChagesRatio', 'ChangeRatio', 'Changes']:
+            if candidate in df_summary.columns:
+                chg_col = candidate
+                break
 
-    fig.add_trace(go.Bar(
-        y=df2['Name'],
-        x=x_val,
-        orientation='h',
-        marker=dict(
-            colorscale='Reds',
-            color=df2['Total_Score'],
-            showscale=False,
-            line=dict(color='rgba(255,255,255,0.1)', width=1)
-        ),
-        text=text_labels,
-        textposition='outside',
-        customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score']].values,
-        hovertemplate=(
-            '<b>%{y}</b> (%{customdata[0]})<br>'
-            '━━━━━━━━━━━━━━━<br>'
-            + hover_label + '<br>'
-            '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)<br>'
-            'Quant 종합 점수: %{customdata[3]:.1f}점'
-            '<extra></extra>'
-        )
-    ), row=1, col=2)
+        color_list = ['#cccccc'] * len(df_summary.columns)
+        if chg_col:
+            col_idx = list(df_summary.columns).index(chg_col)
+            color_list[col_idx] = [get_color(x) for x in df_summary[chg_col]]
 
-# [Panel 3] 거래대금 리더(12) (df_full_market 기반)
-# 컬럼: Name, Code, Amount, Close, ChagesRatio
-if not df_m.empty and 'Amount' in df_m.columns:
-    # 12종목 노출 (가로막대 정렬: 아래에서 위로 크기순)
-    df3 = df_m.sort_values('Amount', ascending=True).tail(12).copy()
-    df3['Amount_100M'] = df3['Amount'] / 100000000
-    
-    fig.add_trace(go.Bar(
-        y=df3['Name'],
-        x=df3['Amount_100M'],
-        orientation='h',
-        marker=dict(
-            colorscale=kr_scale,
-            color=df3['ChagesRatio'],
-            cmid=0,
-            showscale=False,
-            line=dict(color='rgba(255,255,255,0.1)', width=1)
-        ),
-        text=df3['Amount_100M'].apply(lambda x: f" {x:,.0f}억"),
-        textposition='outside',
-        customdata=df3[['Code', 'Close', 'ChagesRatio']].values,
-        hovertemplate=(
-            '<b>%{y}</b> (%{customdata[0]})<br>'
-            '거래대금: %{x:,.0f}억원<br>'
-            '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)'
-            '<extra></extra>'
-        )
-    ), row=1, col=3)
+        row_fill = ['#1a2332', '#111920'] * (len(df_summary) // 2 + 1)
+        row_fill = row_fill[:len(df_summary)]
 
-# [Panel 4] 시장 요약 테이블 (df_market_summary 기반)
-if not df_summary.empty:
-    def get_color(v):
-        try:
-            f = float(str(v).replace(',', '').replace('%', '').replace('+', ''))
-            return '#ff6b6b' if f > 0 else ('#4e9ff5' if f < 0 else '#cccccc')
-        except:
-            return '#cccccc'
+        fig_p4.add_trace(go.Table(
+            columnwidth=[1.5, 1.5, 1.5, 0.8, 1.2, 1.2, 1.2],
+            header=dict(
+                values=[f'<b>{c}</b>' for c in df_summary.columns],
+                fill_color='#1e3a5f',
+                line_color='#4e9ff5',
+                font=dict(color='#e0e8f0', size=11, family='malgun gothic, nanum gothic, sans-serif'),
+                align='center',
+                height=30
+            ),
+            cells=dict(
+                values=[df_summary[c] for c in df_summary.columns],
+                fill_color=[row_fill] * len(df_summary.columns),
+                line_color='rgba(78,159,245,0.2)',
+                font=dict(color=color_list, size=11, family='malgun gothic, nanum gothic, sans-serif'),
+                align='center',
+                height=26
+            )
+        ))
+    fig_p4.update_layout(
+        height=320,
+        template='plotly_dark',
+        margin=dict(t=10, b=10, l=10, r=10)
+    )
+    st.plotly_chart(fig_p4, use_container_width=True)
 
-    # 컬럼명 정리: 인코딩에 상관없이 전체 컬럼을 한글 폴백으로 덮어씌움
-    fallback_cols = ['종목/종류', '지수', '등락률', '추이', '외국인(억)', '개인(억)', '기관(억)']
-    if len(df_summary.columns) == 3:
-        df_summary.columns = fallback_cols
-    elif len(df_summary.columns) != 3:
-        # 컬럼 수가 다르다면 컬럼명이 깨진 것만 한글로 대체
-        def is_broken(s):
-            return any(0x1200 <= ord(c) <= 0x137F for c in str(s))
-        new_cols = list(df_summary.columns)
-        for i, c in enumerate(new_cols):
-            if is_broken(c):
-                if i < len(fallback_cols):
-                    new_cols[i] = fallback_cols[i]
-        df_summary.columns = new_cols
+# ── [Panel 5] 코스피/코스닥 수급 (Line) ───────────────────────
+with row2_col2:
+    st.markdown("##### 📈 수급 현황 (일중 추이)")
+    p5_has_data = not df_intraday.empty and 'Time' in df_intraday.columns
+    if p5_has_data:
+        # updatemenus 버튼 대신 Streamlit의 radio 토글을 차트 상단에 깔끔하게 배치
+        market_tab = st.radio("수급 구분", ["코스피 수급", "코스닥 수급"], horizontal=True, label_visibility="collapsed", key="p5_market_tab")
+        target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
+        df_line = df_intraday[df_intraday['Market'] == target_market].sort_values('Time')
+        
+        fig_p5 = go.Figure()
+        def to_num(s):
+            return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-    # 행 데이터 값도 깨진 경우 한글로 치환 (CSV 파일 자체 인코딩 오류 방어)
-    # 첫 번째 컬럼(종목/종류)의 값이 깨진 문자인 경우 코스피/코스닥 순서로 매핑
-    def fix_row_value(val, idx):
-        s = str(val)
-        # 에티오피아 문자(U+1200~U+137F) 또는 기타 비정상 문자가 포함된 경우
-        if any(0x1200 <= ord(c) <= 0x137F for c in s) or any(0x0370 <= ord(c) <= 0x03FF for c in s):
-            known = ['코스피', '코스닥', 'USD/KRW']
-            return known[idx] if idx < len(known) else val
-        return val
-
-    if '종목/종류' in df_summary.columns:
-        df_summary['종목/종류'] = [
-            fix_row_value(v, i) for i, v in enumerate(df_summary['종목/종류'])
+        col_cfg = [
+            ('Foreign_Net',       '외국인', '#4e9ff5'),
+            ('Individual_Net',    '개인',   '#ff6b6b'),
+            ('Institutional_Net', '기관',   '#51cf66'),
         ]
 
-    # 등락률 컬럼명 자동 탐색
-    chg_col = None
-    for candidate in ['등락률', 'ChagesRatio', 'ChangeRatio', 'Changes']:
-        if candidate in df_summary.columns:
-            chg_col = candidate
-            break
-
-    color_list = ['#cccccc'] * len(df_summary.columns)
-    if chg_col:
-        col_idx = list(df_summary.columns).index(chg_col)
-        color_list[col_idx] = [get_color(x) for x in df_summary[chg_col]]
-
-    # 행별 배경색 (홀/짝 구분)
-    row_fill = ['#1a2332', '#111920'] * (len(df_summary) // 2 + 1)
-    row_fill = row_fill[:len(df_summary)]
-
-    fig.add_trace(go.Table(
-        columnwidth=[1.5, 1.5, 1.5, 0.8, 1.2, 1.2, 1.2],
-        header=dict(
-            values=[f'<b>{c}</b>' for c in df_summary.columns],
-            fill_color='#1e3a5f',
-            line_color='#4e9ff5',
-            font=dict(color='#e0e8f0', size=12, family='malgun gothic, nanum gothic, sans-serif'),
-            align='center',
-            height=32
-        ),
-        cells=dict(
-            values=[df_summary[c] for c in df_summary.columns],
-            fill_color=[row_fill] * len(df_summary.columns),
-            line_color='rgba(78,159,245,0.2)',
-            font=dict(color=color_list, size=12, family='malgun gothic, nanum gothic, sans-serif'),
-            align='center',
-            height=28
+        for col, name, color in col_cfg:
+            if not df_line.empty and col in df_line.columns:
+                fig_p5.add_trace(go.Scatter(
+                    x=df_line['Time'], y=to_num(df_line[col]),
+                    name=name, mode='lines',
+                    line=dict(color=color, width=2),
+                    hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
+                ))
+    else:
+        fig_p5 = go.Figure()
+        fig_p5.add_annotation(
+            text='📡 수급 데이터 수집 중...',
+            x=0.5, y=0.5, showarrow=False, font=dict(size=12, color='#888')
         )
-    ), row=2, col=1)
-
-# [Panel 5] 코스피/코스닥 수급 라인차트
-p5_has_data = not df_intraday.empty and 'Time' in df_intraday.columns
-
-if p5_has_data:
-    def to_num(s):
-        return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-
-    col_cfg = [
-        ('Foreign_Net',       '외국인', '#4e9ff5'),
-        ('Individual_Net',    '개인',   '#ff6b6b'),
-        ('Institutional_Net', '기관',   '#51cf66'),
-    ]
-
-    # KOSPI 트레이스 (visible=True)
-    kospi_start = len(fig.data)
-    df_k = df_intraday[df_intraday['Market'] == '코스피'].sort_values('Time')
-    for col, name, color in col_cfg:
-        if not df_k.empty and col in df_k.columns:
-            fig.add_trace(go.Scatter(
-                x=df_k['Time'], y=to_num(df_k[col]),
-                name=f'코스피 {name}', mode='lines',
-                line=dict(color=color, width=2),
-                visible=True, showlegend=True,
-                hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원<extra>코스피</extra>'
-            ), row=2, col=2)
-    kospi_end = len(fig.data)
-
-    # KOSDAQ 트레이스 (visible=False)
-    kosdaq_start = len(fig.data)
-    df_qd = df_intraday[df_intraday['Market'] == '코스닥'].sort_values('Time')
-    for col, name, color in col_cfg:
-        if not df_qd.empty and col in df_qd.columns:
-            fig.add_trace(go.Scatter(
-                x=df_qd['Time'], y=to_num(df_qd[col]),
-                name=f'코스닥 {name}', mode='lines',
-                line=dict(color=color, width=2, dash='dot'),
-                visible=False, showlegend=True,
-                hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원<extra>코스닥</extra>'
-            ), row=2, col=2)
-    kosdaq_end = len(fig.data)
-
-    fig.update_yaxes(
-        ticksuffix='억',
-        zeroline=True, zerolinecolor='rgba(255,255,255,0.3)', zerolinewidth=1,
-        gridcolor='rgba(255,255,255,0.05)',
-        row=2, col=2
+    fig_p5.update_layout(
+        height=265,  # Radio 높이 고려한 높이 보정
+        template='plotly_dark',
+        margin=dict(t=10, b=10, l=10, r=10),
+        hovermode='x unified',
+        font=dict(family='malgun gothic, nanum gothic, sans-serif')
     )
-    fig.update_xaxes(
-        tickangle=-30,
-        row=2, col=2
-    )
-else:
-    kospi_start = kospi_end = kosdaq_start = kosdaq_end = len(fig.data)
-    fig.add_annotation(
-        text='📡 수급 데이터 수집 중...',
-        x=0.5, y=0.25, xref='paper', yref='paper',
-        showarrow=False, font=dict(size=12, color='#888'), align='center'
-    )
+    st.plotly_chart(fig_p5, use_container_width=True)
 
-# [Panel 6] 상승률 리더(12) (df_full_market 기반)
-# 컬럼: Name, Code, ChagesRatio, Close, Volume
-if not df_m.empty and 'ChagesRatio' in df_m.columns:
-    # 12종목 노출 (가로막대 정렬: 아래에서 위로 오름차순 크기순)
-    df6 = df_m.sort_values('ChagesRatio', ascending=True).tail(12).copy()
-    
-    fig.add_trace(go.Bar(
-        y=df6['Name'],
-        x=df6['ChagesRatio'],
-        orientation='h',
-        marker=dict(
-            colorscale=kr_scale,
-            color=df6['ChagesRatio'],
-            cmid=0,
-            showscale=False,
-            line=dict(color='rgba(255,255,255,0.1)', width=1)
-        ),
-        text=df6['ChagesRatio'].apply(lambda x: f" {x:+.2f}%"),
-        textposition='outside',
-        customdata=df6[['Code', 'Close', 'Volume']].values,
-        hovertemplate=(
-            '<b>%{y}</b> (%{customdata[0]})<br>'
-            '등락률: <b>%{x:+.2f}%</b><br>'
-            '현재가: %{customdata[1]:,}원<br>'
-            '거래량: %{customdata[2]:,}주'
-            '<extra></extra>'
-        )
-    ), row=2, col=3)
-
-# updatemenus 생성 (Panel 5 코스피/코스닥 전환 버튼)
-if p5_has_data:
-    total_n = len(fig.data)
-
-    def make_vis(show_kospi):
-        vis = []
-        for i in range(total_n):
-            if kospi_start <= i < kospi_end:
-                vis.append(show_kospi)
-            elif kosdaq_start <= i < kosdaq_end:
-                vis.append(not show_kospi)
-            else:
-                vis.append(True)
-        return vis
-
-    updatemenus = [dict(
-        type='buttons',
-        direction='right',
-        x=0.34, y=0.56,
-        xanchor='left',
-        yanchor='top',
-        showactive=False,
-        buttons=[
-            dict(
-                label='▶ 코스피',
-                method='update',
-                args=[{'visible': make_vis(True)},
-                      {'legend.title.text': '코스피 수급'}]
+# ── [Panel 6] 상승률 리더 (Horizontal Bar) ───────────────────
+with row2_col3:
+    st.markdown("##### 🚀 상승률 리더 (12)")
+    fig_p6 = go.Figure()
+    if not df_m.empty and 'ChagesRatio' in df_m.columns:
+        df6 = df_m.sort_values('ChagesRatio', ascending=True).tail(12).copy()
+        
+        fig_p6.add_trace(go.Bar(
+            y=df6['Name'],
+            x=df6['ChagesRatio'],
+            orientation='h',
+            marker=dict(
+                colorscale=kr_scale,
+                color=df6['ChagesRatio'],
+                cmid=0,
+                showscale=False,
+                line=dict(color='rgba(255,255,255,0.1)', width=1)
             ),
-            dict(
-                label='▶ 코스닥',
-                method='update',
-                args=[{'visible': make_vis(False)},
-                      {'legend.title.text': '코스닥 수급'}]
-            ),
-        ],
-        bgcolor='#0d1b2a',
-        bordercolor='#4e9ff5',
-        borderwidth=1,
-        font=dict(color='white', size=11),
-        active=0,
-        pad={'r': 8, 't': 5, 'b': 5, 'l': 8}
-    )]
-else:
-    updatemenus = []
+            text=df6['ChagesRatio'].apply(lambda x: f" {x:+.2f}%"),
+            textposition='outside',
+            customdata=df6[['Code', 'Close', 'Volume']].values,
+            hovertemplate=(
+                '<b>%{y}</b> (%{customdata[0]})<br>'
+                '등락률: <b>%{x:+.2f}%</b><br>'
+                '현재가: %{customdata[1]:,}원<br>'
+                '거래량: %{customdata[2]:,}주'
+                '<extra></extra>'
+            )
+        ))
+    fig_p6.update_layout(
+        height=320,
+        template='plotly_dark',
+        margin=dict(t=10, b=10, l=10, r=30),
+        clickmode='event+select',
+        font=dict(family='malgun gothic, nanum gothic, sans-serif')
+    )
+    ev_p6 = st.plotly_chart(fig_p6, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p6_chart_{st.session_state.chart_key_index}")
+    handle_chart_click(ev_p6)
 
-fig.update_layout(
-    height=900,
-    template='plotly_dark',
-    margin=dict(t=60, l=20, r=20, b=20),
-    showlegend=True,
-    legend=dict(
-        title=dict(text='수급 구분', font=dict(size=10, color='#aabbcc')),
-        orientation='h',
-        x=0.34, y=0.40,
-        xanchor='left',
-        yanchor='top',
-        font=dict(size=10),
-        bgcolor='rgba(0,0,0,0)',
-        tracegroupgap=0
-    ),
-    updatemenus=updatemenus,
-    hovermode='x unified',
-    clickmode='event+select',  # Treemap 클릭 이벤트가 Streamlit on_select로 전달되도록 활성화
-    font=dict(family='malgun gothic, nanum gothic, sans-serif')
-)
-
-# 메인 차트 렌더링 - on_select 활성화하고 동적 키를 할당하여 리셋 지원
-event = st.plotly_chart(
-    fig, 
-    use_container_width=True, 
-    on_select='rerun', 
-    selection_mode=['points'],
-    key=f"main_plotly_chart_{st.session_state.chart_key_index}"
-)
-
-# [디버그용] 이벤트 리턴 구조 브라우저 확인용
-st.write("🔍 [디버그] Plotly 선택 이벤트:", event)
-
-# 클릭된 종목 정보 획득 및 세션 스테이트 업데이트
-if event and hasattr(event, 'selection') and event.selection and event.selection.points:
-    pt = event.selection.points[0]
-    clicked_name = pt.get('label', '')
-    cd = pt.get('customdata', [])
-    
-    found_code = None
-    if len(cd) > 0:
-        # customdata 리스트 중에서 6자리 종목코드 패턴 매칭 검증
-        for val in cd:
-            v_str = str(val).split('.')[0].zfill(6)
-            if v_str.isdigit() and len(v_str) == 6:
-                found_code = v_str
-                break
-                
-    # 백업용으로 이름 매칭 검색
-    if not found_code and clicked_name and not df_m.empty:
-        match = df_m[df_m['Name'] == clicked_name]
-        if not match.empty:
-            found_code = str(match.iloc[0]['Code']).zfill(6)
-            
-    if found_code:
-        st.session_state.sel_code = found_code
-        st.session_state.sel_name = clicked_name or found_code
-        st.rerun()
 
 
 # ── 대시보드 내 종목 선택 버튼 탭 ─────────────────────────────
