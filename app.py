@@ -3,6 +3,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import FinanceDataReader as fdr
 
 st.set_page_config(
     page_title='GD 3.0 Market Hub',
@@ -69,6 +70,72 @@ if not df_m.empty:
 for df_temp in [df_hd, df_q, df_m, df_summary, df_intraday]:
     if df_temp is not None and not df_temp.empty and 'Code' in df_temp.columns:
         df_temp['Code'] = df_temp['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+
+# ── 실시간 시세 반영 (FinanceDataReader) ───────────────────────
+if df_m is not None and not df_m.empty:
+    with st.sidebar.status("🔄 실시간 시세 및 지수 반영 중...", expanded=False) as status:
+        try:
+            # 1. 코스피 / 코스닥 실시간 시세 조회
+            st.write("📈 코스피/코스닥 전체 시세 조회 중...")
+            df_ks_live = fdr.StockListing('KOSPI')
+            df_kq_live = fdr.StockListing('KOSDAQ')
+            
+            if not df_ks_live.empty or not df_kq_live.empty:
+                df_live = pd.concat([df_ks_live, df_kq_live], ignore_index=True)
+                
+                # 필요한 컬럼만 추출 및 이름 통일
+                df_live = df_live[['Code', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
+                df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
+                
+                # df_m의 기존 가격 관련 컬럼 드롭 후 머지
+                df_m_base = df_m.drop(columns=['Close', 'ChagesRatio', 'Volume', 'Amount'], errors='ignore')
+                df_m = df_m_base.merge(df_live, on='Code', how='left')
+                
+                # 결측치 채우기
+                for col in ['Close', 'ChagesRatio', 'Volume', 'Amount']:
+                    if col in df_m.columns:
+                        df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
+                
+                st.write("✅ 전체 시장 시세 반영 완료")
+            else:
+                st.write("⚠️ 실시간 시세 데이터를 가져오지 못했습니다.")
+        except Exception as e:
+            st.write(f"❌ 실시간 시세 반영 실패: {e}")
+            
+        try:
+            # 2. 실시간 지수 및 환율 반영
+            if df_summary is not None and not df_summary.empty and '종목/종류' in df_summary.columns:
+                st.write("📊 주요 지수 및 환율 조회 중...")
+                start_date = (pd.Timestamp.now() - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
+                ks_df = fdr.DataReader('KS11', start_date)
+                kq_df = fdr.DataReader('KQ11', start_date)
+                usd_df = fdr.DataReader('USD/KRW', start_date)
+                
+                for idx, row in df_summary.iterrows():
+                    name = str(row['종목/종류'])
+                    if '코스피' in name and not ks_df.empty:
+                        close_val = ks_df['Close'].iloc[-1]
+                        chg_val = ks_df['Change'].iloc[-1] * 100
+                        df_summary.at[idx, '지수'] = f"{close_val:,.2f}"
+                        df_summary.at[idx, '등락률'] = f"{chg_val:+.2f}%"
+                        df_summary.at[idx, '추이'] = '📈' if chg_val > 0 else ('📉' if chg_val < 0 else '➖')
+                    elif '코스닥' in name and not kq_df.empty:
+                        close_val = kq_df['Close'].iloc[-1]
+                        chg_val = kq_df['Change'].iloc[-1] * 100
+                        df_summary.at[idx, '지수'] = f"{close_val:,.2f}"
+                        df_summary.at[idx, '등락률'] = f"{chg_val:+.2f}%"
+                        df_summary.at[idx, '추이'] = '📈' if chg_val > 0 else ('📉' if chg_val < 0 else '➖')
+                    elif ('USD/KRW' in name or '환율' in name) and not usd_df.empty:
+                        close_val = usd_df['Close'].iloc[-1]
+                        chg_val = usd_df['Change'].iloc[-1] * 100
+                        df_summary.at[idx, '지수'] = f"{close_val:,.2f}"
+                        df_summary.at[idx, '등락률'] = f"{chg_val:+.2f}%"
+                        df_summary.at[idx, '추이'] = '📈' if chg_val > 0 else ('📉' if chg_val < 0 else '➖')
+                st.write("✅ 지수 및 환율 반영 완료")
+        except Exception as e:
+            st.write(f"❌ 지수 및 환율 반영 실패: {e}")
+        
+        status.update(label="⚡ 실시간 시세 반영 완료", state="complete")
 
 # ── 사이드바 정렬 옵션 ──
 st.sidebar.title("🎛️ 대시보드 설정")
