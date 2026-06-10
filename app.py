@@ -21,7 +21,17 @@ FILE_IDS = {
     'df_supply_intraday.csv': '1sYEK6PsAoH1ybupVbtQKnL289LCwnhvc',
 }
 
-@st.cache_data(ttl=60)  # 60초마다 데이터 갱신
+@st.cache_data(ttl=300)  # 5분 캐시 (일봉 데이터는 자주 바뀌지 않음)
+def get_stock_history(code: str):
+    """종목 일봉 데이터 조회 (90일)"""
+    try:
+        start = (pd.Timestamp.now() - pd.Timedelta(days=120)).strftime('%Y-%m-%d')
+        df = fdr.DataReader(code, start)
+        return df if not df.empty else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
 def load_data():
     """구글 드라이브 공개 URL에서 직접 CSV 읽기"""
     dfs = {}
@@ -136,6 +146,12 @@ if df_m is not None and not df_m.empty:
             st.write(f"❌ 지수 및 환율 반영 실패: {e}")
         
         status.update(label="⚡ 실시간 시세 반영 완료", state="complete")
+
+# ── 세션 스테이트 초기화 (종목 클릭 차트용) ────────────────────
+if 'sel_code' not in st.session_state:
+    st.session_state.sel_code = None
+if 'sel_name' not in st.session_state:
+    st.session_state.sel_name = None
 
 # ── 사이드바 정렬 옵션 ──
 st.sidebar.title("🎛️ 대시보드 설정")
@@ -551,7 +567,138 @@ fig.update_layout(
     font=dict(family='malgun gothic, nanum gothic, sans-serif')
 )
 
-st.plotly_chart(fig, use_container_width=True)
+# 메인 차트 렌더링 - on_select로 종목 클릭 이벤트 캡처
+event = st.plotly_chart(fig, use_container_width=True, on_select='rerun', selection_mode=['points'])
+
+# 클릭된 종목 파악 및 세션 스테이트 갱신
+if event and hasattr(event, 'selection') and event.selection and event.selection.points:
+    pt = event.selection.points[0]
+    clicked_name = pt.get('label', '')
+    cd = pt.get('customdata', [])
+    # 각 패널의 customdata 구조에서 Code 추출 시도
+    # Panel1(수급): customdata[4]=Code, 나머지 Panel: customdata[0]=Code
+    found_code = None
+    for idx in [0, 4]:
+        if len(cd) > idx:
+            c = str(cd[idx]).split('.')[0].zfill(6)
+            if c.isdigit() and len(c) == 6:
+                found_code = c
+                break
+    # df_m에서 이름으로도 Code 검색 (백업)
+    if not found_code and clicked_name and not df_m.empty and 'Name' in df_m.columns:
+        match = df_m[df_m['Name'] == clicked_name]
+        if not match.empty:
+            found_code = str(match.iloc[0]['Code']).zfill(6)
+    if found_code:
+        st.session_state.sel_code = found_code
+        st.session_state.sel_name = clicked_name
+
+# ── 종목 일봉 차트 (클릭 시 표시) ─────────────────────────────
+if st.session_state.sel_code:
+    code_disp = st.session_state.sel_code
+    name_disp = st.session_state.sel_name or code_disp
+
+    col_title, col_close = st.columns([6, 1])
+    with col_title:
+        st.markdown(f"### 📈 {name_disp} ({code_disp}) &nbsp; 일봉 차트")
+    with col_close:
+        if st.button('✕ 닫기', key='close_chart'):
+            st.session_state.sel_code = None
+            st.session_state.sel_name = None
+            st.rerun()
+
+    with st.spinner(f'📡 {name_disp} 일봉 데이터 조회 중...'):
+        df_candle = get_stock_history(code_disp)
+
+    if df_candle.empty:
+        st.warning('⚠️ 차트 데이터를 불러올 수 없습니다.')
+    else:
+        # MA 계산
+        df_candle['MA5']  = df_candle['Close'].rolling(5).mean()
+        df_candle['MA20'] = df_candle['Close'].rolling(20).mean()
+        df_candle = df_candle.tail(90)  # 최근 90 거래일만 표시
+
+        # 당일 등락률 계산
+        if len(df_candle) >= 2:
+            prev_close = df_candle['Close'].iloc[-2]
+            last_close = df_candle['Close'].iloc[-1]
+            daily_chg = (last_close - prev_close) / prev_close * 100 if prev_close > 0 else 0
+            chg_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
+            chg_str   = f'{daily_chg:+.2f}%'
+        else:
+            last_close = df_candle['Close'].iloc[-1]
+            chg_str = ''
+            chg_color = '#cccccc'
+
+        # 지표 요약 (상단 메트릭)
+        mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+        mc1.metric('현재가', f'{int(last_close):,}원', chg_str)
+        mc2.metric('52주 최고', f"{int(df_candle['High'].max()):,}원")
+        mc3.metric('52주 최저', f"{int(df_candle['Low'].min()):,}원")
+        mc4.metric('MA5', f"{int(df_candle['MA5'].iloc[-1]):,}원" if pd.notna(df_candle['MA5'].iloc[-1]) else '-')
+        mc5.metric('MA20', f"{int(df_candle['MA20'].iloc[-1]):,}원" if pd.notna(df_candle['MA20'].iloc[-1]) else '-')
+
+        # 캔들 차트 생성
+        fig_c = make_subplots(
+            rows=2, cols=1,
+            row_heights=[0.72, 0.28],
+            vertical_spacing=0.03,
+            shared_xaxes=True
+        )
+
+        # 캔들스틱 (한국식: 상승=빨강, 하락=파랑)
+        fig_c.add_trace(go.Candlestick(
+            x=df_candle.index,
+            open=df_candle['Open'], high=df_candle['High'],
+            low=df_candle['Low'],   close=df_candle['Close'],
+            increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
+            decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
+            name='캔들', showlegend=False
+        ), row=1, col=1)
+
+        # MA5
+        fig_c.add_trace(go.Scatter(
+            x=df_candle.index, y=df_candle['MA5'],
+            name='MA5', mode='lines',
+            line=dict(color='#ffd43b', width=1.5)
+        ), row=1, col=1)
+
+        # MA20
+        fig_c.add_trace(go.Scatter(
+            x=df_candle.index, y=df_candle['MA20'],
+            name='MA20', mode='lines',
+            line=dict(color='#ff922b', width=1.5)
+        ), row=1, col=1)
+
+        # 거래량 막대 (색상: 상승일=빨강, 하락일=파랑)
+        vol_colors = [
+            '#ff6b6b' if c >= o else '#4e9ff5'
+            for c, o in zip(df_candle['Close'], df_candle['Open'])
+        ]
+        fig_c.add_trace(go.Bar(
+            x=df_candle.index, y=df_candle['Volume'],
+            name='거래량', marker_color=vol_colors,
+            showlegend=False, opacity=0.8
+        ), row=2, col=1)
+
+        fig_c.update_layout(
+            template='plotly_dark',
+            height=480,
+            margin=dict(t=20, l=10, r=10, b=10),
+            xaxis_rangeslider_visible=False,
+            legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
+            font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+            plot_bgcolor='#0d1b2a',
+            paper_bgcolor='#0d1b2a',
+        )
+        fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=1, col=1)
+        fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
+        fig_c.update_xaxes(gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
+        fig_c.update_xaxes(gridcolor='rgba(255,255,255,0.04)', tickangle=-30, row=2, col=1)
+
+        st.plotly_chart(fig_c, use_container_width=True)
+
+    st.divider()
 
 # 하단 갱신 버튼
 col1, col2, col3 = st.columns([1, 2, 1])
