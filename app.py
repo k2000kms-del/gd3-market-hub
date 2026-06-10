@@ -93,13 +93,16 @@ if df_m is not None and not df_m.empty:
             if not df_ks_live.empty or not df_kq_live.empty:
                 df_live = pd.concat([df_ks_live, df_kq_live], ignore_index=True)
                 
-                # 필요한 컬럼만 추출 및 이름 통일
-                df_live = df_live[['Code', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
+                # 필요한 컬럼만 추출 및 이름 통일 (Name 추가)
+                df_live = df_live[['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
                 df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
                 
-                # df_m의 기존 가격 관련 컬럼 드롭 후 머지
+                # 세션 스테이트에 전체 상장 종목 목록 백업 (검색용)
+                st.session_state['df_live_all'] = df_live
+                
+                # df_m의 기존 가격 관련 컬럼 드롭 후 머지 (Name 제외)
                 df_m_base = df_m.drop(columns=['Close', 'ChagesRatio', 'Volume', 'Amount'], errors='ignore')
-                df_m = df_m_base.merge(df_live, on='Code', how='left')
+                df_m = df_m_base.merge(df_live.drop(columns=['Name'], errors='ignore'), on='Code', how='left')
                 
                 # 결측치 채우기
                 for col in ['Close', 'ChagesRatio', 'Volume', 'Amount']:
@@ -172,23 +175,34 @@ _search_q = st.sidebar.text_input(
     key='sidebar_search',
     label_visibility='collapsed'
 )
-if _search_q and not df_m.empty and 'Name' in df_m.columns:
+if _search_q:
     _sq = _search_q.strip()
-    _mask = (
-        df_m['Name'].str.contains(_sq, na=False, case=False) |
-        df_m['Code'].astype(str).str.contains(_sq, na=False)
-    )
-    _results = df_m[_mask].head(8)
-    if _results.empty:
-        st.sidebar.caption('⚠️ 검색 결과가 없습니다.')
-    for _, _r in _results.iterrows():
-        _chg = float(_r.get('ChagesRatio', 0))
-        _chg_str = f"{_chg:+.2f}%"
-        _btn_label = f"{_r['Name']}  {_chg_str}"
-        if st.sidebar.button(_btn_label, key=f"sb_{_r['Code']}", use_container_width=True):
-            st.session_state.sel_code = str(_r['Code']).zfill(6)
-            st.session_state.sel_name = str(_r['Name'])
-            st.rerun()
+    # 전체 종목(df_live_all) 검색 시도, 없으면 df_m에서 백업 검색
+    _search_pool = st.session_state.get('df_live_all', pd.DataFrame())
+    if _search_pool.empty:
+        _search_pool = df_m
+        
+    if not _search_pool.empty and 'Name' in _search_pool.columns:
+        _mask = (
+            _search_pool['Name'].str.contains(_sq, na=False, case=False) |
+            _search_pool['Code'].astype(str).str.contains(_sq, na=False)
+        )
+        _results = _search_pool[_mask].head(8)
+        if _results.empty:
+            st.sidebar.caption('⚠️ 검색 결과가 없습니다.')
+        for _, _r in _results.iterrows():
+            _chg = float(_r.get('ChagesRatio', 0))
+            # FDR 전체 종목의 ChagesRatio는 소수점 비율(0.01 = 1%)일 수 있으므로 보정
+            if abs(_chg) < 0.1 and _chg != 0:
+                _chg_str = f"{_chg * 100:+.2f}%"
+            else:
+                _chg_str = f"{_chg:+.2f}%"
+            _btn_label = f"{_r['Name']}  {_chg_str}"
+            if st.sidebar.button(_btn_label, key=f"sb_{_r['Code']}", use_container_width=True):
+                st.session_state.sel_code = str(_r['Code']).zfill(6)
+                st.session_state.sel_name = str(_r['Name'])
+                st.rerun()
+
 
 kr_scale = 'RdBu_r'
 
@@ -591,11 +605,39 @@ fig.update_layout(
     ),
     updatemenus=updatemenus,
     hovermode='x unified',
+    clickmode='event+select',  # Treemap 클릭 이벤트가 Streamlit on_select로 전달되도록 활성화
     font=dict(family='malgun gothic, nanum gothic, sans-serif')
 )
 
-# 메인 차트 렌더링
-st.plotly_chart(fig, use_container_width=True)
+# 메인 차트 렌더링 - on_select 활성화하여 종목 클릭 캡처
+event = st.plotly_chart(fig, use_container_width=True, on_select='rerun', selection_mode=['points'])
+
+# 클릭된 종목 정보 획득 및 세션 스테이트 업데이트
+if event and hasattr(event, 'selection') and event.selection and event.selection.points:
+    pt = event.selection.points[0]
+    clicked_name = pt.get('label', '')
+    cd = pt.get('customdata', [])
+    
+    found_code = None
+    if len(cd) > 0:
+        # customdata 리스트 중에서 6자리 종목코드 패턴 매칭 검증
+        for val in cd:
+            v_str = str(val).split('.')[0].zfill(6)
+            if v_str.isdigit() and len(v_str) == 6:
+                found_code = v_str
+                break
+                
+    # 백업용으로 이름 매칭 검색
+    if not found_code and clicked_name and not df_m.empty:
+        match = df_m[df_m['Name'] == clicked_name]
+        if not match.empty:
+            found_code = str(match.iloc[0]['Code']).zfill(6)
+            
+    if found_code:
+        st.session_state.sel_code = found_code
+        st.session_state.sel_name = clicked_name or found_code
+        st.rerun()
+
 
 # ── 대시보드 내 종목 선택 버튼 탭 ─────────────────────────────
 st.markdown('#### 📈 종목 선택 → 일봉 차트 조회')
