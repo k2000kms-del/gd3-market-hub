@@ -537,15 +537,29 @@ def collect_quant_final(token, df_hd, df_full):
         df_hist = None
         today_amount = 0
 
-        # 1. 가격 모멘텀 점수 (최대 20점) [개선: 당일(10점) + 5일 누적(10점) 혼합]
-        # 당일 등락률: +5% 이상 10점, -5% 이하 0점, 보합 5점
+        # 1. 가격 모멘텀 점수 (최대 20점) [선행 매수 최적 구간 재설계]
+        # [개선] 기존 선형 공식(+5%=10점)은 이미 급등한 추격 매수 종목에 만점을 주는 문제가 있었음
+        # 선행 매수 관점에서 +1~+3% 소폭 상승이 오히려 이상적인 진입 신호
         change = float(row.get('ChagesRatio', 0))
-        score_day = min(10, max(0, change * 1 + 5))
+        if 1.0 <= change < 3.0:
+            score_day = 10.0  # 이상적 선행 진입 구간 (소폭 상승, 아직 주목 전)
+        elif 0.0 <= change < 1.0:
+            score_day = 8.0   # 보합~미세 상승 (눌림목 진입 가능)
+        elif 3.0 <= change < 5.0:
+            score_day = 7.0   # 상승세이나 약간 추격 위험
+        elif -1.0 <= change < 0.0:
+            score_day = 6.0   # 소폭 조정 (저거래량이면 눌림목 매수 기회)
+        elif change >= 5.0:
+            score_day = 4.0   # 이미 급등 - 선행 매수 타이밍 아님
+        elif -3.0 <= change < -1.0:
+            score_day = 2.0   # 하락세
+        else:
+            score_day = 0.0   # 급락 (-3% 이하)
         # 5일 누적 모멘텀: FDR 조회 전이므로 일단 중립값 5점으로 초기화 (아래 FDR 블록에서 갱신)
         score_5d = 5.0
         score_momentum = score_day + score_5d  # FDR 블록에서 최종 갱신됨
 
-        # 2. 수급 점수 (최대 30점) [개선: 시가총액 대비 순매수 비율 기준]
+        # 2. 수급 점수 (최대 30점) [개선: 로그 스케일 시총 보정으로 소형주 과대평가 방지]
         # 외인+기관 합산 순매수 금액(원화) 기준. KIS API 순매수량은 주식수이므로 종가를 곱해 금액 계산.
         close = float(row.get('Close', 0))
         foreign_qty = float(row.get('Foreign_Net', 0))
@@ -553,14 +567,17 @@ def collect_quant_final(token, df_hd, df_full):
         marcap = float(row.get('Marcap', 0))
 
         net_buy_amount = (foreign_qty + inst_qty) * close
-        # 시가총액 대비 순매수 비율(%) 기준으로 평가하여 대형주/소형주 체급 차이를 공평하게 반영
-        # 비율 +0.05% 이상 30점, -0.05% 이하 0점, 0%일 때 15점
+        # [개선] 기존 고정 임계값(0.05%)은 소형주/대형주 체급 무관하게 동일해 소형주 과대평가 유발
+        # 로그 스케일 시총 기반 동적 임계값: 대형주일수록 같은 점수에 더 많은 매수 필요
+        # 시총 1천억(10^11) → threshold≈0.03%, 1조(10^12) → 0.05%, 10조(10^13) → 0.07%, 100조(10^14) → 0.10%
         if marcap > 0:
-            net_ratio = (net_buy_amount / marcap) * 100  # 시가총액 대비 순매수 비율(%)
-            score_supply = min(30, max(0, net_ratio / 0.05 * 15 + 15))
+            net_ratio = (net_buy_amount / marcap) * 100
+            log_adj = float(np.log10(max(marcap, 50_000_000_000)) - 11.0)  # 0 at 1천억
+            threshold = max(0.03, min(0.12, 0.05 + log_adj * 0.02))       # 0.03~0.12% 범위
+            score_supply = min(30, max(0, (net_ratio / threshold) * 15 + 15))
         else:
             # 시가총액 정보가 없을 경우 절대 금액 방식 폴백 (+5억원 이상 30점)
-            score_supply = min(30, max(0, net_buy_amount / 100000000 * 3 + 15))
+            score_supply = min(30, max(0, net_buy_amount / 100_000_000 * 3 + 15))
 
         # 기본 차트 점수 및 거래대금 증가율 초기화 (FDR 실패 대비)
         score_volume = 10.0
@@ -576,23 +593,28 @@ def collect_quant_final(token, df_hd, df_full):
                 df_hist['Amount_Hist'] = df_hist['Close'] * df_hist['Volume']
                 today_amount = df_hist['Amount_Hist'].iloc[-1]
 
-                # 최근 20일 평균 거래대금 계산 (당일 제외한 최근 20일)
+                # [개선] 20일+60일 기준 중 더 보수적(높은) 평균 사용 → 최근 단기 급등으로 기준치가 낮아지는 왜곡 방지
                 hist_len = len(df_hist)
-                avg_range = df_hist['Amount_Hist'].iloc[max(0, hist_len-21):hist_len-1]
-                avg_amount = avg_range.mean() if not avg_range.empty else today_amount
+                avg_20d = df_hist['Amount_Hist'].iloc[max(0, hist_len-21):hist_len-1].mean()
+                avg_60d_range = df_hist['Amount_Hist'].iloc[max(0, hist_len-61):hist_len-1]
+                avg_60d = avg_60d_range.mean() if len(avg_60d_range) >= 20 else avg_20d
+                avg_amount = max(avg_20d, avg_60d)  # 더 높은(보수적) 기준 적용
+                if pd.isna(avg_amount) or avg_amount <= 0:
+                    avg_amount = today_amount
 
-                # [핵심 개선] 절대 거래대금 최소 허들: 당일 거래대금 10억원 미만이면 소외주 펌핑으로 판단, 최대 5점 제한
+                # 절대 거래대금 최소 허들: 당일 거래대금 10억원 미만이면 소외주 펌핑으로 판단, 최대 5점 제한
                 MIN_AMOUNT_THRESHOLD = 1_000_000_000  # 10억원
                 if today_amount < MIN_AMOUNT_THRESHOLD:
-                    # 소외주: 거래 자체가 미미하므로 배율이 높아도 최대 5점 이하로 제한
                     score_volume = min(5, max(0, (today_amount / MIN_AMOUNT_THRESHOLD) * 5))
                 else:
-                    if avg_amount > 0:
-                        surge_ratio = today_amount / avg_amount
-                    else:
-                        surge_ratio = 1.0
-                    # 거래대금 증가율 점수 공식: 2배 이상 20점, 1배(평균)일 때 10점, 0배일 때 0점
+                    surge_ratio = today_amount / avg_amount if avg_amount > 0 else 1.0
                     score_volume = min(20, max(0, (surge_ratio - 1.0) * 10 + 10))
+
+                    # [신규] 신선도 보정: 최근 5 거래일 이내 이미 2배 급증이 있었다면 -30% 감점
+                    # → 이미 한 번 터진 거래대금 재급증은 선행 신호가 아닌 뒤늦은 추격 가능성
+                    recent_5d_max = df_hist['Amount_Hist'].iloc[max(0, hist_len-6):hist_len-1].max()
+                    if pd.notna(recent_5d_max) and recent_5d_max > avg_amount * 2.0:
+                        score_volume = round(score_volume * 0.7, 1)  # 이미 급증 경험 → 30% 감점
 
                 # [개선] 가격 모멘텀 점수 - 5일 누적 등락률 파트 갱신
                 # 최근 5일(오늘 포함) 종가 기준 누적 수익률 계산
@@ -615,32 +637,38 @@ def collect_quant_final(token, df_hd, df_full):
                 ma60 = df_hist['Close'].rolling(60).mean().iloc[-1] if len(df_hist) >= 60 else ma20
                 today_close = df_hist['Close'].iloc[-1]
 
-                # 기본 이평선 배열 점수 산정 (최대 15점)
-                if today_close > ma5 > ma20 and ma20 > ma60:
-                    score_ma = 15.0  # 완벽한 정배열 우상향
-                elif today_close > ma5 > ma20 and ma20 <= ma60:
-                    score_ma = 13.0  # 단기 정배열 안착 (장기선 아래)
-                elif today_close > ma5 and today_close > ma20 and ma5 <= ma20:
-                    score_ma = 12.0  # 강한 역배열 돌파 (골든크로스 직전)
-                elif today_close > ma5 and today_close <= ma20:
-                    score_ma = 9.0   # 단기 반등 (5일선 돌파)
-                elif today_close > ma20 and today_close <= ma5:
-                    score_ma = 7.0   # 눌림목 지지 (20일선 지지)
-                else:
-                    score_ma = 0.0   # 완전 역배열 및 하락세
+                # [개선] 선행 매수 관점으로 이평선 점수 재설계
+                # 기존: 완벽 정배열=15점(이미 많이 오른 상태), 골든크로스 직전=12점(선행 타이밍인데 낮은 점수)
+                # 개선: 골든크로스 직전·20일선 눌림목 지지를 최우선 선행 신호로 재평가
+                disparity_from_ma20 = (today_close / ma20 - 1.0) * 100 if ma20 > 0 else 0
+                ma_spread = abs(ma5 - ma20) / ma20 if ma20 > 0 else 1.0
 
-                # 고도화 가감점 필터 적용
+                if today_close > ma5 and today_close > ma20 and ma5 <= ma20:
+                    score_ma = 14.0  # 역배열 돌파 (골든크로스 직전) → 선행 매수 최적!
+                elif -2.0 <= disparity_from_ma20 <= 2.0 and today_close > ma20:
+                    score_ma = 13.0  # 20일선 직상방 지지 (눌림목) → 선행 매수 최적!
+                elif today_close > ma5 > ma20 and ma20 > ma60:
+                    score_ma = 11.0  # 완벽 정배열 (이미 오른 상태, 추격 위험)
+                elif today_close > ma5 > ma20 and ma20 <= ma60:
+                    score_ma = 10.0  # 단기 정배열, 장기선 아래
+                elif today_close > ma20 and today_close <= ma5:
+                    score_ma = 7.0   # 20일선 지지, 5일선 아래 (단기 조정 중)
+                elif today_close > ma5 and today_close <= ma20:
+                    score_ma = 5.0   # 5일선 위이나 20일선 아래
+                else:
+                    score_ma = 0.0   # 완전 역배열
+
+                # 가감점 필터 적용
                 # 1) 대세 하락 필터: 60일선 아래에 있을 때 최대 점수 8점으로 제한
                 if today_close <= ma60:
                     score_ma = min(8.0, score_ma)
 
-                # 2) 이격도 과열 감점: 20일선 대비 주가 괴리율이 15% 이상일 때 4점 감점
+                # 2) 이격도 과열 감점: 20일선 대비 15% 이상 괴리 시 -4점
                 disparity = (today_close / ma20) * 100 if ma20 > 0 else 100
                 if disparity >= 115:
                     score_ma -= 4.0
 
-                # 3) 수렴 돌파 가점: 5일선과 20일선이 3% 이내로 수렴한 상태에서 종가가 두 선을 모두 상회할 때 +2점 가점
-                ma_spread = abs(ma5 - ma20) / ma20 if ma20 > 0 else 1.0
+                # 3) 수렴 돌파 가점: 5일선과 20일선 3% 이내 수렴 후 종가가 두 선 모두 상회 시 +2점
                 if ma_spread <= 0.03 and today_close > ma5 and today_close > ma20:
                     score_ma += 2.0
 
@@ -686,20 +714,36 @@ def collect_quant_final(token, df_hd, df_full):
                         else:
                             score_candle = 12.0  # 일반 양봉 / 장대양봉
                     else:  # 음봉
+                        # [개선] 거래량으로 음봉 품질 구분: 저거래량 음봉은 건강한 눌림목, 고거래량 음봉은 매도 압력
+                        vol_today = float(df_hist['Volume'].iloc[-1]) if 'Volume' in df_hist.columns else 0
+                        avg_vol_5d = df_hist['Volume'].iloc[max(0, hist_len-6):hist_len-1].mean() if 'Volume' in df_hist.columns else vol_today
+                        avg_vol_5d = avg_vol_5d if pd.notna(avg_vol_5d) and avg_vol_5d > 0 else vol_today
+
                         if lower_shadow > abs(body) * 1.5:
-                            score_candle = 8.0   # 아래꼬리가 매우 긴 음봉 (저점 매수세 유입)
+                            # 아래꼬리 긴 음봉 - 거래량 동반 여부로 신호 강도 구분
+                            score_candle = 10.0 if vol_today >= avg_vol_5d else 8.0
+                        elif vol_today < avg_vol_5d * 0.7:
+                            score_candle = 5.0   # 저거래량 조정 음봉 = 건강한 눌림목 (선행 매수 기회)
+                        elif vol_today < avg_vol_5d:
+                            score_candle = 3.0   # 평균 이하 거래량 음봉 (보통 조정)
                         else:
-                            score_candle = 0.0   # 일반 음봉 / 장대음봉 (매도세 지배)
+                            score_candle = 0.0   # 고거래량 하락 = 매도 압력 강함
 
         except Exception as e:
             print(f'  ⚠️ [{name}] 가격 이력 조회 실패: {e}')
 
-        # ── 이중 신호 중복 측정 보정 ──────────────────────────────────
-        if score_volume >= 15 and score_momentum >= 15:
-            excess_v = score_volume - 15
-            excess_m = score_momentum - 15
-            score_volume   = max(15, score_volume   - excess_v * 0.4)
-            score_momentum = max(15, score_momentum - excess_m * 0.4)
+        # ── 이중 신호 중복 측정 보정 [개선: 실효성 있는 임계값으로 조정] ──────────────────
+        # 기존 임계값(15점)이 너무 높아 실질적으로 거의 작동하지 않던 문제 수정
+        # 거래대금 급증(≥12점)과 가격 급등(≥12점)이 동시에 나타나면 이미 시장 주목 상태 → 보정 적용
+        if score_volume >= 14 and score_momentum >= 14:
+            excess_v = score_volume - 14
+            excess_m = score_momentum - 14
+            score_volume   = max(14, score_volume   - excess_v * 0.5)
+            score_momentum = max(14, score_momentum - excess_m * 0.5)
+        elif score_volume >= 12 and score_momentum >= 12:
+            # 중간 수준 중복: 약한 보정
+            score_volume   = max(12, score_volume   - 1.0)
+            score_momentum = max(12, score_momentum - 1.0)
 
         # ── 섹터 분류 및 매크로 가중치 적용 ──────────────────────────
         fdr_sector = row.get('FDR_Sector', '')
