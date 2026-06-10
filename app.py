@@ -163,6 +163,37 @@ q_sort_by = st.sidebar.radio(
     help="Quant Buy TOP 10 종목을 정렬하는 기준을 선택합니다."
 )
 
+st.sidebar.markdown('---')
+st.sidebar.markdown('### 📈 종목 일봉 차트 조회')
+
+# 각 패널 종목 리스트 구성
+_chart_candidates = {}
+if not df_q.empty and 'Name' in df_q.columns and 'Code' in df_q.columns:
+    for _, r in df_q.sort_values('Total_Score', ascending=False).head(10).iterrows():
+        _chart_candidates[f"🎯 {r['Name']} ({r['Code']})"] = (str(r['Code']).zfill(6), r['Name'])
+if not df_m.empty and 'Name' in df_m.columns and 'Amount' in df_m.columns:
+    for _, r in df_m.sort_values('Amount', ascending=False).head(10).iterrows():
+        k = f"🔥 {r['Name']} ({r['Code']})"
+        if k not in _chart_candidates:
+            _chart_candidates[k] = (str(r['Code']).zfill(6), r['Name'])
+if not df_hd.empty and 'Name' in df_hd.columns and 'Total_Combined_Net' in df_hd.columns:
+    for _, r in df_hd.sort_values('Total_Combined_Net', ascending=False).head(5).iterrows():
+        k = f"📡 {r['Name']} ({r['Code']})"
+        if k not in _chart_candidates:
+            _chart_candidates[k] = (str(r['Code']).zfill(6), r['Name'])
+
+_options = ['▶ 종목을 선택하세요'] + list(_chart_candidates.keys())
+_sel = st.sidebar.selectbox(
+    '조회할 종목 선택',
+    _options,
+    index=0,
+    key='chart_selectbox',
+    label_visibility='collapsed'
+)
+if _sel != '▶ 종목을 선택하세요':
+    st.session_state.sel_code, st.session_state.sel_name = _chart_candidates[_sel]
+
+
 kr_scale = 'RdBu_r'
 
 # ── 6분할 레이아웃 ────────────────────────────────────────────
@@ -567,31 +598,8 @@ fig.update_layout(
     font=dict(family='malgun gothic, nanum gothic, sans-serif')
 )
 
-# 메인 차트 렌더링 - on_select로 종목 클릭 이벤트 캡처
-event = st.plotly_chart(fig, use_container_width=True, on_select='rerun', selection_mode=['points'])
-
-# 클릭된 종목 파악 및 세션 스테이트 갱신
-if event and hasattr(event, 'selection') and event.selection and event.selection.points:
-    pt = event.selection.points[0]
-    clicked_name = pt.get('label', '')
-    cd = pt.get('customdata', [])
-    # 각 패널의 customdata 구조에서 Code 추출 시도
-    # Panel1(수급): customdata[4]=Code, 나머지 Panel: customdata[0]=Code
-    found_code = None
-    for idx in [0, 4]:
-        if len(cd) > idx:
-            c = str(cd[idx]).split('.')[0].zfill(6)
-            if c.isdigit() and len(c) == 6:
-                found_code = c
-                break
-    # df_m에서 이름으로도 Code 검색 (백업)
-    if not found_code and clicked_name and not df_m.empty and 'Name' in df_m.columns:
-        match = df_m[df_m['Name'] == clicked_name]
-        if not match.empty:
-            found_code = str(match.iloc[0]['Code']).zfill(6)
-    if found_code:
-        st.session_state.sel_code = found_code
-        st.session_state.sel_name = clicked_name
+# 메인 차트 렌더링
+st.plotly_chart(fig, use_container_width=True)
 
 # ── 종목 일봉 차트 (클릭 시 표시) ─────────────────────────────
 if st.session_state.sel_code:
