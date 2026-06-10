@@ -596,6 +596,9 @@ event = st.plotly_chart(
     key=f"main_plotly_chart_{st.session_state.chart_key_index}"
 )
 
+# [디버그용] 이벤트 리턴 구조 브라우저 확인용
+st.write("🔍 [디버그] Plotly 선택 이벤트:", event)
+
 # 클릭된 종목 정보 획득 및 세션 스테이트 업데이트
 if event and hasattr(event, 'selection') and event.selection and event.selection.points:
     pt = event.selection.points[0]
