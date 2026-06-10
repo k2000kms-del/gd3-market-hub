@@ -155,6 +155,9 @@ if 'sel_code' not in st.session_state:
     st.session_state.sel_code = None
 if 'sel_name' not in st.session_state:
     st.session_state.sel_name = None
+if 'chart_key_index' not in st.session_state:
+    st.session_state.chart_key_index = 0
+
 
 # ── 사이드바 정렬 옵션 ──
 st.sidebar.title("🎛️ 대시보드 설정")
@@ -212,18 +215,18 @@ fig = make_subplots(
     column_widths=[0.33, 0.33, 0.34],
     row_heights=[0.5, 0.5],
     vertical_spacing=0.08,
-    horizontal_spacing=0.05,
+    horizontal_spacing=0.07,  # 가로막대 차트 라벨 잘림 방지를 위해 폭 확대
     specs=[
-        [{'type': 'treemap'}, {'type': 'treemap'}, {'type': 'treemap'}],
-        [{'type': 'table'},   {'type': 'xy'},      {'type': 'treemap'}]
+        [{'type': 'treemap'}, {'type': 'xy'},      {'type': 'xy'}],
+        [{'type': 'table'},   {'type': 'xy'},      {'type': 'xy'}]
     ],
     subplot_titles=(
         '📊 실시간 수급(외/기/프)',
         f'🎯 Quant Buy TOP 10 ({q_sort_by})',
-        '🔥 거래대금 리더(15)',
+        '🔥 거래대금 리더(12)',
         '📉 시장 요약 및 수급',
         '📈 코스피/코스닥 수급 현황',
-        '🚀 상승률 리더(15)'
+        '🚀 상승률 리더(12)'
     )
 )
 
@@ -278,7 +281,7 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
     df2 = df_q.copy()
     df2['Code'] = df2['Code'].astype(str).str.split('.').str[0].str.zfill(6)
 
-    # df_full_market에서 현재가/등락률/거래대금 합치기 (최신 가격 및 거래대금 반영 및 merge 충돌 방지)
+    # df_full_market에서 현재가/등락률/거래대금 합치기
     if not df_m.empty and 'Code' in df_m.columns:
         df2 = df2.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
         df2 = df2.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
@@ -290,100 +293,66 @@ if not df_q.empty and 'Total_Score' in df_q.columns:
     df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0)
     df2['Amount'] = pd.to_numeric(df2['Amount'], errors='coerce').fillna(0)
 
-    # 정렬 및 상위 10개 종목 추출
+    # 정렬 및 상위 10개 종목 추출 (가로막대는 아래에서 위로 쌓이므로 ascending=True 정렬)
     if q_sort_by == "거래대금 순" and 'Amount' in df2.columns:
-        df2 = df2.sort_values('Amount', ascending=False).head(10).copy()
+        df2 = df2.sort_values('Amount', ascending=True).tail(10).copy()
+        x_val = df2['Amount'] / 1e8  # 억원
+        hover_label = '거래대금: %{x:,.1f}억원'
+        text_labels = df2['Amount'].apply(lambda x: f" {x/1e8:,.0f}억")
     else:
-        df2 = df2.sort_values('Total_Score', ascending=False).head(10).copy()
+        df2 = df2.sort_values('Total_Score', ascending=True).tail(10).copy()
+        x_val = df2['Total_Score']
+        hover_label = 'Quant 점수: %{x:.1f}점'
+        text_labels = df2['Total_Score'].apply(lambda x: f" {x:.1f}점")
 
-    # 세부 점수 및 매크로/리스크 보정 컬럼 (없으면 기본값 채움 - 하방 호환성 확보)
-    for col in ['Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_MA', 'Score_Candle']:
-        if col not in df2.columns:
-            df2[col] = 0.0
-
-    for col in ['Sector', 'Sector_Mult', 'Vol_Penalty', 'Market_Penalty', 'Market_Condition']:
-        if col not in df2.columns:
-            if col == 'Sector':
-                df2[col] = '기타'
-            elif col in ['Sector_Mult', 'Vol_Penalty', 'Market_Penalty']:
-                df2[col] = 1.0
-            elif col == 'Market_Condition':
-                df2[col] = '중립 (평가 정보 없음)'
-
-    # 원점수 합계 계산
-    df2['Raw_Score'] = df2['Score_Momentum'] + df2['Score_Supply'] + df2['Score_Volume'] + df2['Score_MA'] + df2['Score_Candle']
-
-    # 거래대금 단위 억 원 환산 (시각화용)
-    df2['Amount_Billion'] = (df2['Amount'] / 100_000_000).round(1)
-
-    def quant_grade(s):
-        if s >= 80: return '🔥 강력매수'
-        if s >= 65: return '⭐ 매수'
-        if s >= 50: return '👀 관심'
-        return '🔍 검토'
-
-    df2['Grade'] = df2['Total_Score'].apply(quant_grade)
-
-    # Treemap 블록의 크기(value) 설정
-    if q_sort_by == "거래대금 순" and 'Amount' in df2.columns:
-        treemap_values = df2['Amount'] + 1
-    else:
-        treemap_values = df2['Total_Score']
-
-    fig.add_trace(go.Treemap(
-        labels=df2['Name'], parents=[''] * len(df2),
-        values=treemap_values,
-        marker=dict(colors=df2['Total_Score'], colorscale='Reds', showscale=False),
-        text=df2['Total_Score'].apply(lambda x: f"{x:.1f}점"),
-        customdata=df2[[
-            'Code', 'Total_Score', 'Grade',
-            'Score_Momentum', 'Score_Supply', 'Score_Volume', 'Score_MA', 'Score_Candle',
-            'Close', 'ChagesRatio', 'Raw_Score', 'Vol_Penalty', 'Sector', 'Sector_Mult',
-            'Market_Penalty', 'Market_Condition', 'Amount_Billion'
-        ]].values,
-        texttemplate='<b>%{label}</b><br>%{text}',
+    fig.add_trace(go.Bar(
+        y=df2['Name'],
+        x=x_val,
+        orientation='h',
+        marker=dict(
+            colorscale='Reds',
+            color=df2['Total_Score'],
+            showscale=False,
+            line=dict(color='rgba(255,255,255,0.1)', width=1)
+        ),
+        text=text_labels,
+        textposition='outside',
+        customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score']].values,
         hovertemplate=(
-            '<b>%{label}</b> (%{customdata[0]})<br>'
+            '<b>%{y}</b> (%{customdata[0]})<br>'
             '━━━━━━━━━━━━━━━<br>'
-            'Quant 점수: <b>%{customdata[1]:.1f}점</b>  %{customdata[2]}<br>'
-            '━━━━━━━━━━━━━━━<br>'
-            '📈 가격 모멘텀:  %{customdata[3]:.1f} / 20점<br>'
-            '👥 외국인+기관:  %{customdata[4]:.1f} / 30점<br>'
-            '📊 거래대금 증가율:  %{customdata[5]:.1f} / 20점<br>'
-            '🧭 이평선 추세:  %{customdata[6]:.1f} / 15점<br>'
-            '🕯️ 캔들 시그널:  %{customdata[7]:.1f} / 15점<br>'
-            '━━━━━━━━━━━━━━━<br>'
-            '원점수 합계: %{customdata[10]:.1f}점<br>'
-            '🛡️ 변동성 패널티: x%{customdata[11]:.2f}<br>'
-            '⚙️ 섹터 가중치: %{customdata[12]} (x%{customdata[13]:.2f})<br>'
-            '🚨 시장 패널티: x%{customdata[14]:.2f}<br>'
-            '🗺️ 시장 국면: %{customdata[15]}<br>'
-            '━━━━━━━━━━━━━━━<br>'
-            '💵 당일 거래대금: <b>%{customdata[16]:,.1f}억원</b><br>'
-            '현재가: %{customdata[8]:,}원 (%{customdata[9]:+.2f}%)'
+            + hover_label + '<br>'
+            '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)<br>'
+            'Quant 종합 점수: %{customdata[3]:.1f}점'
             '<extra></extra>'
         )
     ), row=1, col=2)
 
-# [Panel 3] 거래대금 리더(15) (df_full_market 기반)
+# [Panel 3] 거래대금 리더(12) (df_full_market 기반)
 # 컬럼: Name, Code, Amount, Close, ChagesRatio
 if not df_m.empty and 'Amount' in df_m.columns:
-    df3 = df_m.sort_values('Amount', ascending=False).head(15).copy()
-    # 거래대금을 '억원' 단위로 변환
+    # 12종목 노출 (가로막대 정렬: 아래에서 위로 크기순)
+    df3 = df_m.sort_values('Amount', ascending=True).tail(12).copy()
     df3['Amount_100M'] = df3['Amount'] / 100000000
     
-    fig.add_trace(go.Treemap(
-        labels=df3['Name'], parents=[''] * len(df3),
-        values=df3['Amount'],
-        marker=dict(colors=df3['ChagesRatio'], colorscale=kr_scale, cmid=0),
-        text=df3['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
-        customdata=df3[['Code', 'Close', 'Amount_100M', 'ChagesRatio']].values,
-        texttemplate='<b>%{label}</b><br>%{text}',
+    fig.add_trace(go.Bar(
+        y=df3['Name'],
+        x=df3['Amount_100M'],
+        orientation='h',
+        marker=dict(
+            colorscale=kr_scale,
+            color=df3['ChagesRatio'],
+            cmid=0,
+            showscale=False,
+            line=dict(color='rgba(255,255,255,0.1)', width=1)
+        ),
+        text=df3['Amount_100M'].apply(lambda x: f" {x:,.0f}억"),
+        textposition='outside',
+        customdata=df3[['Code', 'Close', 'ChagesRatio']].values,
         hovertemplate=(
-            '<b>%{label}</b> (%{customdata[0]})<br>'
-            '현재가: %{customdata[1]:,}원<br>'
-            '등락률: %{customdata[3]:+.2f}%<br>'
-            '거래대금: %{customdata[2]:,.0f}억원'
+            '<b>%{y}</b> (%{customdata[0]})<br>'
+            '거래대금: %{x:,.0f}억원<br>'
+            '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)'
             '<extra></extra>'
         )
     ), row=1, col=3)
@@ -522,21 +491,30 @@ else:
         showarrow=False, font=dict(size=12, color='#888'), align='center'
     )
 
-# [Panel 6] 상승률 리더(15) (df_full_market 기반)
+# [Panel 6] 상승률 리더(12) (df_full_market 기반)
 # 컬럼: Name, Code, ChagesRatio, Close, Volume
 if not df_m.empty and 'ChagesRatio' in df_m.columns:
-    df6 = df_m.sort_values('ChagesRatio', ascending=False).head(15).copy()
-    fig.add_trace(go.Treemap(
-        labels=df6['Name'], parents=[''] * len(df6),
-        values=df6['ChagesRatio'].abs() + 0.01,
-        marker=dict(colors=df6['ChagesRatio'], colorscale=kr_scale, cmid=0),
-        text=df6['ChagesRatio'].apply(lambda x: f"{x:+.2f}%"),
-        customdata=df6[['Code', 'Close', 'Volume', 'ChagesRatio']].values,
-        texttemplate='<b>%{label}</b><br>%{text}',
+    # 12종목 노출 (가로막대 정렬: 아래에서 위로 오름차순 크기순)
+    df6 = df_m.sort_values('ChagesRatio', ascending=True).tail(12).copy()
+    
+    fig.add_trace(go.Bar(
+        y=df6['Name'],
+        x=df6['ChagesRatio'],
+        orientation='h',
+        marker=dict(
+            colorscale=kr_scale,
+            color=df6['ChagesRatio'],
+            cmid=0,
+            showscale=False,
+            line=dict(color='rgba(255,255,255,0.1)', width=1)
+        ),
+        text=df6['ChagesRatio'].apply(lambda x: f" {x:+.2f}%"),
+        textposition='outside',
+        customdata=df6[['Code', 'Close', 'Volume']].values,
         hovertemplate=(
-            '<b>%{label}</b> (%{customdata[0]})<br>'
+            '<b>%{y}</b> (%{customdata[0]})<br>'
+            '등락률: <b>%{x:+.2f}%</b><br>'
             '현재가: %{customdata[1]:,}원<br>'
-            '등락률: <b>%{customdata[3]:+.2f}%</b><br>'
             '거래량: %{customdata[2]:,}주'
             '<extra></extra>'
         )
@@ -609,8 +587,14 @@ fig.update_layout(
     font=dict(family='malgun gothic, nanum gothic, sans-serif')
 )
 
-# 메인 차트 렌더링 - on_select 활성화하여 종목 클릭 캡처
-event = st.plotly_chart(fig, use_container_width=True, on_select='rerun', selection_mode=['points'])
+# 메인 차트 렌더링 - on_select 활성화하고 동적 키를 할당하여 리셋 지원
+event = st.plotly_chart(
+    fig, 
+    use_container_width=True, 
+    on_select='rerun', 
+    selection_mode=['points'],
+    key=f"main_plotly_chart_{st.session_state.chart_key_index}"
+)
 
 # 클릭된 종목 정보 획득 및 세션 스테이트 업데이트
 if event and hasattr(event, 'selection') and event.selection and event.selection.points:
@@ -710,6 +694,8 @@ if st.session_state.sel_code:
         if st.button('✕ 닫기', key='close_chart'):
             st.session_state.sel_code = None
             st.session_state.sel_name = None
+            # 차트의 selection 상태를 완전히 리셋하기 위해 key 값 증가
+            st.session_state.chart_key_index += 1
             st.rerun()
 
     with st.spinner(f'📡 {name_disp} 일봉 데이터 조회 중...'):
