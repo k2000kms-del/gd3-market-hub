@@ -538,23 +538,23 @@ def collect_quant_final(token, df_hd, df_full):
         today_amount = 0
 
         # 1. 가격 모멘텀 점수 (최대 20점) [선행 매수 최적 구간 재설계]
-        # [개선] 기존 선형 공식(+5%=10점)은 이미 급등한 추격 매수 종목에 만점을 주는 문제가 있었음
-        # 선행 매수 관점에서 +1~+3% 소폭 상승이 오히려 이상적인 진입 신호
+        # 선행 매수 관점: +1~+3% 구간이 가장 이상적 진입 신호 (만점 10점)
+        # +5% 이상 급등은 추격 위험이 있어 선형 감소 적용 (단, 6점 하한선 유지)
+        # → 외국인/기관 주도 급등은 수급 점수로 이미 반영되므로 모멘텀만 과도하게 낮추지 않음
         change = float(row.get('ChagesRatio', 0))
         if 1.0 <= change < 3.0:
-            score_day = 10.0  # 이상적 선행 진입 구간 (소폭 상승, 아직 주목 전)
+            score_day = 10.0                          # 이상적 선행 진입 구간 (소폭 상승)
+        elif change >= 3.0:
+            # +3%=9점, +5%=8점, +7%=7점 순으로 선형 감소, 최소 6점 하한 유지
+            score_day = max(6.0, 10.0 - (change - 1.0) * 0.5)
         elif 0.0 <= change < 1.0:
-            score_day = 8.0   # 보합~미세 상승 (눌림목 진입 가능)
-        elif 3.0 <= change < 5.0:
-            score_day = 7.0   # 상승세이나 약간 추격 위험
+            score_day = 8.0                           # 보합~미세 상승 (눌림목 진입 가능)
         elif -1.0 <= change < 0.0:
-            score_day = 6.0   # 소폭 조정 (저거래량이면 눌림목 매수 기회)
-        elif change >= 5.0:
-            score_day = 4.0   # 이미 급등 - 선행 매수 타이밍 아님
+            score_day = 6.0                           # 소폭 조정 (건강한 눌림목 가능)
         elif -3.0 <= change < -1.0:
-            score_day = 2.0   # 하락세
+            score_day = 2.0                           # 하락세
         else:
-            score_day = 0.0   # 급락 (-3% 이하)
+            score_day = 0.0                           # 급락 (-3% 이하)
         # 5일 누적 모멘텀: FDR 조회 전이므로 일단 중립값 5점으로 초기화 (아래 FDR 블록에서 갱신)
         score_5d = 5.0
         score_momentum = score_day + score_5d  # FDR 블록에서 최종 갱신됨
@@ -732,18 +732,14 @@ def collect_quant_final(token, df_hd, df_full):
         except Exception as e:
             print(f'  ⚠️ [{name}] 가격 이력 조회 실패: {e}')
 
-        # ── 이중 신호 중복 측정 보정 [개선: 실효성 있는 임계값으로 조정] ──────────────────
-        # 기존 임계값(15점)이 너무 높아 실질적으로 거의 작동하지 않던 문제 수정
-        # 거래대금 급증(≥12점)과 가격 급등(≥12점)이 동시에 나타나면 이미 시장 주목 상태 → 보정 적용
+        # ── 이중 신호 중복 측정 보정 [개선: 극단적 중복 신호만 보정] ──────────────────────
+        # 거래대금 만점권(≥14점)과 가격 급등 만점권(≥14점)이 동시에 나타날 때만 보정
+        # → 중간 강도(12점)까지 보정하면 일반적인 강세 종목도 패널티를 받는 부작용 발생
         if score_volume >= 14 and score_momentum >= 14:
             excess_v = score_volume - 14
             excess_m = score_momentum - 14
             score_volume   = max(14, score_volume   - excess_v * 0.5)
             score_momentum = max(14, score_momentum - excess_m * 0.5)
-        elif score_volume >= 12 and score_momentum >= 12:
-            # 중간 수준 중복: 약한 보정
-            score_volume   = max(12, score_volume   - 1.0)
-            score_momentum = max(12, score_momentum - 1.0)
 
         # ── 섹터 분류 및 매크로 가중치 적용 ──────────────────────────
         fdr_sector = row.get('FDR_Sector', '')
