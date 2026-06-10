@@ -164,35 +164,31 @@ q_sort_by = st.sidebar.radio(
 )
 
 st.sidebar.markdown('---')
-st.sidebar.markdown('### 📈 종목 일봉 차트 조회')
-
-# 각 패널 종목 리스트 구성
-_chart_candidates = {}
-if not df_q.empty and 'Name' in df_q.columns and 'Code' in df_q.columns:
-    for _, r in df_q.sort_values('Total_Score', ascending=False).head(10).iterrows():
-        _chart_candidates[f"🎯 {r['Name']} ({r['Code']})"] = (str(r['Code']).zfill(6), r['Name'])
-if not df_m.empty and 'Name' in df_m.columns and 'Amount' in df_m.columns:
-    for _, r in df_m.sort_values('Amount', ascending=False).head(10).iterrows():
-        k = f"🔥 {r['Name']} ({r['Code']})"
-        if k not in _chart_candidates:
-            _chart_candidates[k] = (str(r['Code']).zfill(6), r['Name'])
-if not df_hd.empty and 'Name' in df_hd.columns and 'Total_Combined_Net' in df_hd.columns:
-    for _, r in df_hd.sort_values('Total_Combined_Net', ascending=False).head(5).iterrows():
-        k = f"📡 {r['Name']} ({r['Code']})"
-        if k not in _chart_candidates:
-            _chart_candidates[k] = (str(r['Code']).zfill(6), r['Name'])
-
-_options = ['▶ 종목을 선택하세요'] + list(_chart_candidates.keys())
-_sel = st.sidebar.selectbox(
-    '조회할 종목 선택',
-    _options,
-    index=0,
-    key='chart_selectbox',
+st.sidebar.markdown('### 🔍 종목 검색')
+st.sidebar.caption('종목명 또는 코드로 검색하면 대시보드 아래에 일봉 차트가 표시됩니다.')
+_search_q = st.sidebar.text_input(
+    '종목명 / 코드',
+    placeholder='예: 삼성전자, 005930',
+    key='sidebar_search',
     label_visibility='collapsed'
 )
-if _sel != '▶ 종목을 선택하세요':
-    st.session_state.sel_code, st.session_state.sel_name = _chart_candidates[_sel]
-
+if _search_q and not df_m.empty and 'Name' in df_m.columns:
+    _sq = _search_q.strip()
+    _mask = (
+        df_m['Name'].str.contains(_sq, na=False, case=False) |
+        df_m['Code'].astype(str).str.contains(_sq, na=False)
+    )
+    _results = df_m[_mask].head(8)
+    if _results.empty:
+        st.sidebar.caption('⚠️ 검색 결과가 없습니다.')
+    for _, _r in _results.iterrows():
+        _chg = float(_r.get('ChagesRatio', 0))
+        _chg_str = f"{_chg:+.2f}%"
+        _btn_label = f"{_r['Name']}  {_chg_str}"
+        if st.sidebar.button(_btn_label, key=f"sb_{_r['Code']}", use_container_width=True):
+            st.session_state.sel_code = str(_r['Code']).zfill(6)
+            st.session_state.sel_name = str(_r['Name'])
+            st.rerun()
 
 kr_scale = 'RdBu_r'
 
@@ -601,7 +597,66 @@ fig.update_layout(
 # 메인 차트 렌더링
 st.plotly_chart(fig, use_container_width=True)
 
-# ── 종목 일봉 차트 (클릭 시 표시) ─────────────────────────────
+# ── 대시보드 내 종목 선택 버튼 탭 ─────────────────────────────
+st.markdown('#### 📈 종목 선택 → 일봉 차트 조회')
+st.caption('아래 종목 버튼을 클릭하면 일봉 차트가 표시됩니다. 막대스: 퀌눁 점수 / 거래대금 / 수급')
+
+_tab1, _tab2, _tab3 = st.tabs(['🎯 Quant TOP 10', '🔥 거래대금 TOP 10', '📡 수급 TOP 10'])
+
+with _tab1:
+    if not df_q.empty and 'Name' in df_q.columns:
+        _sorted_q = df_q.sort_values('Total_Score', ascending=False).head(10)
+        _cols = st.columns(5)
+        for _i, (_, _r) in enumerate(_sorted_q.iterrows()):
+            _chg = float(_r.get('ChagesRatio', 0))
+            _score = float(_r.get('Total_Score', 0))
+            _color = '🔴' if _chg >= 0 else '🔵'
+            if _cols[_i % 5].button(
+                f"{_color} {_r['Name']}\n{_score:.0f}점",
+                key=f'btn_q_{_r["Code"]}',
+                use_container_width=True
+            ):
+                st.session_state.sel_code = str(_r['Code']).zfill(6)
+                st.session_state.sel_name = str(_r['Name'])
+                st.rerun()
+
+with _tab2:
+    if not df_m.empty and 'Amount' in df_m.columns:
+        _sorted_v = df_m.sort_values('Amount', ascending=False).head(10)
+        _cols = st.columns(5)
+        for _i, (_, _r) in enumerate(_sorted_v.iterrows()):
+            _chg = float(_r.get('ChagesRatio', 0))
+            _amt = float(_r.get('Amount', 0)) / 1e8
+            _color = '🔴' if _chg >= 0 else '🔵'
+            if _cols[_i % 5].button(
+                f"{_color} {_r['Name']}\n{_amt:,.0f}억",
+                key=f'btn_v_{_r["Code"]}',
+                use_container_width=True
+            ):
+                st.session_state.sel_code = str(_r['Code']).zfill(6)
+                st.session_state.sel_name = str(_r['Name'])
+                st.rerun()
+
+with _tab3:
+    if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
+        _sorted_s = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10)
+        _cols = st.columns(5)
+        for _i, (_, _r) in enumerate(_sorted_s.iterrows()):
+            _chg = float(_r.get('ChagesRatio', 0)) if 'ChagesRatio' in _r else 0
+            _net = float(_r.get('Total_Combined_Net', 0))
+            _color = '🔴' if _chg >= 0 else '🔵'
+            if _cols[_i % 5].button(
+                f"{_color} {_r['Name']}\n{'+' if _net>=0 else ''}{_net:,.0f}주",
+                key=f'btn_s_{_r["Code"]}',
+                use_container_width=True
+            ):
+                st.session_state.sel_code = str(_r['Code']).zfill(6)
+                st.session_state.sel_name = str(_r['Name'])
+                st.rerun()
+
+st.divider()
+
+# ── 종목 일봉 차트 (선택 시 표시) ─────────────────────────────
 if st.session_state.sel_code:
     code_disp = st.session_state.sel_code
     name_disp = st.session_state.sel_name or code_disp
