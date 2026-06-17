@@ -3,7 +3,7 @@
 GD 3.0 Market Hub - 데이터 수집기 (GitHub Actions 전용)
 - 한국 주식시장 개장 시간(09:00~15:30 KST)에 GitHub Actions로 자동 실행
 - KIS API + FinanceDataReader로 시장 데이터 수집
-- Google Drive API(Service Account)로 CSV 업로드
+- 수집된 CSV를 레포지토리 data/ 폴더에 저장 (GitHub Actions가 자동 커밋)
 - 모든 민감 정보는 환경변수(GitHub Secrets)에서 읽음
 """
 
@@ -15,26 +15,14 @@ import numpy as np
 import time
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
-from io import BytesIO
-
-# ── Google Drive API 관련 ────────────────────────────────────────
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2.credentials import Credentials
 
 # ── KIS API 설정 (환경변수에서 읽기) ────────────────────────────
 APP_KEY    = os.environ.get('KIS_APP_KEY', '')
 APP_SECRET = os.environ.get('KIS_APP_SECRET', '')
 URL_BASE   = 'https://openapi.koreainvestment.com:9443'
 
-# ── Google Drive 파일 ID (기존 파일 덮어쓰기) ───────────────────
-FILE_IDS = {
-    'df_high_density.csv':    '1UQTyfpFD2xuK-fKlq2RqK2MvCqxXaAB3',
-    'df_quant_final.csv':     '1eD7HHBnQ_7FYE5ZCpnjMgYcW_rmmAqjP',
-    'df_full_market.csv':     '1RA1PkDChDuLpj6YkmTb6uGfS6Nhpleve',
-    'df_market_summary.csv':  '17F5LJf4UcA0neVw60oRCP2qk7PugRAok',
-    'df_supply_intraday.csv': '1sYEK6PsAoH1ybupVbtQKnL289LCwnhvc',
-}
+# ── 로컬 저장 경로 (레포지토리 data/ 폴더) ──────────────────────
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
 
 # ── KIS API 헬퍼 ────────────────────────────────────────────────
@@ -79,13 +67,35 @@ def fetch_stock_supply(token, stock_code):
             f'{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor',
             headers=headers, params=params
         )
-        data = res.json().get('output', {})
+        res_json = res.json()
+        output = res_json.get('output', [])
+        
+        # output이 리스트 형식인 경우 첫 번째 아이템(최신 영업일) 파싱
+        if isinstance(output, list) and len(output) > 0:
+            target_data = output[0]
+        elif isinstance(output, dict):
+            target_data = output
+        else:
+            target_data = {}
+
+        def _safe_int(val):
+            try:
+                if val is None:
+                    return 0
+                val_str = str(val).strip()
+                if not val_str or val_str == 'None':
+                    return 0
+                return int(val_str)
+            except Exception:
+                return 0
+
         return {
-            'Foreign_Net':       int(data.get('frgn_ntby_qty', 0)),
-            'Institutional_Net': int(data.get('orgn_ntby_qty', 0)),
-            'Program_Net':       int(data.get('pgtr_ntby_qty', 0)),
+            'Foreign_Net':       _safe_int(target_data.get('frgn_ntby_qty', 0)),
+            'Institutional_Net': _safe_int(target_data.get('orgn_ntby_qty', 0)),
+            'Program_Net':       _safe_int(target_data.get('pgtr_ntby_qty', 0)),
         }
-    except Exception:
+    except Exception as e:
+        print(f"  ⚠️ fetch_stock_supply({stock_code}) 실패: {e}")
         return {'Foreign_Net': 0, 'Institutional_Net': 0, 'Program_Net': 0}
 
 
@@ -159,27 +169,13 @@ def fetch_market_investor(token, market_div='J'):
         return []
 
 
-# ── Google Drive 업로드 ──────────────────────────────────────────
-def get_drive_service():
-    """Google Drive API 서비스 객체 생성 (OAuth 2.0)"""
-    token_json_str = os.environ.get('GDRIVE_OAUTH_TOKEN', '')
-    if not token_json_str:
-        raise ValueError('GDRIVE_OAUTH_TOKEN 환경변수가 설정되지 않았습니다.')
-
-    token_info = json.loads(token_json_str)
-    creds = Credentials.from_authorized_user_info(
-        token_info,
-        scopes=['https://www.googleapis.com/auth/drive']
-    )
-    return build('drive', 'v3', credentials=creds)
-
-
-def upload_df_to_drive(service, df, file_id, filename):
-    """DataFrame을 CSV로 Google Drive에 업로드 (기존 파일 덮어쓰기)"""
-    csv_bytes = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
-    media = MediaIoBaseUpload(BytesIO(csv_bytes), mimetype='text/csv', resumable=False)
-    service.files().update(fileId=file_id, media_body=media).execute()
-    print(f'  ✅ {filename} → Drive 업로드 완료 ({len(df)}행)')
+# ── 로컬 CSV 저장 ────────────────────────────────────────────────
+def save_df_to_local(df, filename):
+    """DataFrame을 레포지토리 data/ 폴더에 CSV로 저장"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    filepath = os.path.join(DATA_DIR, filename)
+    df.to_csv(filepath, index=False, encoding='utf-8-sig')
+    print(f'  ✅ {filename} → data/ 저장 완료 ({len(df)}행)')
 
 
 # ── 데이터 수집 함수들 ───────────────────────────────────────────
@@ -917,8 +913,11 @@ def collect_supply_intraday(token):
             output = res.json().get('output2', [])
 
             for item in output:
-                t = item.get('stck_bsop_date', now_str)[:4]
-                time_str = f'{t[:2]}:{t[2:]}' if len(t) == 4 else now_str
+                # KIS API 시간 필드 파싱 (aspr_ddct_bsop_hour 가 4자리 시간 포맷임)
+                t = item.get('aspr_ddct_bsop_hour') or item.get('data_hour') or item.get('bsop_hour') or ''
+                t = str(t).strip()[:4]
+                time_str = f'{t[:2]}:{t[2:]}' if len(t) == 4 and t.isdigit() else now_str
+                
                 rows.append({
                     'Time':             time_str,
                     'Market':           market_name,
@@ -956,15 +955,6 @@ def main():
         return
     print('  ✅ 토큰 발급 완료')
 
-    # Google Drive 서비스 초기화
-    print('\n🔗 Google Drive 연결 중...')
-    try:
-        drive_service = get_drive_service()
-        print('  ✅ Drive 연결 완료')
-    except Exception as e:
-        print(f'  ❌ Drive 연결 실패: {e}')
-        return
-
     # 데이터 수집
     print('\n📥 데이터 수집 시작...')
     df_full     = collect_full_market()
@@ -973,9 +963,9 @@ def main():
     df_quant    = collect_quant_final(token, df_hd, df_full)
     df_summary  = collect_market_summary(token, df_intraday)
 
-    # Google Drive 업로드
-    print('\n📤 Google Drive 업로드 중...')
-    uploads = [
+    # 로컬 data/ 폴더에 CSV 저장 (GitHub Actions가 커밋·푸시)
+    print('\n💾 data/ 폴더에 CSV 저장 중...')
+    saves = [
         (df_full,     'df_full_market.csv'),
         (df_intraday, 'df_supply_intraday.csv'),
         (df_hd,       'df_high_density.csv'),
@@ -983,14 +973,14 @@ def main():
         (df_summary,  'df_market_summary.csv'),
     ]
 
-    for df, fname in uploads:
+    for df, fname in saves:
         if df.empty:
             print(f'  ⚠️ {fname}: 데이터 없음, 건너뜀')
             continue
         try:
-            upload_df_to_drive(drive_service, df, FILE_IDS[fname], fname)
+            save_df_to_local(df, fname)
         except Exception as e:
-            print(f'  ❌ {fname} 업로드 실패: {e}')
+            print(f'  ❌ {fname} 저장 실패: {e}')
 
     print('\n' + '=' * 50)
     print(f'✅ 수집 완료: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')

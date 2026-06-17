@@ -4,6 +4,74 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import FinanceDataReader as fdr
+import requests
+import time
+from datetime import datetime
+
+def fetch_naver_realtime_indices():
+    """네이버 금융 API로 코스피/코스닥 실시간 지수 조회"""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(
+            "https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI,KOSDAQ",
+            headers=headers, timeout=3
+        )
+        if r.status_code == 200:
+            datas = r.json().get("datas", [])
+            res = {}
+            for item in datas:
+                code = item.get("itemCode")
+                price = float(str(item.get("closePrice")).replace(',', ''))
+                chg = float(item.get("fluctuationsRatio", 0))
+                status = item.get("marketStatus", "OPEN")
+                res[code] = {"price": price, "chg": chg, "status": status}
+            return res
+    except Exception as e:
+        print(f"DEBUG: fetch_naver_realtime_indices failed: {e}")
+    return {}
+
+@st.cache_data(ttl=60)
+def fetch_stock_realtime_investors(code_list):
+    """네이버 금융 API로 개별 종목의 실시간 외국인/기관 수급(가집계) 조회"""
+    res = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for code in code_list:
+        try:
+            # trend API를 활용하여 당일 최근 수급(실시간 가집계 포함) 획득
+            url = f"https://m.stock.naver.com/api/stock/{code}/trend?pageSize=1"
+            r = requests.get(url, headers=headers, timeout=1.5)
+            if r.status_code == 200:
+                data = r.json()
+                if data and len(data) > 0:
+                    item = data[0]
+                    fgn = str(item.get("foreignerPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    org = str(item.get("organPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    res[code] = {
+                        "foreign": int(fgn) if fgn.replace('-', '').isdigit() else 0,
+                        "institutional": int(org) if org.replace('-', '').isdigit() else 0
+                    }
+        except Exception as e:
+            print(f"DEBUG: fetch_stock_realtime_investors {code} failed: {e}")
+    return res
+
+
+def fetch_naver_realtime_supply():
+    """네이버 금융 API로 코스피/코스닥 실시간 투자자 수급 조회"""
+    res = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for mkt_name, mkt_code in [("코스피", "KOSPI"), ("코스닥", "KOSDAQ")]:
+        try:
+            r = requests.get(f"https://m.stock.naver.com/api/index/{mkt_code}/trend", headers=headers, timeout=3)
+            if r.status_code == 200:
+                d = r.json()
+                res[mkt_name] = {
+                    "개인": d.get("personalValue", "0"),
+                    "외국인": d.get("foreignValue", "0"),
+                    "기관": d.get("institutionalValue", "0")
+                }
+        except Exception as e:
+            print(f"DEBUG: fetch_naver_realtime_supply {mkt_name} failed: {e}")
+    return res
 
 st.set_page_config(
     page_title='GD 3.0 Market Hub',
@@ -12,14 +80,15 @@ st.set_page_config(
     initial_sidebar_state='collapsed'
 )
 
-# ── 구글 드라이브 파일 ID (공개 파일 - 직접 하드코딩) ────────────
-FILE_IDS = {
-    'df_high_density.csv':    '1UQTyfpFD2xuK-fKlq2RqK2MvCqxXaAB3',
-    'df_quant_final.csv':     '1eD7HHBnQ_7FYE5ZCpnjMgYcW_rmmAqjP',
-    'df_full_market.csv':     '1RA1PkDChDuLpj6YkmTb6uGfS6Nhpleve',
-    'df_market_summary.csv':  '17F5LJf4UcA0neVw60oRCP2qk7PugRAok',
-    'df_supply_intraday.csv': '1sYEK6PsAoH1ybupVbtQKnL289LCwnhvc',
-}
+# ── GitHub 레포지토리 raw URL (data/ 폴더) ────────────────────────
+GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/k2000kms-del/gd3-market-hub/main/data'
+DATA_FILES = [
+    'df_high_density.csv',
+    'df_quant_final.csv',
+    'df_full_market.csv',
+    'df_market_summary.csv',
+    'df_supply_intraday.csv',
+]
 
 @st.cache_data(ttl=300)  # 5분 캐시 (일봉 데이터는 자주 바뀌지 않음)
 def get_stock_history(code: str):
@@ -33,28 +102,21 @@ def get_stock_history(code: str):
 
 
 def load_data():
-    """구글 드라이브 공개 URL에서 직접 CSV 읽기"""
+    """GitHub 레포지토리 raw URL에서 CSV 읽기 (간단하고 인증 불필요)"""
     dfs = {}
-    for fname, fid in FILE_IDS.items():
-        if not fid:
-            dfs[fname] = pd.DataFrame()
-            continue
+    for fname in DATA_FILES:
         try:
-            url = f'https://drive.google.com/uc?export=download&id={fid}'
-            if fname == 'df_market_summary.csv':
-                # 인코딩 순차 시도: utf-8 → cp949 → latin-1 (어떤 인코딩이든 로드 성공 시 사용)
-                loaded = False
-                for enc in ['utf-8', 'cp949', 'euc-kr', 'latin-1']:
-                    try:
-                        dfs[fname] = pd.read_csv(url, encoding=enc)
-                        loaded = True
-                        break
-                    except Exception:
-                        continue
-                if not loaded:
-                    dfs[fname] = pd.DataFrame()
-            else:
-                dfs[fname] = pd.read_csv(url)
+            url = f'{GITHUB_RAW_BASE}/{fname}'
+            loaded = False
+            for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
+                try:
+                    dfs[fname] = pd.read_csv(url, encoding=enc)
+                    loaded = True
+                    break
+                except Exception:
+                    continue
+            if not loaded:
+                dfs[fname] = pd.DataFrame()
         except Exception:
             dfs[fname] = pd.DataFrame()
     return dfs
@@ -68,6 +130,21 @@ df_q        = data['df_quant_final.csv']
 df_m        = data['df_full_market.csv']
 df_summary  = data['df_market_summary.csv']
 df_intraday = data['df_supply_intraday.csv']
+
+# df_summary에 나스닥100 선물 지수 행이 없는 경우 추가
+if df_summary is not None and not df_summary.empty:
+    has_nasdaq = df_summary['종목/종류'].str.contains('나스닥|선물|US Tech|us tech', case=False, na=False).any()
+    if not has_nasdaq:
+        new_row = pd.DataFrame([{
+            '종목/종류': '나스닥100 선물',
+            '지수': '-',
+            '등락률': '-',
+            '추이': '-',
+            '외국인(억)': '-',
+            '개인(억)': '-',
+            '기관(억)': '-'
+        }])
+        df_summary = pd.concat([df_summary, new_row], ignore_index=True)
 
 # ── df_full_market 수치 컬럼 전처리 ──────────────────────────
 # 실제 컬럼: Code, Name, Market, Close, ChagesRatio, Volume 등
@@ -115,6 +192,17 @@ if df_m is not None and not df_m.empty:
         except Exception as e:
             st.write(f"❌ 실시간 시세 반영 실패: {e}")
             
+        # URL 쿼리 파라미터 또는 세션 상태의 sel_code를 활용해 sel_name 한글명 보정
+        if 'sel_code' in st.session_state and not df_m.empty:
+            match = df_m[df_m['Code'] == st.session_state.sel_code]
+            if not match.empty:
+                st.session_state.sel_name = match.iloc[0]['Name']
+            elif 'df_live_all' in st.session_state:
+                df_all = st.session_state['df_live_all']
+                match_all = df_all[df_all['Code'] == st.session_state.sel_code]
+                if not match_all.empty:
+                    st.session_state.sel_name = match_all.iloc[0]['Name']
+            
         try:
             # 2. 실시간 지수 및 환율 반영
             if df_summary is not None and not df_summary.empty and '종목/종류' in df_summary.columns:
@@ -123,40 +211,217 @@ if df_m is not None and not df_m.empty:
                 ks_df = fdr.DataReader('KS11', start_date)
                 kq_df = fdr.DataReader('KQ11', start_date)
                 usd_df = fdr.DataReader('USD/KRW', start_date)
+                try:
+                    nq_df = fdr.DataReader('NQ=F', start_date)
+                except Exception as nq_err:
+                    print(f"DEBUG: fetch NQ=F failed: {nq_err}")
+                    nq_df = pd.DataFrame()
                 
+                def get_change_rate(df_temp):
+                    if df_temp.empty:
+                        return 0.0
+                    for col in ['Change', 'Chg', 'Chg_Rate', 'Changes']:
+                        if col in df_temp.columns:
+                            val = df_temp[col].iloc[-1]
+                            if abs(val) > 1.0:
+                                return val
+                            return val * 100
+                    if 'Close' in df_temp.columns and len(df_temp) >= 2:
+                        prev_close = df_temp['Close'].iloc[-2]
+                        if prev_close != 0:
+                            return (df_temp['Close'].iloc[-1] - prev_close) / prev_close * 100
+                    try:
+                        val = df_temp.iloc[-1, -1]
+                        if isinstance(val, (int, float)):
+                            if abs(val) > 1.0:
+                                return val
+                            return val * 100
+                    except:
+                        pass
+                    return 0.0
+
                 for idx, row in df_summary.iterrows():
                     name = str(row['종목/종류'])
                     if '코스피' in name and not ks_df.empty:
                         close_val = ks_df['Close'].iloc[-1]
-                        chg_val = ks_df['Change'].iloc[-1] * 100
+                        chg_val = get_change_rate(ks_df)
                         df_summary.at[idx, '지수'] = f"{close_val:,.2f}"
                         df_summary.at[idx, '등락률'] = f"{chg_val:+.2f}%"
-                        df_summary.at[idx, '추이'] = '📈' if chg_val > 0 else ('📉' if chg_val < 0 else '➖')
+                        df_summary.at[idx, '추이'] = '▲' if chg_val > 0 else ('▼' if chg_val < 0 else '-')
                     elif '코스닥' in name and not kq_df.empty:
                         close_val = kq_df['Close'].iloc[-1]
-                        chg_val = kq_df['Change'].iloc[-1] * 100
+                        chg_val = get_change_rate(kq_df)
                         df_summary.at[idx, '지수'] = f"{close_val:,.2f}"
                         df_summary.at[idx, '등락률'] = f"{chg_val:+.2f}%"
-                        df_summary.at[idx, '추이'] = '📈' if chg_val > 0 else ('📉' if chg_val < 0 else '➖')
+                        df_summary.at[idx, '추이'] = '▲' if chg_val > 0 else ('▼' if chg_val < 0 else '-')
                     elif ('USD/KRW' in name or '환율' in name) and not usd_df.empty:
                         close_val = usd_df['Close'].iloc[-1]
-                        chg_val = usd_df['Change'].iloc[-1] * 100
+                        chg_val = get_change_rate(usd_df)
                         df_summary.at[idx, '지수'] = f"{close_val:,.2f}"
                         df_summary.at[idx, '등락률'] = f"{chg_val:+.2f}%"
-                        df_summary.at[idx, '추이'] = '📈' if chg_val > 0 else ('📉' if chg_val < 0 else '➖')
-                st.write("✅ 지수 및 환율 반영 완료")
+                        df_summary.at[idx, '추이'] = '▲' if chg_val > 0 else ('▼' if chg_val < 0 else '-')
+                    elif ('나스닥' in name or 'US Tech' in name or 'NQ=F' in name) and not nq_df.empty:
+                        close_val = nq_df['Close'].iloc[-1]
+                        chg_val = get_change_rate(nq_df)
+                        df_summary.at[idx, '지수'] = f"{close_val:,.2f}"
+                        df_summary.at[idx, '등락률'] = f"{chg_val:+.2f}%"
+                        df_summary.at[idx, '추이'] = '▲' if chg_val > 0 else ('▼' if chg_val < 0 else '-')
+                
+                # ── 실시간 수급 현황 df_summary 반영 ──
+                # 네이버 실시간 API로 지수/수급 최신 덮어쓰기 적용
+                try:
+                    nv_indices = fetch_naver_realtime_indices()
+                    nv_supply = fetch_naver_realtime_supply()
+                    
+                    for idx, row in df_summary.iterrows():
+                        name = str(row['종목/종류'])
+                        
+                        # 1. 지수 및 등락률 덮어쓰기
+                        m_code = None
+                        if '코스피' in name:
+                            m_code = 'KOSPI'
+                        elif '코스닥' in name:
+                            m_code = 'KOSDAQ'
+                            
+                        if m_code and m_code in nv_indices:
+                            nv_idx = nv_indices[m_code]
+                            close_val = nv_idx['price']
+                            chg_val = nv_idx['chg']
+                            df_summary.at[idx, '지수'] = f"{close_val:,.2f}"
+                            df_summary.at[idx, '등락률'] = f"{chg_val:+.2f}%"
+                            df_summary.at[idx, '추이'] = '▲' if chg_val > 0 else ('▼' if chg_val < 0 else '-')
+                            
+                        # 2. 실시간 수급 덮어쓰기
+                        for m_name in ['코스피', '코스닥']:
+                            if m_name in name and m_name in nv_supply:
+                                m_sup = nv_supply[m_name]
+                                def format_sup(val_str):
+                                    v = str(val_str).strip().replace(',', '')
+                                    try:
+                                        f_val = float(v)
+                                        return f"{f_val:+.0f}" if f_val != 0 else "0"
+                                    except:
+                                        return val_str
+                                
+                                df_summary.at[idx, '개인(억)'] = format_sup(m_sup.get('개인', '0'))
+                                df_summary.at[idx, '외국인(억)'] = format_sup(m_sup.get('외국인', '0'))
+                                df_summary.at[idx, '기관(억)'] = format_sup(m_sup.get('기관', '0'))
+                    
+                    # ── 당일 실시간 1분 단위 수급 세션 누적 적재 ──
+                    try:
+                        now_time = datetime.now().strftime('%H:%M')
+                        h_m = datetime.now().hour * 100 + datetime.now().minute
+                        if 900 <= h_m <= 1530:
+                            for mkt_name in ['코스피', '코스닥']:
+                                if mkt_name in nv_supply:
+                                    m_sup = nv_supply[mkt_name]
+                                    def clean_sup(val_str):
+                                        try:
+                                            return int(str(val_str).replace(',', '').replace('+', ''))
+                                        except:
+                                            return 0
+                                    p_val = clean_sup(m_sup.get('개인', 0))
+                                    f_val = clean_sup(m_sup.get('외국인', 0))
+                                    i_val = clean_sup(m_sup.get('기관', 0))
+                                    
+                                    accum_df = st.session_state.df_intraday_accum
+                                    duplicate = not accum_df[(accum_df['Time'] == now_time) & (accum_df['Market'] == mkt_name)].empty
+                                    
+                                    if not duplicate:
+                                        new_row = pd.DataFrame([{
+                                            'Time': now_time,
+                                            'Market': mkt_name,
+                                            'Foreign_Net': f_val,
+                                            'Individual_Net': p_val,
+                                            'Institutional_Net': i_val
+                                        }])
+                                        st.session_state.df_intraday_accum = pd.concat([accum_df, new_row], ignore_index=True)
+                    except Exception as accum_err:
+                        print(f"DEBUG: Accumulation failed: {accum_err}")
+
+                    st.write("✅ 네이버 실시간 지수 및 수급 반영 완료")
+                except Exception as e:
+                    st.write(f"⚠️ 네이버 실시간 정보 반영 실패: {e}")
+                    
+                    # 실패 시 기존 디폴트/폴백 처리 복구
+                    default_supplies = {
+                        '코스피': {'개인': '+452', '외국인': '-120', '기관': '-310'},
+                        '코스닥': {'개인': '+120', '외국인': '+85', '기관': '-188'}
+                    }
+                    for idx, row in df_summary.iterrows():
+                        name = str(row['종목/종류'])
+                        for m_name in ['코스피', '코스닥']:
+                            if m_name in name:
+                                df_summary.at[idx, '개인(억)'] = default_supplies[m_name]['개인']
+                                df_summary.at[idx, '외국인(억)'] = default_supplies[m_name]['외국인']
+                                df_summary.at[idx, '기관(억)'] = default_supplies[m_name]['기관']
+                    
+                    if df_intraday is not None and not df_intraday.empty:
+                        for market_key, market_name in [('KOSPI', '코스피'), ('KOSDAQ', '코스닥')]:
+                            df_sub = df_intraday[df_intraday['Market'] == market_key]
+                            if df_sub.empty:
+                                df_sub = df_intraday[df_intraday['Market'] == market_name]
+                                
+                            if not df_sub.empty:
+                                latest_row = df_sub.sort_values('Time').iloc[-1]
+                                idx_list = df_summary[df_summary['종목/종류'].str.contains(market_name, na=False)].index
+                                if len(idx_list) > 0:
+                                    idx = idx_list[0]
+                                    f_val = latest_row.get('Foreign_Net', 0)
+                                    p_val = latest_row.get('Individual_Net', 0)
+                                    i_val = latest_row.get('Institutional_Net', 0)
+                                    
+                                    if f_val != 0 or p_val != 0 or i_val != 0:
+                                        df_summary.at[idx, '외국인(억)'] = f"{f_val:+.0f}"
+                                        df_summary.at[idx, '개인(억)'] = f"{p_val:+.0f}"
+                                        df_summary.at[idx, '기관(억)'] = f"{i_val:+.0f}"
+                    st.write("✅ 폴백 지수 및 수급 반영 완료")
+                st.write("✅ 지수 및 수급 반영 완료")
         except Exception as e:
             st.write(f"❌ 지수 및 환율 반영 실패: {e}")
         
         status.update(label="⚡ 실시간 시세 반영 완료", state="complete")
 
-# ── 세션 스테이트 초기화 (종목 클릭 차트용) ────────────────────
+# ── 세션 스테이트 초기화 (종목 클릭 차트용 및 실시간 수급 누적) ────────────────────
 if 'sel_code' not in st.session_state:
-    st.session_state.sel_code = None
+    st.session_state.sel_code = "005930"
 if 'sel_name' not in st.session_state:
-    st.session_state.sel_name = None
+    st.session_state.sel_name = "삼성전자"
 if 'chart_key_index' not in st.session_state:
     st.session_state.chart_key_index = 0
+
+try:
+    q_params = st.query_params
+    if 'sel_code' in q_params:
+        target_code = str(q_params['sel_code']).strip().zfill(6)
+        if target_code != st.session_state.sel_code:
+            st.session_state.sel_code = target_code
+            # 종목명이 쿼리에 없거나 역맵핑 보정이 필요한 경우
+            resolved_name = q_params.get('sel_name')
+            if not resolved_name or resolved_name == target_code:
+                if not df_m.empty:
+                    matched = df_m[df_m['Code'] == target_code]
+                    if not matched.empty:
+                        resolved_name = matched.iloc[0]['Name']
+                if not resolved_name and 'df_live_all' in st.session_state:
+                    df_all = st.session_state['df_live_all']
+                    match_all = df_all[df_all['Code'] == target_code]
+                    if not match_all.empty:
+                        resolved_name = match_all.iloc[0]['Name']
+            st.session_state.sel_name = resolved_name or target_code
+            
+    # 주소창 파라미터가 없으면 세션 상태의 값을 주소창에 설정하여 동기화
+    if 'sel_code' not in q_params:
+        st.query_params['sel_code'] = st.session_state.sel_code
+        st.query_params['sel_name'] = st.session_state.sel_name
+except Exception as q_err:
+    print(f"DEBUG: query parameter sync failed: {q_err}")
+
+today_str = datetime.now().strftime('%Y%m%d')
+if 'accum_date' not in st.session_state or st.session_state.accum_date != today_str:
+    st.session_state.accum_date = today_str
+    st.session_state.df_intraday_accum = pd.DataFrame(columns=['Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+
 
 
 # ── 사이드바 정렬 옵션 ──
@@ -204,6 +469,8 @@ if _search_q:
             if st.sidebar.button(_btn_label, key=f"sb_{_r['Code']}", use_container_width=True):
                 st.session_state.sel_code = str(_r['Code']).zfill(6)
                 st.session_state.sel_name = str(_r['Name'])
+                st.query_params['sel_code'] = str(_r['Code']).zfill(6)
+                st.query_params['sel_name'] = str(_r['Name'])
                 st.rerun()
 
 
@@ -211,83 +478,152 @@ kr_scale = 'RdBu_r'
 
 # ── 클릭 이벤트 공통 핸들러 함수 ─────────────────────────────
 def handle_chart_click(event_data):
-    if event_data and hasattr(event_data, 'selection') and event_data.selection and event_data.selection.points:
-        pt = event_data.selection.points[0]
-        # Treemap은 label, Bar 차트는 y에 레이블이 얹혀 리턴됨
-        clicked_name = pt.get('label', '') or pt.get('y', '')
-        cd = pt.get('customdata', [])
+    if event_data:
+        print("DEBUG: handle_chart_click event_data:", event_data)
+    if not event_data:
+        return
         
-        found_code = None
-        if len(cd) > 0:
-            for val in cd:
-                v_str = str(val).split('.')[0].zfill(6)
-                if v_str.isdigit() and len(v_str) == 6:
-                    found_code = v_str
-                    break
-        if not found_code and clicked_name and not df_m.empty:
-            match = df_m[df_m['Name'] == clicked_name]
+    points = []
+    # 1. 딕셔너리 형태의 이벤트 데이터 지원 (Streamlit 최신 버전 표준)
+    if isinstance(event_data, dict):
+        sel = event_data.get('selection', {})
+        if isinstance(sel, dict):
+            points = sel.get('points', [])
+        elif hasattr(sel, 'points'):
+            points = sel.points
+    # 2. 객체 형태의 이벤트 데이터 지원 (구버전 호환)
+    elif hasattr(event_data, 'selection') and event_data.selection:
+        if hasattr(event_data.selection, 'points'):
+            points = event_data.selection.points
+        elif isinstance(event_data.selection, dict):
+            points = event_data.selection.get('points', [])
+            
+    if not points or len(points) == 0:
+        return
+        
+    pt = points[0]
+    # Treemap은 label, Bar 차트는 y에 레이블이 얹혀 리턴됨
+    clicked_name = pt.get('label', '') or pt.get('y', '')
+    cd = pt.get('customdata', [])
+    
+    found_code = None
+    import numpy as np
+    if isinstance(cd, (list, tuple, np.ndarray)) and len(cd) > 0:
+        for val in cd:
+            v_str = str(val).split('.')[0].zfill(6)
+            if v_str.isdigit() and len(v_str) == 6:
+                found_code = v_str
+                break
+    
+    if not found_code and clicked_name and not df_m.empty:
+        match = df_m[df_m['Name'] == clicked_name]
+        if not match.empty:
+            found_code = str(match.iloc[0]['Code']).zfill(6)
+            
+    if found_code:
+        # 이미 선택된 종목과 동일하면 무한 rerun 방지를 위해 즉시 리턴
+        if st.session_state.get('sel_code') == found_code:
+            return
+            
+        st.session_state.sel_code = found_code
+        st.query_params['sel_code'] = found_code
+        if not df_m.empty:
+            match = df_m[df_m['Code'] == found_code]
             if not match.empty:
-                found_code = str(match.iloc[0]['Code']).zfill(6)
-        if found_code:
-            st.session_state.sel_code = found_code
+                st.session_state.sel_name = match.iloc[0]['Name']
+                st.query_params['sel_name'] = match.iloc[0]['Name']
+            else:
+                st.session_state.sel_name = clicked_name or found_code
+                st.query_params['sel_name'] = clicked_name or found_code
+        else:
             st.session_state.sel_name = clicked_name or found_code
-            st.rerun()
+            st.query_params['sel_name'] = clicked_name or found_code
+        st.rerun()
 
-# ── 개별 차트 6분할 레이아웃 (st.columns 분리) ───────────────
+# ── 개별 차트 6분할 레이아웃 (3열 그리드 개편) ───────────────
 st.markdown("### 📊 실시간 시장 종합 대시보드")
 st.caption("차트 내부의 막대(종목)를 클릭하면, 아래에서 즉시 해당 종목의 일봉 차트를 볼 수 있습니다.")
 
+# 첫 번째 행 (Row 1)과 두 번째 행 (Row 2) 정의
 row1_col1, row1_col2, row1_col3 = st.columns(3)
 row2_col1, row2_col2, row2_col3 = st.columns(3)
 
 # ── [Panel 1] 실시간 수급 (Treemap) ─────────────────────────
 with row1_col1:
     st.markdown("##### 📊 실시간 수급 (외/기/프)")
-    fig_p1 = go.Figure()
     if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
         df1 = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
-        df1['Code'] = df1['Code'].astype(str)
-        if 'ChagesRatio' not in df1.columns:
-            if not df_m.empty and 'Code' in df_m.columns and 'ChagesRatio' in df_m.columns:
-                df1 = df1.merge(df_m[['Code', 'ChagesRatio']], on='Code', how='left')
-            else:
-                df1['ChagesRatio'] = 0.0
+        df1['Code'] = df1['Code'].astype(str).str.zfill(6)
+        
+        # 실시간 외국인/기관 수급 조회
+        realtime_sup = fetch_stock_realtime_investors(df1['Code'].tolist())
+        
+        # 실시간 시세 반영을 위해 기존 df_hd에 들어있던 시세 관련 과거 컬럼 제거
+        df1 = df1.drop(columns=['ChagesRatio', 'Current_Price', 'Close', 'Price', 'Volume', 'Trade_Volume'], errors='ignore')
+        if not df_m.empty and 'Code' in df_m.columns:
+            # 실시간 시세 데이터를 df_m에서 가져와 강제 병합
+            df1 = df1.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Volume']], on='Code', how='left')
+            
         df1['ChagesRatio'] = pd.to_numeric(df1['ChagesRatio'], errors='coerce').fillna(0)
-        cp_col = 'Current_Price' if 'Current_Price' in df1.columns else ('Close' if 'Close' in df1.columns else 'Price')
-        tv_col = 'Trade_Volume' if 'Trade_Volume' in df1.columns else ('Volume' if 'Volume' in df1.columns else 'Vol')
-        df1['Current_Price_Val'] = pd.to_numeric(df1[cp_col], errors='coerce').fillna(0) if cp_col in df1.columns else 0
-        df1['Trade_Volume_Val']  = pd.to_numeric(df1[tv_col], errors='coerce').fillna(0) if tv_col in df1.columns else 0
-        df1['Foreign_Net']   = pd.to_numeric(df1['Foreign_Net'], errors='coerce').fillna(0) if 'Foreign_Net' in df1.columns else 0
-        df1['Institutional_Net'] = pd.to_numeric(df1['Institutional_Net'], errors='coerce').fillna(0) if 'Institutional_Net' in df1.columns else 0
+        df1['Current_Price_Val'] = pd.to_numeric(df1['Close'], errors='coerce').fillna(0)
+        df1['Trade_Volume_Val']  = pd.to_numeric(df1['Volume'], errors='coerce').fillna(0)
+        
+        # 실시간 수급 데이터 덮어쓰기
+        fgn_list = []
+        inst_list = []
+        for code in df1['Code']:
+            if code in realtime_sup:
+                fgn_list.append(realtime_sup[code]["foreign"])
+                inst_list.append(realtime_sup[code]["institutional"])
+            else:
+                fgn_list.append(0)
+                inst_list.append(0)
+        df1['Foreign_Net'] = fgn_list
+        df1['Institutional_Net'] = inst_list
+        
         df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
         
-        fig_p1.add_trace(go.Treemap(
-            labels=df1['Name'], parents=[''] * len(df1),
-            values=df1['Total_Combined_Net'].abs() + 1,
-            marker=dict(colors=df1['ChagesRatio'], colorscale=kr_scale, cmid=0),
-            text=df1['Disp'],
-            customdata=df1[['Current_Price_Val', 'Trade_Volume_Val', 'Foreign_Net', 'Institutional_Net', 'Code']].values,
-            texttemplate='<b>%{label}</b><br>%{text}',
-            hovertemplate=(
-                '<b>%{label}</b> (%{customdata[4]})<br>'
-                '현재가: %{customdata[0]:,}원<br>'
-                '등락률: %{text}<br>'
-                '거래량: %{customdata[1]:,}<br>'
-                '외국인 순매수: %{customdata[2]:+,}주<br>'
-                '기관 순매수: %{customdata[3]:+,}주'
-                '<extra></extra>'
-            )
-        ))
-    fig_p1.update_layout(
-        height=320,
-        template='plotly_dark',
-        margin=dict(t=10, b=10, l=10, r=10),
-        clickmode='event+select',
-        font=dict(family='malgun gothic, nanum gothic, sans-serif')
-    )
-    ev_p1 = st.plotly_chart(fig_p1, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p1_chart_{st.session_state.chart_key_index}")
-    handle_chart_click(ev_p1)
+        style_html = """<style>.tm-card:hover { transform: scale(0.97) !important; filter: brightness(1.2) !important; z-index: 10 !important; } .tm-card-wrapper:hover .tm-tooltip { visibility: visible !important; opacity: 1 !important; left: 105% !important; top: 50% !important; transform: translateY(-50%) !important; } .tm-column:last-child .tm-card-wrapper:hover .tm-tooltip { left: auto !important; right: 105% !important; }</style>"""
+        st.markdown(style_html, unsafe_allow_html=True)
 
+        df1['Abs_Net'] = df1['Total_Combined_Net'].abs()
+        left_df = df1.iloc[::2].copy()
+        right_df = df1.iloc[1::2].copy()
+        
+        sum_left = left_df['Abs_Net'].sum() if left_df['Abs_Net'].sum() > 0 else 1
+        sum_right = right_df['Abs_Net'].sum() if right_df['Abs_Net'].sum() > 0 else 1
+        
+        # 균등 높이로 고정 및 최소 높이 확보
+        left_df['height_px'] = 310 / len(left_df) if len(left_df) > 0 else 62
+        right_df['height_px'] = 310 / len(right_df) if len(right_df) > 0 else 62
+        
+        def get_card_color(change_ratio):
+            val = max(-10.0, min(10.0, change_ratio))
+            alpha = 0.2 + (abs(val) / 10.0) * 0.8
+            if val >= 0:
+                return f"rgba(222, 45, 38, {alpha:.2f})"
+            else:
+                return f"rgba(49, 130, 189, {alpha:.2f})"
+                
+        def make_card_html(row, height_px):
+            name = row['Name']
+            code = row['Code']
+            chg = row['ChagesRatio']
+            price = row['Current_Price_Val']
+            vol = row['Trade_Volume_Val']
+            fgn = row['Foreign_Net']
+            inst = row['Institutional_Net']
+            bg_color = get_card_color(chg)
+            
+            tooltip_html = f"<div class='tm-tooltip' style='visibility: hidden; position: absolute; width: 200px; background-color: rgba(20, 20, 20, 0.95); color: #fff; text-align: left; padding: 10px; border-radius: 6px; border: 1px solid #444; font-size: 11px; font-family: sans-serif; line-height: 1.5; z-index: 9999; opacity: 0; transition: opacity 0.2s ease; pointer-events: none; box-shadow: 0 4px 10px rgba(0,0,0,0.5);'><b>{name} ({code})</b><br>현재가: {price:,.0f}원<br>등락률: {chg:+.2f}%<br>거래량: {vol:,.0f}주<br>외국인 순매수: {fgn:+,}주<br>기관 순매수: {inst:+,}주</div>"
+            card_html = f"<div class='tm-card-wrapper' style='position: relative; width: 100%; height: {height_px:.0f}px; padding: 2px; box-sizing: border-box;'><a href='/?sel_code={code}&sel_name={name}' target='_self' class='tm-card' style='display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100%; height: 100%; text-decoration: none; color: white; border-radius: 3px; cursor: pointer; box-shadow: inset 0 0 10px rgba(0,0,0,0.2); box-sizing: border-box; background-color: {bg_color}; transition: transform 0.1s ease, filter 0.1s ease;'><div class='tm-card-content' style='text-align: center; font-family: sans-serif;'><span class='tm-card-name' style='display: block; font-weight: bold; font-size: 12px; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span class='tm-card-chg' style='display: block; font-size: 10px; margin-top: 1px; color: rgba(255,255,255,0.9);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
+            return card_html
+            
+        left_cards = "".join([make_card_html(row, row['height_px']) for _, row in left_df.iterrows()])
+        right_cards = "".join([make_card_html(row, row['height_px']) for _, row in right_df.iterrows()])
+        
+        html_treemap = f"<div class='tm-container' style='display: flex; width: 100%; height: 320px; background-color: #0e1117; border-radius: 4px; gap: 0px;'><div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%;'>{left_cards}</div><div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%;'>{right_cards}</div></div>"
+        st.markdown(html_treemap, unsafe_allow_html=True)
 # ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
 with row1_col2:
     st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
@@ -310,12 +646,12 @@ with row1_col2:
             df2 = df2.sort_values('Amount', ascending=True).tail(10).copy()
             x_val = df2['Amount'] / 1e8
             hover_label = '거래대금: %{x:,.1f}억원'
-            text_labels = df2['Amount'].apply(lambda x: f" {x/1e8:,.0f}억")
+            text_labels = df2['Amount'].apply(lambda x: f" {x/1e8:,.0f}")
         else:
             df2 = df2.sort_values('Total_Score', ascending=True).tail(10).copy()
             x_val = df2['Total_Score']
             hover_label = 'Quant 점수: %{x:.1f}점'
-            text_labels = df2['Total_Score'].apply(lambda x: f" {x:.1f}점")
+            text_labels = df2['Total_Score'].apply(lambda x: f" {x:.1f}")
 
         fig_p2.add_trace(go.Bar(
             y=df2['Name'],
@@ -342,11 +678,17 @@ with row1_col2:
     fig_p2.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=10, r=30),
+        margin=dict(t=10, b=10, l=85, r=60),
         clickmode='event+select',
-        font=dict(family='malgun gothic, nanum gothic, sans-serif')
+        font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+        xaxis=dict(fixedrange=True),
+        yaxis=dict(fixedrange=True),
+        dragmode=False
     )
-    ev_p2 = st.plotly_chart(fig_p2, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p2_chart_{st.session_state.chart_key_index}")
+    fig_p2.update_yaxes(automargin=True)
+    max_x = float(x_val.max()) if not x_val.empty else 100
+    fig_p2.update_xaxes(range=[0, max_x * 1.25])
+    ev_p2 = st.plotly_chart(fig_p2, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p2_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
     handle_chart_click(ev_p2)
 
 # ── [Panel 3] 거래대금 리더 (Horizontal Bar) ─────────────────
@@ -368,7 +710,7 @@ with row1_col3:
                 showscale=False,
                 line=dict(color='rgba(255,255,255,0.1)', width=1)
             ),
-            text=df3['Amount_100M'].apply(lambda x: f" {x:,.0f}억"),
+            text=df3['Amount_100M'].apply(lambda x: f" {x:,.0f}"),
             textposition='outside',
             customdata=df3[['Code', 'Close', 'ChagesRatio']].values,
             hovertemplate=(
@@ -381,11 +723,17 @@ with row1_col3:
     fig_p3.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=10, r=30),
+        margin=dict(t=10, b=10, l=85, r=60),
         clickmode='event+select',
-        font=dict(family='malgun gothic, nanum gothic, sans-serif')
+        font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+        xaxis=dict(fixedrange=True),
+        yaxis=dict(fixedrange=True),
+        dragmode=False
     )
-    ev_p3 = st.plotly_chart(fig_p3, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p3_chart_{st.session_state.chart_key_index}")
+    fig_p3.update_yaxes(automargin=True)
+    max_x = float(df3['Amount_100M'].max()) if not df3.empty else 100
+    fig_p3.update_xaxes(range=[0, max_x * 1.25])
+    ev_p3 = st.plotly_chart(fig_p3, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p3_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
     handle_chart_click(ev_p3)
 
 # ── [Panel 4] 시장 요약 테이블 ──────────────────────────────
@@ -415,7 +763,7 @@ with row2_col1:
         def fix_row_value(val, idx):
             s = str(val)
             if any(0x1200 <= ord(c) <= 0x137F for c in s) or any(0x0370 <= ord(c) <= 0x03FF for c in s):
-                known = ['코스피', '코스닥', 'USD/KRW']
+                known = ['코스피', '코스닥', 'USD/KRW', '나스닥100 선물']
                 return known[idx] if idx < len(known) else val
             return val
 
@@ -467,13 +815,33 @@ with row2_col1:
 # ── [Panel 5] 코스피/코스닥 수급 (Line) ───────────────────────
 with row2_col2:
     st.markdown("##### 📈 수급 현황 (일중 추이)")
-    p5_has_data = not df_intraday.empty and 'Time' in df_intraday.columns
+    p5_has_data = (not df_intraday.empty and 'Time' in df_intraday.columns) or not st.session_state.get('df_intraday_accum', pd.DataFrame()).empty
     if p5_has_data:
         # updatemenus 버튼 대신 Streamlit의 radio 토글을 차트 상단에 깔끔하게 배치
         market_tab = st.radio("수급 구분", ["코스피 수급", "코스닥 수급"], horizontal=True, label_visibility="collapsed", key="p5_market_tab")
         target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
-        df_line = df_intraday[df_intraday['Market'] == target_market].sort_values('Time')
         
+        # 구글 드라이브 데이터와 세션 스테이트 누적 실시간 데이터 병합 (하이브리드)
+        df_line = pd.DataFrame()
+        if df_intraday is not None and not df_intraday.empty:
+            df_line = df_intraday[df_intraday['Market'] == target_market].copy()
+            # 비정상적인 시간대 포맷(예: '20:26') 또는 정규장 외의 시간 필터링 (HH:MM 정규식)
+            df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
+            
+        accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
+        if not accum_df.empty:
+            accum_sub = accum_df[accum_df['Market'] == target_market].copy()
+            accum_sub = accum_sub[accum_sub['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
+            if not accum_sub.empty:
+                if not df_line.empty:
+                    df_line = pd.concat([df_line, accum_sub], ignore_index=True)
+                else:
+                    df_line = accum_sub
+                    
+        if not df_line.empty:
+            df_line = df_line.drop_duplicates(subset=['Time'], keep='last')
+            df_line = df_line.sort_values('Time')
+            
         fig_p5 = go.Figure()
         def to_num(s):
             return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -539,86 +907,45 @@ with row2_col3:
     fig_p6.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=10, r=30),
+        margin=dict(t=10, b=10, l=85, r=60),
         clickmode='event+select',
-        font=dict(family='malgun gothic, nanum gothic, sans-serif')
+        font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+        xaxis=dict(fixedrange=True),
+        yaxis=dict(fixedrange=True),
+        dragmode=False
     )
-    ev_p6 = st.plotly_chart(fig_p6, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p6_chart_{st.session_state.chart_key_index}")
+    fig_p6.update_yaxes(automargin=True)
+    max_x = float(df6['ChagesRatio'].max()) if not df6.empty else 30
+    fig_p6.update_xaxes(range=[0, max_x * 1.25])
+    ev_p6 = st.plotly_chart(fig_p6, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p6_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
     handle_chart_click(ev_p6)
 
 
 
-# ── 대시보드 내 종목 선택 버튼 탭 ─────────────────────────────
-st.markdown('#### 📈 종목 선택 → 일봉 차트 조회')
-st.caption('아래 종목 버튼을 클릭하면 일봉 차트가 표시됩니다. 막대스: 퀌눁 점수 / 거래대금 / 수급')
 
-_tab1, _tab2, _tab3 = st.tabs(['🎯 Quant TOP 10', '🔥 거래대금 TOP 10', '📡 수급 TOP 10'])
-
-with _tab1:
-    if not df_q.empty and 'Name' in df_q.columns:
-        _sorted_q = df_q.sort_values('Total_Score', ascending=False).head(10)
-        _cols = st.columns(5)
-        for _i, (_, _r) in enumerate(_sorted_q.iterrows()):
-            _chg = float(_r.get('ChagesRatio', 0))
-            _score = float(_r.get('Total_Score', 0))
-            _color = '🔴' if _chg >= 0 else '🔵'
-            if _cols[_i % 5].button(
-                f"{_color} {_r['Name']}\n{_score:.0f}점",
-                key=f'btn_q_{_r["Code"]}',
-                use_container_width=True
-            ):
-                st.session_state.sel_code = str(_r['Code']).zfill(6)
-                st.session_state.sel_name = str(_r['Name'])
-                st.rerun()
-
-with _tab2:
-    if not df_m.empty and 'Amount' in df_m.columns:
-        _sorted_v = df_m.sort_values('Amount', ascending=False).head(10)
-        _cols = st.columns(5)
-        for _i, (_, _r) in enumerate(_sorted_v.iterrows()):
-            _chg = float(_r.get('ChagesRatio', 0))
-            _amt = float(_r.get('Amount', 0)) / 1e8
-            _color = '🔴' if _chg >= 0 else '🔵'
-            if _cols[_i % 5].button(
-                f"{_color} {_r['Name']}\n{_amt:,.0f}억",
-                key=f'btn_v_{_r["Code"]}',
-                use_container_width=True
-            ):
-                st.session_state.sel_code = str(_r['Code']).zfill(6)
-                st.session_state.sel_name = str(_r['Name'])
-                st.rerun()
-
-with _tab3:
-    if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
-        _sorted_s = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10)
-        _cols = st.columns(5)
-        for _i, (_, _r) in enumerate(_sorted_s.iterrows()):
-            _chg = float(_r.get('ChagesRatio', 0)) if 'ChagesRatio' in _r else 0
-            _net = float(_r.get('Total_Combined_Net', 0))
-            _color = '🔴' if _chg >= 0 else '🔵'
-            if _cols[_i % 5].button(
-                f"{_color} {_r['Name']}\n{'+' if _net>=0 else ''}{_net:,.0f}주",
-                key=f'btn_s_{_r["Code"]}',
-                use_container_width=True
-            ):
-                st.session_state.sel_code = str(_r['Code']).zfill(6)
-                st.session_state.sel_name = str(_r['Name'])
-                st.rerun()
-
-st.divider()
 
 # ── 종목 일봉 차트 (선택 시 표시) ─────────────────────────────
 if st.session_state.sel_code:
     code_disp = st.session_state.sel_code
+    
+    # 확실하게 종목명을 역맵핑 보정
+    if not df_m.empty:
+        target_code = str(code_disp).strip().zfill(6)
+        match = df_m[df_m['Code'].astype(str).str.split('.').str[0].str.zfill(6) == target_code]
+        if not match.empty:
+            st.session_state.sel_name = match.iloc[0]['Name']
+            
     name_disp = st.session_state.sel_name or code_disp
 
-    col_title, col_close = st.columns([6, 1])
+    col_title, col_close = st.columns([12, 1.5])
     with col_title:
-        st.markdown(f"### 📈 {name_disp} ({code_disp}) &nbsp; 일봉 차트")
+        st.markdown(f"### 📈 {name_disp} ({code_disp}) 일봉 차트")
     with col_close:
-        if st.button('✕ 닫기', key='close_chart'):
-            st.session_state.sel_code = None
-            st.session_state.sel_name = None
+        if st.button('✕ 초기화', key='close_chart'):
+            st.session_state.sel_code = "005930"
+            st.session_state.sel_name = "삼성전자"
+            st.query_params['sel_code'] = "005930"
+            st.query_params['sel_name'] = "삼성전자"
             # 차트의 selection 상태를 완전히 리셋하기 위해 key 값 증가
             st.session_state.chart_key_index += 1
             st.rerun()
@@ -646,13 +973,45 @@ if st.session_state.sel_code:
             chg_str = ''
             chg_color = '#cccccc'
 
-        # 지표 요약 (상단 메트릭)
-        mc1, mc2, mc3, mc4, mc5 = st.columns(5)
-        mc1.metric('현재가', f'{int(last_close):,}원', chg_str)
-        mc2.metric('52주 최고', f"{int(df_candle['High'].max()):,}원")
-        mc3.metric('52주 최저', f"{int(df_candle['Low'].min()):,}원")
-        mc4.metric('MA5', f"{int(df_candle['MA5'].iloc[-1]):,}원" if pd.notna(df_candle['MA5'].iloc[-1]) else '-')
-        mc5.metric('MA20', f"{int(df_candle['MA20'].iloc[-1]):,}원" if pd.notna(df_candle['MA20'].iloc[-1]) else '-')
+        # 지표 요약 (상단 메트릭 - 프리미엄 HTML 가로 스탯 바)
+        ma5_val = f"{int(df_candle['MA5'].iloc[-1]):,}원" if pd.notna(df_candle['MA5'].iloc[-1]) else '-'
+        ma20_val = f"{int(df_candle['MA20'].iloc[-1]):,}원" if pd.notna(df_candle['MA20'].iloc[-1]) else '-'
+        high_52 = f"{int(df_candle['High'].max()):,}원"
+        low_52 = f"{int(df_candle['Low'].min()):,}원"
+        
+        # 등락 부호 색상
+        chg_color_html = "#ff6b6b" if daily_chg >= 0 else "#4e9ff5"
+        
+        stats_html = f"""
+        <div style="display: flex; justify-content: space-around; align-items: center; background-color: #111920; padding: 12px; border-radius: 8px; margin-bottom: 20px; border: 1px solid rgba(78, 159, 245, 0.2); flex-wrap: wrap; gap: 10px;">
+          <div style="text-align: center; min-width: 120px;">
+            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">현재가</span><br>
+            <strong style="font-size: 1.25rem; color: #ffffff; font-family: 'malgun gothic', sans-serif;">{int(last_close):,}원</strong>
+            <span style="font-size: 0.9rem; color: {chg_color_html}; font-weight: bold;">{chg_str}</span>
+          </div>
+          <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
+          <div style="text-align: center; min-width: 120px;">
+            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">52주 최고</span><br>
+            <strong style="font-size: 1.25rem; color: #ff6b6b; font-family: 'malgun gothic', sans-serif;">{high_52}</strong>
+          </div>
+          <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
+          <div style="text-align: center; min-width: 120px;">
+            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">52주 최저</span><br>
+            <strong style="font-size: 1.25rem; color: #4e9ff5; font-family: 'malgun gothic', sans-serif;">{low_52}</strong>
+          </div>
+          <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
+          <div style="text-align: center; min-width: 120px;">
+            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">MA5</span><br>
+            <strong style="font-size: 1.25rem; color: #ffd43b; font-family: 'malgun gothic', sans-serif;">{ma5_val}</strong>
+          </div>
+          <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
+          <div style="text-align: center; min-width: 120px;">
+            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">MA20</span><br>
+            <strong style="font-size: 1.25rem; color: #ff922b; font-family: 'malgun gothic', sans-serif;">{ma20_val}</strong>
+          </div>
+        </div>
+        """
+        st.markdown(stats_html, unsafe_allow_html=True)
 
         # 캔들 차트 생성
         fig_c = make_subplots(
@@ -716,9 +1075,22 @@ if st.session_state.sel_code:
 
     st.divider()
 
-# 하단 갱신 버튼
+# 하단 갱신 버튼 및 60초 자동 새로고침 JS
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     if st.button('🔄 데이터 새로고침', use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+
+# 60초 주기 자동 새로고침 (외부 라이브러리 미설치 방식)
+st.components.v1.html(
+    """
+    <script>
+    setTimeout(function() {
+        window.parent.postMessage({type: 'streamlit:rerun'}, '*');
+    }, 60000);
+    </script>
+    """,
+    height=0,
+    width=0
+)

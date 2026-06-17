@@ -4,18 +4,23 @@ on:
   push:
     branches: [ main ]
   schedule:
-    # Run every 30 minutes during Korean market hours (09:00~15:30 KST = 00:00~06:30 UTC) on weekdays (Mon-Fri)
-    - cron: '0,30 0,1,2,3,4,5,6 * * 1-5'
+    # 한국 장 시간(KST 09:00~15:30 = UTC 00:00~06:30) 평일 30분마다 실행
+    - cron: '0,30 0,1,2,3,4,5 * * 1-5'
+    - cron: '0 6 * * 1-5'
   workflow_dispatch:
 
 jobs:
   collect-market-data:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write  # data/ 폴더 커밋·푸시를 위해 필요
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -30,8 +35,16 @@ jobs:
         env:
           KIS_APP_KEY:    ${{ secrets.KIS_APP_KEY }}
           KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
-          GDRIVE_OAUTH_TOKEN: ${{ secrets.GDRIVE_OAUTH_TOKEN }}
         run: python data_collector.py
+
+      - name: Commit and push updated CSV files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/*.csv
+          # 변경사항이 있을 때만 커밋 (없으면 에러 방지)
+          git diff --staged --quiet || git commit -m "chore: 시장 데이터 자동 업데이트 $(date +'%Y-%m-%d %H:%M KST')"
+          git push
 
       - name: Summarize execution
         if: always()
