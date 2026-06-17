@@ -330,35 +330,45 @@ if df_m is not None and not df_m.empty:
                                 df_summary.at[idx, '외국인(억)'] = format_sup(m_sup.get('외국인', '0'))
                                 df_summary.at[idx, '기관(억)'] = format_sup(m_sup.get('기관', '0'))
                     
-                    # ── 당일 실시간 1분 단위 수급 세션 누적 적재 ──
+                    # ── 당일 실시간 수급 세션 누적 적재 (1분마다 새 포인트 추가) ──
                     try:
                         now_time = datetime.now().strftime('%H:%M')
                         h_m = datetime.now().hour * 100 + datetime.now().minute
-                        if 900 <= h_m <= 1530:
+                        # 장중(09:00~15:30)이고, 마지막 누적 시각과 현재 시각이 다를 때만 추가
+                        last_accum_time = st.session_state.get('last_accum_time', '')
+                        if 900 <= h_m <= 1530 and now_time != last_accum_time:
                             for mkt_name in ['코스피', '코스닥']:
                                 if mkt_name in nv_supply:
                                     m_sup = nv_supply[mkt_name]
                                     def clean_sup(val_str):
                                         try:
-                                            return int(str(val_str).replace(',', '').replace('+', ''))
+                                            # 네이버 API는 억원 단위 문자열('+5,254') 반환
+                                            return int(str(val_str).replace(',', '').replace('+', '').strip())
                                         except:
                                             return 0
-                                    p_val = clean_sup(m_sup.get('개인', 0))
                                     f_val = clean_sup(m_sup.get('외국인', 0))
+                                    p_val = clean_sup(m_sup.get('개인', 0))
                                     i_val = clean_sup(m_sup.get('기관', 0))
-                                    
+
                                     accum_df = st.session_state.df_intraday_accum
-                                    duplicate = not accum_df[(accum_df['Time'] == now_time) & (accum_df['Market'] == mkt_name)].empty
-                                    
+                                    # 같은 시간·같은 시장 데이터 이미 있으면 스킵
+                                    duplicate = not accum_df[
+                                        (accum_df['Time'] == now_time) & (accum_df['Market'] == mkt_name)
+                                    ].empty
+
                                     if not duplicate:
                                         new_row = pd.DataFrame([{
                                             'Time': now_time,
                                             'Market': mkt_name,
-                                            'Foreign_Net': f_val,
-                                            'Individual_Net': p_val,
-                                            'Institutional_Net': i_val
+                                            'Foreign_Net': f_val,       # 억원 단위
+                                            'Individual_Net': p_val,    # 억원 단위
+                                            'Institutional_Net': i_val  # 억원 단위
                                         }])
-                                        st.session_state.df_intraday_accum = pd.concat([accum_df, new_row], ignore_index=True)
+                                        st.session_state.df_intraday_accum = pd.concat(
+                                            [accum_df, new_row], ignore_index=True
+                                        )
+                            # 코스피·코스닥 모두 처리 완료 후 누적 시각 갱신
+                            st.session_state['last_accum_time'] = now_time
                     except Exception as accum_err:
                         print(f"DEBUG: Accumulation failed: {accum_err}")
 
@@ -840,17 +850,23 @@ with row2_col2:
     st.markdown("##### 📈 수급 현황 (일중 추이)")
     p5_has_data = (not df_intraday.empty and 'Time' in df_intraday.columns) or not st.session_state.get('df_intraday_accum', pd.DataFrame()).empty
     if p5_has_data:
-        # updatemenus 버튼 대신 Streamlit의 radio 토글을 차트 상단에 깔끔하게 배치
         market_tab = st.radio("수급 구분", ["코스피 수급", "코스닥 수급"], horizontal=True, label_visibility="collapsed", key="p5_market_tab")
         target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
-        
-        # 구글 드라이브 데이터와 세션 스테이트 누적 실시간 데이터 병합 (하이브리드)
+
+        today_date_str = datetime.now().strftime('%Y%m%d')
+
+        # ── GitHub에서 받아온 당일 수급 CSV (data_collector가 30분마다 누적 저장) ──
         df_line = pd.DataFrame()
         if df_intraday is not None and not df_intraday.empty:
-            df_line = df_intraday[df_intraday['Market'] == target_market].copy()
-            # 비정상적인 시간대 포맷(예: '20:26') 또는 정규장 외의 시간 필터링 (HH:MM 정규식)
+            df_tmp = df_intraday.copy()
+            # Date 컬럼이 있으면 오늘 날짜만 필터 (전일 데이터 제거)
+            if 'Date' in df_tmp.columns:
+                df_tmp = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
+            df_line = df_tmp[df_tmp['Market'] == target_market].copy()
+            # 정규장 시간(09:00~15:30)만 필터
             df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
-            
+
+        # ── 세션 누적 실시간 데이터 (GitHub 최신 커밋 이후 1분 단위 보완) ──
         accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
         if not accum_df.empty:
             accum_sub = accum_df[accum_df['Market'] == target_market].copy()
@@ -860,7 +876,7 @@ with row2_col2:
                     df_line = pd.concat([df_line, accum_sub], ignore_index=True)
                 else:
                     df_line = accum_sub
-                    
+
         if not df_line.empty:
             df_line = df_line.drop_duplicates(subset=['Time'], keep='last')
             df_line = df_line.sort_values('Time')

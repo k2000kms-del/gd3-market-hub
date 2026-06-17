@@ -883,58 +883,102 @@ def collect_market_summary(token, df_intraday):
 
 
 def collect_supply_intraday(token):
-    """KIS API: 코스피/코스닥 수급 시계열 데이터 수집 (1분 단위 누적)"""
-    print('⏱️ 수급 시계열 데이터 수집 중...')
-    now_str = datetime.now().strftime('%H:%M')
-    rows = []
+    """네이버 API: 코스피/코스닥 수급 일중 추이 데이터 수집 (30분 단위 누적)
 
-    for market, market_name, market_div in [
-        ('0001', '코스피', 'J'),
-        ('1001', '코스닥', 'Q'),
-    ]:
+    [방식]
+    - 네이버 m.stock trend API로 현재 시점 수급 스냅샷(억원) 획득
+    - 기존 당일 CSV를 GitHub raw URL에서 불러와 현재 시간 포인트를 append
+    - 새 날짜이면 자동으로 초기화 (날짜 컬럼으로 구분)
+    - GitHub Actions가 30분마다 실행하므로 하루 최대 13개 포인트(09:00~15:30) 적재
+    """
+    print('⏱️ 수급 시계열 데이터 수집 중 (네이버 API)...')
+    now = datetime.now()
+    now_str = now.strftime('%H:%M')
+    today_str = now.strftime('%Y%m%d')
+
+    def _parse_naver_supply(val_str):
+        """'+5,254' 형태의 네이버 수급 문자열을 억원 정수로 변환"""
         try:
-            headers = {
-                'Content-Type': 'application/json',
-                'authorization': f'Bearer {token}',
-                'appkey': APP_KEY,
-                'appsecret': APP_SECRET,
-                'tr_id': 'FHPUP02310000',
-            }
-            params = {
-                'FID_COND_MRKT_DIV_CODE': 'U',
-                'FID_INPUT_ISCD': market,
-                # 주말일 경우 가장 최근 금요일(또는 그 이전)을 타겟으로 함
-                'FID_INPUT_DATE_1': (datetime.now() - timedelta(days=max(0, datetime.now().weekday() - 4))).strftime('%Y%m%d'),
-            }
-            res = requests.get(
-                f'{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor-time-itemlist',
-                headers=headers, params=params
+            return int(str(val_str).replace(',', '').replace('+', '').strip())
+        except Exception:
+            return 0
+
+    # 1. 네이버 API로 현재 수급 스냅샷 획득
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    new_rows = []
+    for mkt_code, mkt_name in [('KOSPI', '코스피'), ('KOSDAQ', '코스닥')]:
+        try:
+            r = requests.get(
+                f'https://m.stock.naver.com/api/index/{mkt_code}/trend',
+                headers=headers, timeout=5
             )
-            output = res.json().get('output2', [])
-
-            for item in output:
-                # KIS API 시간 필드 파싱 (aspr_ddct_bsop_hour 가 4자리 시간 포맷임)
-                t = item.get('aspr_ddct_bsop_hour') or item.get('data_hour') or item.get('bsop_hour') or ''
-                t = str(t).strip()[:4]
-                time_str = f'{t[:2]}:{t[2:]}' if len(t) == 4 and t.isdigit() else now_str
-                
-                rows.append({
-                    'Time':             time_str,
-                    'Market':           market_name,
-                    'Foreign_Net':      int(item.get('frgn_ntby_tr_pbmn', 0)) // 100000000,
-                    'Individual_Net':   int(item.get('indv_ntby_tr_pbmn', 0)) // 100000000,
-                    'Institutional_Net': int(item.get('orgn_ntby_tr_pbmn', 0)) // 100000000,
+            if r.status_code == 200:
+                d = r.json()
+                # bizdate 확인: 오늘 날짜 데이터인지 검증
+                api_date = str(d.get('bizdate', today_str))
+                if api_date != today_str:
+                    print(f'  ⚠️ {mkt_name} 수급: API 날짜({api_date}) ≠ 오늘({today_str}), 스킵')
+                    continue
+                new_rows.append({
+                    'Date':             today_str,
+                    'Time':             now_str,
+                    'Market':           mkt_name,
+                    'Foreign_Net':      _parse_naver_supply(d.get('foreignValue', '0')),
+                    'Individual_Net':   _parse_naver_supply(d.get('personalValue', '0')),
+                    'Institutional_Net': _parse_naver_supply(d.get('institutionalValue', '0')),
                 })
+                print(f'  ✅ {mkt_name}: 외국인={d.get("foreignValue")} 개인={d.get("personalValue")} 기관={d.get("institutionalValue")}')
         except Exception as e:
-            print(f'  ❌ {market_name} 수급 조회 에러: {e}')
-            # 주말/에러 시 0을 넣지 않고 패스하여, 기존 금요일 데이터가 덮어씌워지지 않도록 함
-            pass
+            print(f'  ❌ {mkt_name} 네이버 수급 조회 실패: {e}')
 
-    df = pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=['Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net']
-    )
-    print(f'  → {len(df)}행')
-    return df
+    if not new_rows:
+        print('  ⚠️ 수급 스냅샷 데이터 없음 → 기존 파일 유지')
+        # 기존 파일이 있으면 그대로 반환
+        existing_path = os.path.join(DATA_DIR, 'df_supply_intraday.csv')
+        if os.path.exists(existing_path):
+            try:
+                df_existing = pd.read_csv(existing_path, encoding='utf-8-sig')
+                # 오늘 날짜 데이터만 유지
+                if 'Date' in df_existing.columns:
+                    df_existing = df_existing[df_existing['Date'].astype(str) == today_str]
+                return df_existing
+            except Exception:
+                pass
+        return pd.DataFrame(columns=['Date', 'Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+
+    df_new = pd.DataFrame(new_rows)
+
+    # 2. 기존 당일 누적 데이터 로드 (로컬 파일 우선, 없으면 GitHub raw URL)
+    df_existing = pd.DataFrame(columns=['Date', 'Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+    local_path = os.path.join(DATA_DIR, 'df_supply_intraday.csv')
+
+    if os.path.exists(local_path):
+        try:
+            df_loaded = pd.read_csv(local_path, encoding='utf-8-sig')
+            # 날짜 컬럼이 없는 구버전 파일이면 초기화
+            if 'Date' not in df_loaded.columns:
+                print('  ℹ️ 구버전 포맷 감지 → 오늘부터 새로 누적')
+            else:
+                # 오늘 날짜 데이터만 유지 (전일 데이터 자동 제거)
+                df_existing = df_loaded[df_loaded['Date'].astype(str) == today_str].copy()
+                print(f'  ✅ 기존 {len(df_existing)}개 포인트 로드 완료')
+        except Exception as e:
+            print(f'  ⚠️ 기존 파일 로드 실패: {e}')
+
+    # 3. 현재 시간 중복 제거 후 append
+    if not df_existing.empty:
+        # 이미 같은 시간·같은 시장 데이터가 있으면 덮어쓰기 (중복 방지)
+        df_existing = df_existing[
+            ~((df_existing['Time'] == now_str) &
+              (df_existing['Market'].isin(df_new['Market'].tolist())))
+        ]
+
+    df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    # 시간 순 정렬
+    df_combined = df_combined.sort_values(['Market', 'Time']).reset_index(drop=True)
+
+    print(f'  → 총 {len(df_combined)}개 포인트 (오늘 {today_str})')
+    return df_combined
 
 
 # ── 메인 실행 ────────────────────────────────────────────────────
