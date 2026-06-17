@@ -8,6 +8,7 @@ import requests
 import time
 from datetime import datetime
 
+@st.cache_data(ttl=30)  # 30초 캐시 (실시간이지만 너무 잦은 호출 방지)
 def fetch_naver_realtime_indices():
     """네이버 금융 API로 코스피/코스닥 실시간 지수 조회"""
     try:
@@ -55,6 +56,7 @@ def fetch_stock_realtime_investors(code_list):
     return res
 
 
+@st.cache_data(ttl=30)  # 30초 캐시
 def fetch_naver_realtime_supply():
     """네이버 금융 API로 코스피/코스닥 실시간 투자자 수급 조회"""
     res = {}
@@ -101,6 +103,38 @@ def get_stock_history(code: str):
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=60)  # 60초 캐시 — rerun마다 전체 시장 다운로드 방지 (핵심 병목)
+def fetch_live_stock_listing():
+    """FDR 코스피/코스닥 전체 시세 조회 (캐시 60초)"""
+    df_ks = fdr.StockListing('KOSPI')
+    df_kq = fdr.StockListing('KOSDAQ')
+    df_live = pd.concat([df_ks, df_kq], ignore_index=True)
+    for col in ['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']:
+        if col not in df_live.columns:
+            df_live[col] = 0
+    df_live = df_live[['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
+    df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
+    return df_live
+
+
+@st.cache_data(ttl=60)  # 60초 캐시 — 지수/환율 FDR 호출
+def fetch_live_indices():
+    """FDR 코스피/코스닥/환율/나스닥 최근 7일 데이터 조회 (캐시 60초)"""
+    start_date = (pd.Timestamp.now() - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
+    result = {}
+    for key in ['KS11', 'KQ11', 'USD/KRW']:
+        try:
+            result[key] = fdr.DataReader(key, start_date)
+        except Exception:
+            result[key] = pd.DataFrame()
+    try:
+        result['NQ=F'] = fdr.DataReader('NQ=F', start_date)
+    except Exception:
+        result['NQ=F'] = pd.DataFrame()
+    return result
+
+
+@st.cache_data(ttl=300)  # 5분 캐시 — GitHub raw 다운로드 반복 방지 (핵심 병목)
 def load_data():
     """GitHub 레포지토리 raw URL에서 CSV 읽기 (간단하고 인증 불필요)"""
     dfs = {}
@@ -162,30 +196,23 @@ for df_temp in [df_hd, df_q, df_m, df_summary, df_intraday]:
 if df_m is not None and not df_m.empty:
     with st.sidebar.status("🔄 실시간 시세 및 지수 반영 중...", expanded=False) as status:
         try:
-            # 1. 코스피 / 코스닥 실시간 시세 조회
+            # 1. 코스피 / 코스닥 실시간 시세 조회 (캐시 함수 사용 → rerun 시 소요 없음)
             st.write("📈 코스피/코스닥 전체 시세 조회 중...")
-            df_ks_live = fdr.StockListing('KOSPI')
-            df_kq_live = fdr.StockListing('KOSDAQ')
-            
-            if not df_ks_live.empty or not df_kq_live.empty:
-                df_live = pd.concat([df_ks_live, df_kq_live], ignore_index=True)
-                
-                # 필요한 컬럼만 추출 및 이름 통일 (Name 추가)
-                df_live = df_live[['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
-                df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
-                
+            df_live = fetch_live_stock_listing()
+
+            if not df_live.empty:
                 # 세션 스테이트에 전체 상장 종목 목록 백업 (검색용)
                 st.session_state['df_live_all'] = df_live
-                
+
                 # df_m의 기존 가격 관련 컬럼 드롭 후 머지 (Name 제외)
                 df_m_base = df_m.drop(columns=['Close', 'ChagesRatio', 'Volume', 'Amount'], errors='ignore')
                 df_m = df_m_base.merge(df_live.drop(columns=['Name'], errors='ignore'), on='Code', how='left')
-                
+
                 # 결측치 채우기
                 for col in ['Close', 'ChagesRatio', 'Volume', 'Amount']:
                     if col in df_m.columns:
                         df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
-                
+
                 st.write("✅ 전체 시장 시세 반영 완료")
             else:
                 st.write("⚠️ 실시간 시세 데이터를 가져오지 못했습니다.")
@@ -204,18 +231,14 @@ if df_m is not None and not df_m.empty:
                     st.session_state.sel_name = match_all.iloc[0]['Name']
             
         try:
-            # 2. 실시간 지수 및 환율 반영
+            # 2. 실시간 지수 및 환율 반영 (캐시 함수 사용 → rerun 시 소요 없음)
             if df_summary is not None and not df_summary.empty and '종목/종류' in df_summary.columns:
                 st.write("📊 주요 지수 및 환율 조회 중...")
-                start_date = (pd.Timestamp.now() - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
-                ks_df = fdr.DataReader('KS11', start_date)
-                kq_df = fdr.DataReader('KQ11', start_date)
-                usd_df = fdr.DataReader('USD/KRW', start_date)
-                try:
-                    nq_df = fdr.DataReader('NQ=F', start_date)
-                except Exception as nq_err:
-                    print(f"DEBUG: fetch NQ=F failed: {nq_err}")
-                    nq_df = pd.DataFrame()
+                live_idx = fetch_live_indices()
+                ks_df  = live_idx.get('KS11',    pd.DataFrame())
+                kq_df  = live_idx.get('KQ11',    pd.DataFrame())
+                usd_df = live_idx.get('USD/KRW', pd.DataFrame())
+                nq_df  = live_idx.get('NQ=F',    pd.DataFrame())
                 
                 def get_change_rate(df_temp):
                     if df_temp.empty:
