@@ -821,7 +821,7 @@ def collect_market_summary(token, df_intraday):
             return float(df['Change'].iloc[-1] * 100) if not df.empty and 'Change' in df.columns else 0
 
         def trend(v):
-            return '📈' if v > 0 else ('📉' if v < 0 else '➖')
+            return '▲' if v > 0 else ('▼' if v < 0 else '-')
 
         # 수급 데이터 (intraday 마지막 값)
         def get_supply(market):
@@ -887,14 +887,30 @@ def collect_supply_intraday(token):
 
     [방식]
     - 네이버 m.stock trend API로 현재 시점 수급 스냅샷(억원) 획득
-    - 기존 당일 CSV를 GitHub raw URL에서 불러와 현재 시간 포인트를 append
+    - 기존 당일 CSV를 로컬 파일에서 불러와 현재 시간 포인트를 append
     - 새 날짜이면 자동으로 초기화 (날짜 컬럼으로 구분)
     - GitHub Actions가 30분마다 실행하므로 하루 최대 13개 포인트(09:00~15:30) 적재
+    - 장외 시간(09:00~15:30 KST 외) 데이터는 저장하지 않음
     """
-    print('⏱️ 수급 시계열 데이터 수집 중 (네이버 API)...')
+    print('장중 수급 시계열 데이터 수집 중 (네이버 API)...')
     now = datetime.now()
     now_str = now.strftime('%H:%M')
     today_str = now.strftime('%Y%m%d')
+    h_m = now.hour * 100 + now.minute
+
+    # 장외 시간이면 기존 파일 유지 후 반환 (장 마감 후 GitHub Actions가 실행될 때)
+    if not ((900 <= h_m <= 1530)):
+        print(f'  ⚠️ 장외 시간({now_str}) - 수급 스냅샷 수집 생략')
+        existing_path = os.path.join(DATA_DIR, 'df_supply_intraday.csv')
+        if os.path.exists(existing_path):
+            try:
+                df_existing = pd.read_csv(existing_path, encoding='utf-8-sig')
+                if 'Date' in df_existing.columns:
+                    df_existing = df_existing[df_existing['Date'].astype(str) == today_str]
+                    return df_existing
+            except Exception:
+                pass
+        return pd.DataFrame(columns=['Date', 'Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
 
     def _parse_naver_supply(val_str):
         """'+5,254' 형태의 네이버 수급 문자열을 억원 정수로 변환"""
@@ -917,19 +933,19 @@ def collect_supply_intraday(token):
                 # bizdate 확인: 오늘 날짜 데이터인지 검증
                 api_date = str(d.get('bizdate', today_str))
                 if api_date != today_str:
-                    print(f'  ⚠️ {mkt_name} 수급: API 날짜({api_date}) ≠ 오늘({today_str}), 스킵')
+                    print(f'  {mkt_name} 수급: API 날짜({api_date}) != 오늘({today_str}), 스킵')
                     continue
                 new_rows.append({
-                    'Date':             today_str,
-                    'Time':             now_str,
-                    'Market':           mkt_name,
-                    'Foreign_Net':      _parse_naver_supply(d.get('foreignValue', '0')),
-                    'Individual_Net':   _parse_naver_supply(d.get('personalValue', '0')),
+                    'Date':              today_str,
+                    'Time':              now_str,
+                    'Market':            mkt_name,
+                    'Foreign_Net':       _parse_naver_supply(d.get('foreignValue', '0')),
+                    'Individual_Net':    _parse_naver_supply(d.get('personalValue', '0')),
                     'Institutional_Net': _parse_naver_supply(d.get('institutionalValue', '0')),
                 })
-                print(f'  ✅ {mkt_name}: 외국인={d.get("foreignValue")} 개인={d.get("personalValue")} 기관={d.get("institutionalValue")}')
+                print(f'  {mkt_name}: 외국인={d.get("foreignValue")} 개인={d.get("personalValue")} 기관={d.get("institutionalValue")}')
         except Exception as e:
-            print(f'  ❌ {mkt_name} 네이버 수급 조회 실패: {e}')
+            print(f'  {mkt_name} 네이버 수급 조회 실패: {e}')
 
     if not new_rows:
         print('  ⚠️ 수급 스냅샷 데이터 없음 → 기존 파일 유지')

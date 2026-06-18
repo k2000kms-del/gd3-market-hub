@@ -134,7 +134,7 @@ def fetch_live_indices():
     return result
 
 
-@st.cache_data(ttl=300)  # 5분 캐시 — GitHub raw 다운로드 반복 방지 (핵심 병목)
+@st.cache_data(ttl=60)  # 1분 캐시 — GitHub raw 다운로드 반복 방지 (최신 데이터 빠른 반영)
 def load_data():
     """GitHub 레포지토리 raw URL에서 CSV 읽기 (간단하고 인증 불필요)"""
     dfs = {}
@@ -165,8 +165,21 @@ df_m        = data['df_full_market.csv']
 df_summary  = data['df_market_summary.csv']
 df_intraday = data['df_supply_intraday.csv']
 
-# df_summary에 나스닥100 선물 지수 행이 없는 경우 추가
+# ── df_summary 컬럼명 정규화 (GitHub CSV 인코딩 깨짐 방지) ───────
+# utf-8-sig로 저장되어도 GitHub raw 다운로드 시 cp949 환경에서 깨질 수 있음
+SUMMARY_COLS = ['종목/종류', '지수', '등락률', '추이', '외국인(억)', '개인(억)', '기관(억)']
 if df_summary is not None and not df_summary.empty:
+    if len(df_summary.columns) == len(SUMMARY_COLS):
+        # 컬럼명이 깨졌는지 확인 (한글 깨짐 시 컬럼명에 이상한 문자 포함)
+        first_col = str(df_summary.columns[0])
+        if '종목' not in first_col:
+            df_summary.columns = SUMMARY_COLS
+    # 추이 컬럼의 이모지를 기호로 교체 (깨짐 방지)
+    if '추이' in df_summary.columns:
+        df_summary['추이'] = df_summary['추이'].astype(str).str.replace('📈', '▲').str.replace('📉', '▼').str.replace('➖', '-').str.replace('\U0001f4c8', '▲').str.replace('\U0001f4c9', '▼')
+
+# df_summary에 나스닥100 선물 지수 행이 없는 경우 추가
+if df_summary is not None and not df_summary.empty and '종목/종류' in df_summary.columns:
     has_nasdaq = df_summary['종목/종류'].str.contains('나스닥|선물|US Tech|us tech', case=False, na=False).any()
     if not has_nasdaq:
         new_row = pd.DataFrame([{
@@ -191,6 +204,19 @@ if not df_m.empty:
 for df_temp in [df_hd, df_q, df_m, df_summary, df_intraday]:
     if df_temp is not None and not df_temp.empty and 'Code' in df_temp.columns:
         df_temp['Code'] = df_temp['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+
+# ── df_supply_intraday Market 컬럼 정규화 ───────────────────────
+# GitHub Actions가 저장한 CSV의 한글이 깨질 경우를 대비한 보정
+if df_intraday is not None and not df_intraday.empty and 'Market' in df_intraday.columns:
+    market_map = {
+        'KOSPI': '코스피', 'kospi': '코스피',
+        'KOSDAQ': '코스닥', 'kosdaq': '코스닥',
+    }
+    # 이미 올바른 한글이면 그대로, 영어 코드면 한글로 변환
+    def _norm_market(v):
+        v = str(v).strip()
+        return market_map.get(v, v)  # 매핑 없으면 원본 유지
+    df_intraday['Market'] = df_intraday['Market'].apply(_norm_market)
 
 # ── 실시간 시세 반영 (FinanceDataReader) ───────────────────────
 if df_m is not None and not df_m.empty:
@@ -901,9 +927,17 @@ with row2_col2:
                 ))
     else:
         fig_p5 = go.Figure()
+        # 장 마감 후인지 확인
+        now_hm = datetime.now().hour * 100 + datetime.now().minute
+        if now_hm > 1530:
+            msg = '📊 오늘 장 마감 완료<br>내일 장 시작(09:00) 이후 실시간 추이 수집 재개'
+        else:
+            msg = '📡 수급 데이터 수집 중...<br>장 시작(09:00) 이후 표시됩니다'
         fig_p5.add_annotation(
-            text='📡 수급 데이터 수집 중...',
-            x=0.5, y=0.5, showarrow=False, font=dict(size=12, color='#888')
+            text=msg,
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=12, color='#888'),
+            align='center'
         )
     fig_p5.update_layout(
         height=265,  # Radio 높이 고려한 높이 보정
