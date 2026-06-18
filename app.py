@@ -986,42 +986,42 @@ with row2_col1:
 # ── [Panel 5] 코스피/코스닥 수급 (Line) ───────────────────────
 with row2_col2:
     st.markdown("##### 📈 수급 현황 (일중 추이)")
-    p5_has_data = (not df_intraday.empty and 'Time' in df_intraday.columns) or not st.session_state.get('df_intraday_accum', pd.DataFrame()).empty
-    if p5_has_data:
-        market_tab = st.radio("수급 구분", ["코스피 수급", "코스닥 수급"], horizontal=True, label_visibility="collapsed", key="p5_market_tab")
-        target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
+    market_tab = st.radio("수급 구분", ["코스피 수급", "코스닥 수급"], horizontal=True, label_visibility="collapsed", key="p5_market_tab")
+    target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
 
-        from datetime import timezone, timedelta
-        _KST = timezone(timedelta(hours=9))
-        today_date_str = datetime.now(_KST).strftime('%Y%m%d')
+    from datetime import timezone, timedelta
+    _KST = timezone(timedelta(hours=9))
+    _now_kst = datetime.now(_KST)
+    today_date_str = _now_kst.strftime('%Y%m%d')
+    now_hm = _now_kst.hour * 100 + _now_kst.minute
 
-        # ── GitHub에서 받아온 당일 수급 CSV (data_collector가 30분마다 누적 저장) ──
-        df_line = pd.DataFrame()
-        if df_intraday is not None and not df_intraday.empty:
-            df_tmp = df_intraday.copy()
-            # Date 컬럼이 있으면 오늘 날짜만 필터 (전일 데이터 제거)
-            if 'Date' in df_tmp.columns:
-                df_tmp = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
-            df_line = df_tmp[df_tmp['Market'] == target_market].copy()
-            # 정규장 시간(09:00~15:30)만 필터
-            df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
+    # ── GitHub에서 받아온 당일 수급 CSV (data_collector가 30분마다 누적 저장) ──
+    df_line = pd.DataFrame()
+    if df_intraday is not None and not df_intraday.empty:
+        df_tmp = df_intraday.copy()
+        # Date 컬럼이 있으면 오늘 날짜만 필터 (전일 데이터 제거)
+        if 'Date' in df_tmp.columns:
+            df_tmp = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
+        df_line = df_tmp[df_tmp['Market'] == target_market].copy()
+        # 정규장 시간(09:00~15:30)만 필터
+        df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
 
-        # ── 세션 누적 실시간 데이터 (GitHub 최신 커밋 이후 1분 단위 보완) ──
-        accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
-        if not accum_df.empty:
-            accum_sub = accum_df[accum_df['Market'] == target_market].copy()
-            accum_sub = accum_sub[accum_sub['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
-            if not accum_sub.empty:
-                if not df_line.empty:
-                    df_line = pd.concat([df_line, accum_sub], ignore_index=True)
-                else:
-                    df_line = accum_sub
+    # ── 세션 누적 실시간 데이터 (GitHub 최신 커밋 이후 1분 단위 보완) ──
+    accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
+    if not accum_df.empty:
+        accum_sub = accum_df[accum_df['Market'] == target_market].copy()
+        accum_sub = accum_sub[accum_sub['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
+        if not accum_sub.empty:
+            if not df_line.empty:
+                df_line = pd.concat([df_line, accum_sub], ignore_index=True)
+            else:
+                df_line = accum_sub
 
-        if not df_line.empty:
-            df_line = df_line.drop_duplicates(subset=['Time'], keep='last')
-            df_line = df_line.sort_values('Time')
-            
-        fig_p5 = go.Figure()
+    fig_p5 = go.Figure()
+    if not df_line.empty:
+        df_line = df_line.drop_duplicates(subset=['Time'], keep='last')
+        df_line = df_line.sort_values('Time')
+        
         def to_num(s):
             return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
@@ -1032,7 +1032,7 @@ with row2_col2:
         ]
 
         for col, name, color in col_cfg:
-            if not df_line.empty and col in df_line.columns:
+            if col in df_line.columns:
                 fig_p5.add_trace(go.Scatter(
                     x=df_line['Time'], y=to_num(df_line[col]),
                     name=name, mode='lines',
@@ -1040,9 +1040,6 @@ with row2_col2:
                     hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
                 ))
     else:
-        fig_p5 = go.Figure()
-        # 장 마감 후인지 확인
-        now_hm = datetime.now(timezone(timedelta(hours=9))).hour * 100 + datetime.now(timezone(timedelta(hours=9))).minute
         if now_hm > 1530:
             msg = '📊 오늘 장 마감 완료<br>내일 장 시작(09:00) 이후 실시간 추이 수집 재개'
         else:
@@ -1053,6 +1050,7 @@ with row2_col2:
             font=dict(size=12, color='#888'),
             align='center'
         )
+
     fig_p5.update_layout(
         height=265,  # Radio 높이 고려한 높이 보정
         template='plotly_dark',
