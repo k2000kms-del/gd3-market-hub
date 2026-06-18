@@ -893,7 +893,10 @@ def collect_supply_intraday(token):
     - 장외 시간(09:00~15:30 KST 외) 데이터는 저장하지 않음
     """
     print('장중 수급 시계열 데이터 수집 중 (네이버 API)...')
-    now = datetime.now()
+    # GitHub Actions는 UTC 환경 → KST(UTC+9)로 변환하여 한국 시장 시간 기준으로 저장
+    from datetime import timezone
+    now_utc = datetime.now(tz=timezone.utc)
+    now = now_utc + timedelta(hours=9)  # UTC → KST 변환
     now_str = now.strftime('%H:%M')
     today_str = now.strftime('%Y%m%d')
     h_m = now.hour * 100 + now.minute
@@ -1015,8 +1018,13 @@ def main():
         return
     print('  ✅ 토큰 발급 완료')
 
-    # 데이터 수집
-    print('\n📥 데이터 수집 시작...')
+    print('데이터 수집 시작...')
+    # GitHub Actions는 UTC 환경 → KST(UTC+9)로 변환하여 시장 시간 판단
+    from datetime import timezone
+    now_kst = datetime.now(tz=timezone.utc) + timedelta(hours=9)
+    kst_h_m = now_kst.hour * 100 + now_kst.minute
+    print(f'현재 KST: {now_kst.strftime("%Y-%m-%d %H:%M")} ({"장중" if 900 <= kst_h_m <= 1530 else "장외"})')
+
     df_full     = collect_full_market()
     df_intraday = collect_supply_intraday(token)
     df_hd       = collect_high_density(token, df_full)
