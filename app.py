@@ -424,8 +424,11 @@ if df_m is not None and not df_m.empty:
                     
                     # ── 당일 실시간 수급 세션 누적 적재 (1분마다 새 포인트 추가) ──
                     try:
-                        now_time = datetime.now().strftime('%H:%M')
-                        h_m = datetime.now().hour * 100 + datetime.now().minute
+                        from datetime import timezone, timedelta
+                        _KST = timezone(timedelta(hours=9))
+                        _now_kst = datetime.now(_KST)
+                        now_time = _now_kst.strftime('%H:%M')
+                        h_m = _now_kst.hour * 100 + _now_kst.minute
                         # 장중(09:00~15:30)이고, 마지막 누적 시각과 현재 시각이 다를 때만 추가
                         last_accum_time = st.session_state.get('last_accum_time', '')
                         if 900 <= h_m <= 1530 and now_time != last_accum_time:
@@ -945,7 +948,9 @@ with row2_col2:
         market_tab = st.radio("수급 구분", ["코스피 수급", "코스닥 수급"], horizontal=True, label_visibility="collapsed", key="p5_market_tab")
         target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
 
-        today_date_str = datetime.now().strftime('%Y%m%d')
+        from datetime import timezone, timedelta
+        _KST = timezone(timedelta(hours=9))
+        today_date_str = datetime.now(_KST).strftime('%Y%m%d')
 
         # ── GitHub에서 받아온 당일 수급 CSV (data_collector가 30분마다 누적 저장) ──
         df_line = pd.DataFrame()
@@ -994,7 +999,7 @@ with row2_col2:
     else:
         fig_p5 = go.Figure()
         # 장 마감 후인지 확인
-        now_hm = datetime.now().hour * 100 + datetime.now().minute
+        now_hm = datetime.now(timezone(timedelta(hours=9))).hour * 100 + datetime.now(timezone(timedelta(hours=9))).minute
         if now_hm > 1530:
             msg = '📊 오늘 장 마감 완료<br>내일 장 시작(09:00) 이후 실시간 추이 수집 재개'
         else:
