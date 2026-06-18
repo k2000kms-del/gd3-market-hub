@@ -8,6 +8,15 @@ import requests
 import time
 from datetime import datetime
 
+# ── Supabase 클라이언트 초기화 ────────────────────────────────
+supabase = None
+if "SUPABASE_URL" in st.secrets and "SUPABASE_ANON_KEY" in st.secrets:
+    try:
+        from supabase import create_client
+        supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_ANON_KEY"])
+    except Exception as e:
+        print(f"DEBUG: Supabase initialization failed: {e}")
+
 @st.cache_data(ttl=30)  # 30초 캐시 (실시간이지만 너무 잦은 호출 방지)
 def fetch_naver_realtime_indices():
     """네이버 금융 API로 코스피/코스닥 실시간 지수 조회"""
@@ -462,6 +471,20 @@ if df_m is not None and not df_m.empty:
                                         st.session_state.df_intraday_accum = pd.concat(
                                             [accum_df, new_row], ignore_index=True
                                         )
+                                        # Supabase에 실시간 데이터 upsert
+                                        if supabase:
+                                            try:
+                                                today_date_str = _now_kst.strftime('%Y%m%d')
+                                                supabase.table("supply_intraday").upsert({
+                                                    "date": today_date_str,
+                                                    "time": now_time,
+                                                    "market": mkt_name,
+                                                    "foreign_net": int(f_val),
+                                                    "individual_net": int(p_val),
+                                                    "institutional_net": int(i_val)
+                                                }).execute()
+                                            except Exception as db_err:
+                                                print(f"DEBUG: Supabase upsert failed: {db_err}")
                             # 코스피·코스닥 모두 처리 완료 후 누적 시각 갱신
                             st.session_state['last_accum_time'] = now_time
                     except Exception as accum_err:
@@ -545,10 +568,30 @@ try:
 except Exception as q_err:
     print(f"DEBUG: query parameter sync failed: {q_err}")
 
-today_str = datetime.now().strftime('%Y%m%d')
+from datetime import timezone, timedelta
+_KST = timezone(timedelta(hours=9))
+today_str = datetime.now(_KST).strftime('%Y%m%d')
 if 'accum_date' not in st.session_state or st.session_state.accum_date != today_str:
     st.session_state.accum_date = today_str
-    st.session_state.df_intraday_accum = pd.DataFrame(columns=['Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+    # Supabase에서 당일 축적된 수급 데이터 로드
+    loaded_df = pd.DataFrame(columns=['Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+    if supabase:
+        try:
+            res = supabase.table("supply_intraday").select("*").eq("date", today_str).execute()
+            if res.data:
+                records = []
+                for r in res.data:
+                    records.append({
+                        'Time': r['time'],
+                        'Market': r['market'],
+                        'Foreign_Net': int(r['foreign_net']),
+                        'Individual_Net': int(r['individual_net']),
+                        'Institutional_Net': int(r['institutional_net'])
+                    })
+                loaded_df = pd.DataFrame(records)
+        except Exception as db_err:
+            print(f"DEBUG: Supabase fetch failed: {db_err}")
+    st.session_state.df_intraday_accum = loaded_df
 
 
 
