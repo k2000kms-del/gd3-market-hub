@@ -105,32 +105,103 @@ def get_stock_history(code: str):
 
 @st.cache_data(ttl=60)  # 60초 캐시 — rerun마다 전체 시장 다운로드 방지 (핵심 병목)
 def fetch_live_stock_listing():
-    """FDR 코스피/코스닥 전체 시세 조회 (캐시 60초)"""
-    df_ks = fdr.StockListing('KOSPI')
-    df_kq = fdr.StockListing('KOSDAQ')
-    df_live = pd.concat([df_ks, df_kq], ignore_index=True)
-    for col in ['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']:
-        if col not in df_live.columns:
-            df_live[col] = 0
-    df_live = df_live[['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
-    df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
-    return df_live
+    """코스피/코스닥 전체 시세 조회.
+    1순위: FDR (로컬 환경)
+    2순위: GitHub CSV (Streamlit Cloud — KRX 차단 환경)
+    """
+    # 1순위: FDR 시도 (로컬에서는 정상 동작)
+    try:
+        df_ks = fdr.StockListing('KOSPI')
+        df_kq = fdr.StockListing('KOSDAQ')
+        if not df_ks.empty or not df_kq.empty:
+            df_live = pd.concat([df_ks, df_kq], ignore_index=True)
+            for col in ['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']:
+                if col not in df_live.columns:
+                    df_live[col] = 0
+            df_live = df_live[['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
+            df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
+            return df_live
+    except Exception:
+        pass
+
+    # 2순위: GitHub CSV 폴백 (Streamlit Cloud — KRX 차단 환경)
+    try:
+        url = f'{GITHUB_RAW_BASE}/df_full_market.csv'
+        df_live = pd.read_csv(url, encoding='utf-8-sig')
+        for col in ['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']:
+            if col not in df_live.columns:
+                df_live[col] = 0
+        df_live = df_live[['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
+        df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
+        return df_live
+    except Exception:
+        pass
+
+    return pd.DataFrame()
 
 
 @st.cache_data(ttl=60)  # 60초 캐시 — 지수/환율 FDR 호출
 def fetch_live_indices():
-    """FDR 코스피/코스닥/환율/나스닥 최근 7일 데이터 조회 (캐시 60초)"""
+    """코스피/코스닥/환율/나스닥 최근 데이터 조회.
+    1순위: FDR (로컬 환경)
+    2순위: 네이버 실시간 API (Streamlit Cloud — KRX 차단 환경)
+    """
     start_date = (pd.Timestamp.now() - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
     result = {}
-    for key in ['KS11', 'KQ11', 'USD/KRW']:
-        try:
-            result[key] = fdr.DataReader(key, start_date)
-        except Exception:
-            result[key] = pd.DataFrame()
+
+    # 1순위: FDR 시도
+    fdr_ok = False
     try:
-        result['NQ=F'] = fdr.DataReader('NQ=F', start_date)
+        ks = fdr.DataReader('KS11', start_date)
+        if not ks.empty:
+            result['KS11'] = ks
+            result['KQ11'] = fdr.DataReader('KQ11', start_date)
+            result['USD/KRW'] = fdr.DataReader('USD/KRW', start_date)
+            try:
+                result['NQ=F'] = fdr.DataReader('NQ=F', start_date)
+            except Exception:
+                result['NQ=F'] = pd.DataFrame()
+            fdr_ok = True
     except Exception:
-        result['NQ=F'] = pd.DataFrame()
+        pass
+
+    if fdr_ok:
+        return result
+
+    # 2순위: 네이버 실시간 API 폴백
+    result = {'KS11': pd.DataFrame(), 'KQ11': pd.DataFrame(), 'USD/KRW': pd.DataFrame(), 'NQ=F': pd.DataFrame()}
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(
+            'https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI,KOSDAQ',
+            headers=headers, timeout=5
+        )
+        if r.status_code == 200:
+            for item in r.json().get('datas', []):
+                code = item.get('itemCode', '')
+                price = float(str(item.get('closePrice', 0)).replace(',', ''))
+                chg_rate = float(item.get('fluctuationsRatio', 0))
+                prev = price / (1 + chg_rate / 100) if chg_rate != -100 else price
+                df_tmp = pd.DataFrame([{'Close': price, 'Change': chg_rate, 'Open': prev, 'High': price, 'Low': price}])
+                if code == 'KOSPI':
+                    result['KS11'] = df_tmp
+                elif code == 'KOSDAQ':
+                    result['KQ11'] = df_tmp
+    except Exception:
+        pass
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(
+            'https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD',
+            headers=headers, timeout=5
+        )
+        if r.status_code == 200:
+            d = r.json()[0]
+            price = float(d.get('basePrice', 0))
+            chg = float(d.get('changePrice', 0))
+            result['USD/KRW'] = pd.DataFrame([{'Close': price, 'Change': chg}])
+    except Exception:
+        pass
     return result
 
 
@@ -218,12 +289,11 @@ if df_intraday is not None and not df_intraday.empty and 'Market' in df_intraday
         return market_map.get(v, v)  # 매핑 없으면 원본 유지
     df_intraday['Market'] = df_intraday['Market'].apply(_norm_market)
 
-# ── 실시간 시세 반영 (FinanceDataReader) ───────────────────────
+# ── 실시간 시세 반영 (FDR → GitHub CSV 폴백) ─────────────────
 if df_m is not None and not df_m.empty:
     with st.sidebar.status("🔄 실시간 시세 및 지수 반영 중...", expanded=False) as status:
         try:
-            # 1. 코스피 / 코스닥 실시간 시세 조회 (캐시 함수 사용 → rerun 시 소요 없음)
-            st.write("📈 코스피/코스닥 전체 시세 조회 중...")
+            # 1. 전체 시세 조회 (FDR 실패 시 GitHub CSV 자동 폴백)
             df_live = fetch_live_stock_listing()
 
             if not df_live.empty:
@@ -238,12 +308,8 @@ if df_m is not None and not df_m.empty:
                 for col in ['Close', 'ChagesRatio', 'Volume', 'Amount']:
                     if col in df_m.columns:
                         df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
-
-                st.write("✅ 전체 시장 시세 반영 완료")
-            else:
-                st.write("⚠️ 실시간 시세 데이터를 가져오지 못했습니다.")
-        except Exception as e:
-            st.write(f"❌ 실시간 시세 반영 실패: {e}")
+        except Exception:
+            pass  # 실패해도 GitHub CSV 데이터로 자연스럽게 동작
             
         # URL 쿼리 파라미터 또는 세션 상태의 sel_code를 활용해 sel_name 한글명 보정
         if 'sel_code' in st.session_state and not df_m.empty:
