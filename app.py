@@ -653,6 +653,88 @@ if _search_q:
                 st.rerun()
 
 
+# ── 사이드바 맨 아래: Gemini AI 헬프 센터 ───────────────────
+st.sidebar.markdown('---')
+st.sidebar.markdown('### 🤖 Gemini AI 헬프 센터')
+st.sidebar.caption('대시보드 동작에 문제가 있거나 질문이 있는 경우, 구글 Gemini AI에게 물어보세요.')
+
+# 1. API Key 불러오기 및 입력창
+gemini_api_key = st.secrets.get("GEMINI_API_KEY", "")
+if not gemini_api_key:
+    gemini_api_key = st.sidebar.text_input(
+        "Gemini API Key 입력",
+        type="password",
+        placeholder="AIzaSy...",
+        help="Google AI Studio에서 발급받은 API Key를 입력하세요."
+    )
+
+# 2. 대시보드 상태 로그 첨부 여부
+attach_status = st.sidebar.checkbox("대시보드 상태 데이터 첨부", value=True, help="체크하면 대시보드 파일 크기, 시간대, 데이터 로드 상태 등의 디버깅 힌트가 질문과 함께 전송됩니다.")
+
+# 3. 질문 입력창
+gemini_prompt = st.sidebar.text_area(
+    "질문 입력",
+    placeholder="예: 5번 패널 수급 데이터가 왜 안 보이지? 어떻게 고칠 수 있어?",
+    label_visibility="collapsed"
+)
+
+if st.sidebar.button("Gemini에게 질문하기", use_container_width=True):
+    if not gemini_api_key:
+        st.sidebar.error("🔑 API Key를 먼저 입력해 주세요.")
+    elif not gemini_prompt.strip():
+        st.sidebar.warning("✏️ 질문을 입력해 주세요.")
+    else:
+        with st.sidebar.spinner("🤖 Gemini가 대답을 생성하는 중..."):
+            diag_info = ""
+            if attach_status:
+                import os
+                diag_info = "=== 대시보드 진단 데이터 ===\n"
+                diag_info += f"현재 KST 시간: {datetime.now(_KST).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                
+                # 파일 정보 검사
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                for f in DATA_FILES:
+                    fpath = os.path.join(base_dir, 'data', f)
+                    exists = os.path.exists(fpath)
+                    sz = os.path.getsize(fpath) if exists else 0
+                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime('%Y-%m-%d %H:%M') if exists else "N/A"
+                    diag_info += f"- {f}: 존재={exists}, 크기={sz}bytes, 최종수정={mtime}\n"
+                
+                # Supabase 및 세션 상태
+                diag_info += f"- Supabase 연동 상태: {'활성화(Client Ready)' if supabase is not None else '비활성화(Secrets 누락)'}\n"
+                accum_df_len = len(st.session_state.df_intraday_accum) if 'df_intraday_accum' in st.session_state else 0
+                diag_info += f"- 세션 수급 데이터 개수: {accum_df_len}행\n"
+                diag_info += "===========================\n\n"
+            
+            # API 호출
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_api_key}"
+            headers = {"Content-Type": "application/json"}
+            
+            system_instruction = (
+                "너는 주식 분석 대시보드 'GD 3.0 Market Hub'의 모니터링 및 기술 지원을 담당하는 AI 챗봇이야. "
+                "사용자가 대시보드 오류나 데이터 미출력 원인을 물으면, 첨부된 '대시보드 진단 데이터'를 면밀히 분석해서 원인을 찾아내고 구체적인 해결 가이드를 한국어로 제시해줘야 해. "
+                "코드는 파이썬, Streamlit으로 구현되어 있고 백그라운드 수집기는 GitHub Actions로 구동되며 데이터베이스는 Supabase를 사용해."
+            )
+            
+            full_prompt = f"{diag_info}질문: {gemini_prompt}"
+            payload = {
+                "contents": [{"parts": [{"text": full_prompt}]}],
+                "systemInstruction": {"parts": [{"text": system_instruction}]}
+            }
+            
+            try:
+                r = requests.post(url, json=payload, headers=headers, timeout=20)
+                if r.status_code == 200:
+                    ans = r.json()['candidates'][0]['content']['parts'][0]['text']
+                    st.sidebar.success("🤖 Gemini 답변:")
+                    st.sidebar.markdown(ans)
+                else:
+                    st.sidebar.error(f"❌ API 에러 (코드 {r.status_code}): {r.text[:200]}")
+            except Exception as ex:
+                st.sidebar.error(f"❌ 요청 중 오류 발생: {ex}")
+
+
+
 kr_scale = 'RdBu_r'
 
 # ── 클릭 이벤트 공통 핸들러 함수 ─────────────────────────────
