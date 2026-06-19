@@ -949,7 +949,7 @@ with row1_col1:
         
         df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
         
-        style_html = """<style>.tm-card:hover { transform: scale(0.97) !important; filter: brightness(1.2) !important; z-index: 10 !important; } .tm-card-wrapper:hover .tm-tooltip { visibility: visible !important; opacity: 1 !important; left: 105% !important; top: 50% !important; transform: translateY(-50%) !important; } .tm-column:last-child .tm-card-wrapper:hover .tm-tooltip { left: auto !important; right: 105% !important; }</style>"""
+        style_html = """<style>.tm-card:hover { transform: scale(0.97) !important; filter: brightness(1.2) !important; z-index: 10 !important; } .tm-card-wrapper { z-index: 1; } .tm-card-wrapper:hover { z-index: 999 !important; } .tm-card-wrapper:hover .tm-tooltip { visibility: visible !important; opacity: 1 !important; left: 105% !important; top: 50% !important; transform: translateY(-50%) !important; } .tm-column:last-child .tm-card-wrapper:hover .tm-tooltip { left: auto !important; right: 105% !important; }</style>"""
         st.markdown(style_html, unsafe_allow_html=True)
 
         df1['Abs_Net'] = df1['Total_Combined_Net'].abs()
