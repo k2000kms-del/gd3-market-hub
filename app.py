@@ -1043,7 +1043,7 @@ with row2_col2:
             if col in df_line.columns:
                 fig_p5.add_trace(go.Scatter(
                     x=df_line['Time'], y=to_num(df_line[col]),
-                    name=name, mode='lines',
+                    name=name, mode='lines+markers',
                     line=dict(color=color, width=2),
                     hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
                 ))
