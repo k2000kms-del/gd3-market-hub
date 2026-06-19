@@ -1030,6 +1030,8 @@ with row2_col2:
         df_line = df_line.drop_duplicates(subset=['Time'], keep='last')
         df_line = df_line.sort_values('Time')
         
+        df_line['Datetime'] = pd.to_datetime(today_date_str + ' ' + df_line['Time'], format='%Y%m%d %H:%M')
+        
         def to_num(s):
             return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
@@ -1042,7 +1044,7 @@ with row2_col2:
         for col, name, color in col_cfg:
             if col in df_line.columns:
                 fig_p5.add_trace(go.Scatter(
-                    x=df_line['Time'], y=to_num(df_line[col]),
+                    x=df_line['Datetime'], y=to_num(df_line[col]),
                     name=name, mode='lines+markers',
                     line=dict(color=color, width=2),
                     hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
@@ -1064,7 +1066,17 @@ with row2_col2:
         template='plotly_dark',
         margin=dict(t=10, b=10, l=10, r=10),
         hovermode='x unified',
-        font=dict(family='malgun gothic, nanum gothic, sans-serif')
+        font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+        xaxis=dict(
+            type='date',
+            range=[
+                pd.to_datetime(today_date_str + ' 09:00', format='%Y%m%d %H:%M'),
+                pd.to_datetime(today_date_str + ' 15:30', format='%Y%m%d %H:%M')
+            ],
+            tickformat='%H:%M',
+            dtick=1800000,  # 30분 단위
+            showgrid=True
+        )
     )
     st.plotly_chart(fig_p5, use_container_width=True)
 
