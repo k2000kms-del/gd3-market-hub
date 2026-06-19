@@ -180,26 +180,136 @@ def save_df_to_local(df, filename):
 
 # ── 데이터 수집 함수들 ───────────────────────────────────────────
 def collect_full_market():
-    """FinanceDataReader: 전체 시장 데이터 수집"""
+    """FinanceDataReader: 전체 시장 데이터 수집 (실패 시 네이버 금융 크롤링으로 폴백)"""
     print('📊 전체 시장 데이터 수집 중...')
+    df_all = pd.DataFrame()
+    use_naver_fallback = False
+    
     try:
-        today = datetime.now().strftime('%Y-%m-%d')
         df_ks = fdr.StockListing('KOSPI')
         df_kq = fdr.StockListing('KOSDAQ')
         df_all = pd.concat([df_ks, df_kq], ignore_index=True)
+        if df_all.empty:
+            use_naver_fallback = True
+    except Exception as e:
+        print(f'  ⚠️ FinanceDataReader 수집 실패: {e}. 네이버 금융 크롤링 폴백을 시도합니다.')
+        use_naver_fallback = True
 
-        # ── [종목 필터링] 부실/특수 종목 제외 ──
+    if use_naver_fallback:
+        try:
+            import re
+            from io import BytesIO
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            all_dfs = []
+            
+            for sosok, market_name in [(0, 'KOSPI'), (1, 'KOSDAQ')]:
+                page = 1
+                while True:
+                    url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+                    res = requests.get(url, headers=headers, timeout=10)
+                    if res.status_code != 200:
+                        break
+                    res.encoding = 'euc-kr'
+                    
+                    tltle_matches = re.findall(r'href="/item/main\.naver\?code=([0-9]{6})"\s+class="tltle">([^<]+)</a>', res.text)
+                    if not tltle_matches:
+                        break
+                    
+                    utf8_html = res.text.encode('utf-8')
+                    dfs = pd.read_html(BytesIO(utf8_html), encoding='utf-8')
+                    
+                    target_df = None
+                    for df in dfs:
+                        if '종목명' in df.columns:
+                            target_df = df
+                            break
+                            
+                    if target_df is None:
+                        break
+                    
+                    target_df = target_df.dropna(subset=['N'])
+                    target_df = target_df[pd.to_numeric(target_df['N'], errors='coerce').notna()]
+                    
+                    if len(target_df) != len(tltle_matches):
+                        min_len = min(len(target_df), len(tltle_matches))
+                        target_df = target_df.head(min_len)
+                        tltle_matches = tltle_matches[:min_len]
+                    
+                    target_df = target_df.copy()
+                    target_df['Symbol'] = [m[0] for m in tltle_matches] # FDR 규격 Symbol로 매핑
+                    target_df['Name'] = target_df['종목명']
+                    target_df['Market'] = market_name
+                    
+                    target_df['Close'] = pd.to_numeric(target_df['현재가'], errors='coerce').fillna(0)
+                    target_df['Marcap'] = pd.to_numeric(target_df['시가총액'], errors='coerce').fillna(0) * 100_000_000
+                    target_df['Stocks'] = pd.to_numeric(target_df['상장주식수'], errors='coerce').fillna(0) * 1000
+                    target_df['Volume'] = pd.to_numeric(target_df['거래량'], errors='coerce').fillna(0)
+                    
+                    def parse_ratio(val):
+                        if pd.isna(val):
+                            return 0.0
+                        val_str = str(val).replace('%', '').replace('+', '').strip()
+                        try:
+                            return float(val_str)
+                        except:
+                            return 0.0
+                    target_df['ChagesRatio'] = target_df['등락률'].apply(parse_ratio)
+                    
+                    def parse_changes(row):
+                        val = row.get('전일비', '')
+                        ratio = row.get('ChagesRatio', 0.0)
+                        if pd.isna(val):
+                            return 0
+                        val_str = str(val).replace(',', '').strip()
+                        nums = re.findall(r'\d+', val_str)
+                        if not nums:
+                            return 0
+                        num = int(nums[0])
+                        if ratio < 0:
+                            return -num
+                        return num
+                    target_df['Changes'] = target_df.apply(parse_changes, axis=1)
+                    target_df['Amount'] = target_df['Close'] * target_df['Volume']
+                    target_df['Open'] = target_df['Close']
+                    target_df['High'] = target_df['Close']
+                    target_df['Low'] = target_df['Close']
+                    target_df['ChangeCode'] = target_df['ChagesRatio'].apply(lambda r: '1' if r > 0 else ('2' if r < 0 else '3'))
+                    target_df['ISU_CD'] = ""
+                    target_df['Dept'] = ""
+                    target_df['MarketId'] = 'STK' if market_name == 'KOSPI' else 'KSQ'
+                    
+                    cols = ['Symbol', 'ISU_CD', 'Name', 'Market', 'Dept', 'Close', 'ChangeCode', 'Changes', 'ChagesRatio', 'Open', 'High', 'Low', 'Volume', 'Amount', 'Marcap', 'Stocks', 'MarketId']
+                    
+                    filtered_page_df = target_df[target_df['Marcap'] >= 50_000_000_000]
+                    if not filtered_page_df.empty:
+                        all_dfs.append(filtered_page_df[cols])
+                    
+                    min_marcap_in_page = target_df['Marcap'].min() / 100_000_000
+                    print(f"  [Naver Fallback] {market_name} Page {page} loaded. Min Marcap: {min_marcap_in_page:.1f}억원. Kept {len(filtered_page_df)} items.")
+                    
+                    if min_marcap_in_page < 500:
+                        break
+                        
+                    page += 1
+                    time.sleep(0.2)
+            
+            if all_dfs:
+                df_all = pd.concat(all_dfs, ignore_index=True)
+                print(f"  ✅ 네이버 금융 크롤링 폴백 완료: {len(df_all)}개 종목 수집됨.")
+            else:
+                print("  ❌ 네이버 금융 크롤링 폴백 실패: 수집된 데이터 없음.")
+        except Exception as ex:
+            print(f"  ❌ 네이버 금융 크롤링 폴백 중 예외 발생: {ex}")
+
+    # ── [종목 필터링] 부실/특수 종목 제외 ──
+    if not df_all.empty:
         if 'Name' in df_all.columns:
-            # 스팩, ETN, ETF, 우선주(우, 우B 등), 리츠, 인프라 등 제외
             junk_patterns = '스팩|SPAC|ETN|ETF|제[0-9]+호|우$|우[A-Z]$|리츠|인프라'
             df_all = df_all[~df_all['Name'].str.contains(junk_patterns, regex=True, na=False)]
         
         if 'Volume' in df_all.columns:
-            # 거래량 0인 종목 제외 (거래정지 등)
             df_all = df_all[df_all['Volume'] > 0]
 
-        # [퀄리티 필터] 시가총액 500억원 미만 극소형주 제외
-        # 선행 매수 목적상 재무 건전성이 일정 수준 이상인 종목만 대상으로 함
         if 'Marcap' in df_all.columns:
             df_all = df_all[pd.to_numeric(df_all['Marcap'], errors='coerce').fillna(0) >= 50_000_000_000]
 
@@ -216,10 +326,9 @@ def collect_full_market():
             if col in df_all.columns:
                 df_all[col] = pd.to_numeric(df_all[col], errors='coerce').fillna(0)
 
-        print(f'  → {len(df_all)}개 종목')
+        print(f'  → {len(df_all)}개 종목 최종 정제 완료')
         return df_all
-    except Exception as e:
-        print(f'  ❌ 오류: {e}')
+    else:
         return pd.DataFrame()
 
 
