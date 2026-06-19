@@ -734,6 +734,107 @@ if st.sidebar.button("Gemini에게 질문하기", use_container_width=True):
                 st.sidebar.error(f"❌ 요청 중 오류 발생: {ex}")
 
 
+# ── 사이드바 맨 아래: 모바일 자가 복구 도구 ─────────────────
+st.sidebar.markdown('---')
+st.sidebar.markdown('### 🛠️ 모바일 자가 복구 도구')
+st.sidebar.caption('외부 모바일 환경에서 데이터 누락이나 오류 발생 시 직접 안전하게 조치하는 기능입니다.')
+
+# 1. 실시간 데이터 즉시 동기화 버튼
+if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_width=True, help="클릭 시 즉시 네이버 금융 API에서 최신 수급 데이터를 긁어와 Supabase DB에 강제 적재하고 차트를 새로고침합니다."):
+    with st.sidebar.spinner("⚡ 수급 데이터 수집 및 DB 적재 중..."):
+        try:
+            from datetime import timezone, timedelta
+            _KST = timezone(timedelta(hours=9))
+            _now_kst = datetime.now(_KST)
+            now_time = _now_kst.strftime('%H:%M')
+            today_date_str = _now_kst.strftime('%Y%m%d')
+            
+            # 실시간 수급 크롤링
+            nv_supply = fetch_naver_realtime_supply()
+            if not nv_supply:
+                st.sidebar.error("❌ 네이버 실시간 수급 API 조회 실패")
+            else:
+                success_count = 0
+                for mkt_name in ['코스피', '코스닥']:
+                    if mkt_name in nv_supply:
+                        m_sup = nv_supply[mkt_name]
+                        def clean_sup(val_str):
+                            try:
+                                return int(str(val_str).replace(',', '').replace('+', '').strip())
+                            except:
+                                return 0
+                        f_val = clean_sup(m_sup.get('외국인', 0))
+                        p_val = clean_sup(m_sup.get('개인', 0))
+                        i_val = clean_sup(m_sup.get('기관', 0))
+                        
+                        # Supabase에 강제 upsert (기존 데이터 삭제 없이 업데이트)
+                        if supabase:
+                            supabase.table("supply_intraday").upsert({
+                                "date": today_date_str,
+                                "time": now_time,
+                                "market": mkt_name,
+                                "foreign_net": int(f_val),
+                                "individual_net": int(p_val),
+                                "institutional_net": int(i_val)
+                            }).execute()
+                            success_count += 1
+                
+                # Supabase에서 당일 전체 데이터 다시 로드해 세션 갱신
+                if supabase:
+                    res = supabase.table("supply_intraday").select("*").eq("date", today_date_str).execute()
+                    if res.data:
+                        records = []
+                        for r in res.data:
+                            records.append({
+                                'Time': r['time'],
+                                'Market': r['market'],
+                                'Foreign_Net': int(r['foreign_net']),
+                                'Individual_Net': int(r['individual_net']),
+                                'Institutional_Net': int(r['institutional_net'])
+                            })
+                        st.session_state.df_intraday_accum = pd.DataFrame(records)
+                
+                st.sidebar.success(f"✅ {now_time} 시점 수급 데이터 강제 동기화 성공!")
+                st.rerun()
+        except Exception as sync_err:
+            st.sidebar.error(f"❌ 동기화 실패: {sync_err}")
+
+# 2. GitHub Actions 원격 재기동 버튼
+st.sidebar.markdown('<br>', unsafe_allow_html=True)
+gh_token = st.sidebar.text_input(
+    "GitHub Token (PAT) 입력",
+    type="password",
+    placeholder="github_pat_...",
+    help="GitHub Actions를 강제 가동하려면 Personal Access Token(repo 권한 필요)이 필요합니다."
+)
+
+if st.sidebar.button("🔄 깃허브 수집기 원격 재가동", use_container_width=True, help="깃허브 API를 호출하여 백그라운드 Actions 데이터 수집기(collect_data.yml)를 강제로 즉시 가동시킵니다."):
+    if not gh_token:
+        st.sidebar.error("🔑 GitHub Token을 먼저 입력해 주세요.")
+    else:
+        with st.sidebar.spinner("🔄 GitHub Actions 실행 신호 전송 중..."):
+            try:
+                owner = "k2000kms-del"
+                repo = "gd3-market-hub"
+                workflow_id = "collect_data.yml"
+                
+                url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"
+                headers = {
+                    "Authorization": f"Bearer {gh_token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28"
+                }
+                payload = {"ref": "main"}
+                
+                r = requests.post(url, json=payload, headers=headers, timeout=20)
+                if r.status_code == 204:
+                    st.sidebar.success("✅ 깃허브 원격 수집기 가동 성공! (약 2~3분 소요)")
+                else:
+                    st.sidebar.error(f"❌ 깃허브 API 오류 (코드 {r.status_code}): {r.text[:200]}")
+            except Exception as gh_err:
+                st.sidebar.error(f"❌ 원격 제어 실패: {gh_err}")
+
+
 
 kr_scale = 'RdBu_r'
 
