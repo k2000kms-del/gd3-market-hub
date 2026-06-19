@@ -707,7 +707,7 @@ if st.sidebar.button("Gemini에게 질문하기", use_container_width=True):
                 diag_info += "===========================\n\n"
             
             # API 호출
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={gemini_api_key}"
             headers = {"Content-Type": "application/json"}
             
             system_instruction = (
