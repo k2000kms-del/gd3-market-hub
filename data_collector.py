@@ -21,6 +21,18 @@ APP_KEY    = os.environ.get('KIS_APP_KEY', '')
 APP_SECRET = os.environ.get('KIS_APP_SECRET', '')
 URL_BASE   = 'https://openapi.koreainvestment.com:9443'
 
+# ── Supabase 설정 (환경변수에서 읽기) ───────────────────────────
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+SUPABASE_ANON_KEY = os.environ.get('SUPABASE_ANON_KEY', '')
+supabase = None
+if SUPABASE_URL and SUPABASE_ANON_KEY:
+    try:
+        from supabase import create_client
+        supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        print("  ✅ Supabase client initialized successfully")
+    except Exception as e:
+        print(f"  ⚠️ Supabase initialization failed: {e}")
+
 # ── 로컬 저장 경로 (레포지토리 data/ 폴더) ──────────────────────
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
@@ -1127,6 +1139,23 @@ def collect_supply_intraday(token):
     df_combined = pd.concat([df_existing, df_new], ignore_index=True)
     # 시간 순 정렬
     df_combined = df_combined.sort_values(['Market', 'Time']).reset_index(drop=True)
+
+    # 4. Supabase DB에 실시간 스냅샷 upsert
+    if supabase and not df_new.empty:
+        try:
+            print("  ⚡ Supabase DB에 실시간 수급 스냅샷 적재 중...")
+            for _, row in df_new.iterrows():
+                supabase.table("supply_intraday").upsert({
+                    "date": str(row['Date']),
+                    "time": str(row['Time']),
+                    "market": str(row['Market']),
+                    "foreign_net": int(row['Foreign_Net']),
+                    "individual_net": int(row['Individual_Net']),
+                    "institutional_net": int(row['Institutional_Net'])
+                }).execute()
+            print("  ✅ Supabase DB 적재 성공")
+        except Exception as db_err:
+            print(f"  ❌ Supabase upsert 실패: {db_err}")
 
     print(f'  → 총 {len(df_combined)}개 포인트 (오늘 {today_str})')
     return df_combined
