@@ -198,7 +198,6 @@ def collect_full_market():
     if use_naver_fallback:
         try:
             import re
-            from io import BytesIO
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             all_dfs = []
             
@@ -211,73 +210,80 @@ def collect_full_market():
                         break
                     res.encoding = 'euc-kr'
                     
-                    tltle_matches = re.findall(r'href="/item/main\.naver\?code=([0-9]{6})"\s+class="tltle">([^<]+)</a>', res.text)
-                    if not tltle_matches:
+                    # tr onMouseOver가 포함된 행들만 추출 (대소문자 무시)
+                    tr_blocks = re.findall(r'<tr\s+onMouseOver="mouseOver\(this\)"[^>]*>(.*?)</tr>', res.text, re.DOTALL | re.IGNORECASE)
+                    if not tr_blocks:
                         break
                     
-                    utf8_html = res.text.encode('utf-8')
-                    dfs = pd.read_html(BytesIO(utf8_html), encoding='utf-8')
-                    
-                    target_df = None
-                    for df in dfs:
-                        if '종목명' in df.columns:
-                            target_df = df
-                            break
+                    page_rows = []
+                    for tr in tr_blocks:
+                        code_match = re.search(r'code=([0-9]{6})', tr)
+                        if not code_match:
+                            continue
+                        code = code_match.group(1)
+                        
+                        tds = re.findall(r'<td[^>]*>(.*?)</td>', tr, re.DOTALL)
+                        td_texts = [re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', td)).strip() for td in tds]
+                        
+                        if len(td_texts) < 10:
+                            continue
                             
-                    if target_df is None:
-                        break
-                    
-                    target_df = target_df.dropna(subset=['N'])
-                    target_df = target_df[pd.to_numeric(target_df['N'], errors='coerce').notna()]
-                    
-                    if len(target_df) != len(tltle_matches):
-                        min_len = min(len(target_df), len(tltle_matches))
-                        target_df = target_df.head(min_len)
-                        tltle_matches = tltle_matches[:min_len]
-                    
-                    target_df = target_df.copy()
-                    target_df['Symbol'] = [m[0] for m in tltle_matches] # FDR 규격 Symbol로 매핑
-                    target_df['Name'] = target_df['종목명']
-                    target_df['Market'] = market_name
-                    
-                    target_df['Close'] = pd.to_numeric(target_df['현재가'], errors='coerce').fillna(0)
-                    target_df['Marcap'] = pd.to_numeric(target_df['시가총액'], errors='coerce').fillna(0) * 100_000_000
-                    target_df['Stocks'] = pd.to_numeric(target_df['상장주식수'], errors='coerce').fillna(0) * 1000
-                    target_df['Volume'] = pd.to_numeric(target_df['거래량'], errors='coerce').fillna(0)
-                    
-                    def parse_ratio(val):
-                        if pd.isna(val):
-                            return 0.0
-                        val_str = str(val).replace('%', '').replace('+', '').strip()
+                        name = td_texts[1]
+                        
+                        close_val = pd.to_numeric(td_texts[2].replace(',', ''), errors='coerce')
+                        close_val = 0.0 if pd.isna(close_val) else float(close_val)
+                        
+                        ratio_val = 0.0
+                        ratio_str = td_texts[4].replace('%', '').replace('+', '').strip()
                         try:
-                            return float(val_str)
+                            ratio_val = float(ratio_str)
                         except:
-                            return 0.0
-                    target_df['ChagesRatio'] = target_df['등락률'].apply(parse_ratio)
+                            pass
+                            
+                        changes_txt = td_texts[3]
+                        changes_val = 0
+                        nums = re.findall(r'\d+', changes_txt.replace(',', ''))
+                        if nums:
+                            try:
+                                changes_val = int(nums[0])
+                                if ratio_val < 0:
+                                    changes_val = -changes_val
+                            except:
+                                pass
+                                
+                        marcap_val = pd.to_numeric(td_texts[6].replace(',', ''), errors='coerce')
+                        marcap_val = 0.0 if pd.isna(marcap_val) else float(marcap_val) * 100_000_000
+                        
+                        stocks_val = pd.to_numeric(td_texts[7].replace(',', ''), errors='coerce')
+                        stocks_val = 0.0 if pd.isna(stocks_val) else float(stocks_val) * 1000
+                        
+                        volume_val = pd.to_numeric(td_texts[9].replace(',', ''), errors='coerce')
+                        volume_val = 0.0 if pd.isna(volume_val) else float(volume_val)
+                        
+                        page_rows.append({
+                            'Symbol': code,
+                            'ISU_CD': "",
+                            'Name': name,
+                            'Market': market_name,
+                            'Dept': "",
+                            'Close': close_val,
+                            'ChangeCode': '1' if ratio_val > 0 else ('2' if ratio_val < 0 else '3'),
+                            'Changes': changes_val,
+                            'ChagesRatio': ratio_val,
+                            'Open': close_val,
+                            'High': close_val,
+                            'Low': close_val,
+                            'Volume': volume_val,
+                            'Amount': close_val * volume_val,
+                            'Marcap': marcap_val,
+                            'Stocks': stocks_val,
+                            'MarketId': 'STK' if market_name == 'KOSPI' else 'KSQ'
+                        })
                     
-                    def parse_changes(row):
-                        val = row.get('전일비', '')
-                        ratio = row.get('ChagesRatio', 0.0)
-                        if pd.isna(val):
-                            return 0
-                        val_str = str(val).replace(',', '').strip()
-                        nums = re.findall(r'\d+', val_str)
-                        if not nums:
-                            return 0
-                        num = int(nums[0])
-                        if ratio < 0:
-                            return -num
-                        return num
-                    target_df['Changes'] = target_df.apply(parse_changes, axis=1)
-                    target_df['Amount'] = target_df['Close'] * target_df['Volume']
-                    target_df['Open'] = target_df['Close']
-                    target_df['High'] = target_df['Close']
-                    target_df['Low'] = target_df['Close']
-                    target_df['ChangeCode'] = target_df['ChagesRatio'].apply(lambda r: '1' if r > 0 else ('2' if r < 0 else '3'))
-                    target_df['ISU_CD'] = ""
-                    target_df['Dept'] = ""
-                    target_df['MarketId'] = 'STK' if market_name == 'KOSPI' else 'KSQ'
-                    
+                    if not page_rows:
+                        break
+                        
+                    target_df = pd.DataFrame(page_rows)
                     cols = ['Symbol', 'ISU_CD', 'Name', 'Market', 'Dept', 'Close', 'ChangeCode', 'Changes', 'ChagesRatio', 'Open', 'High', 'Low', 'Volume', 'Amount', 'Marcap', 'Stocks', 'MarketId']
                     
                     filtered_page_df = target_df[target_df['Marcap'] >= 50_000_000_000]
