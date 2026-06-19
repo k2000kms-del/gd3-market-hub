@@ -344,19 +344,27 @@ if df_m is not None and not df_m.empty:
                 def get_change_rate(df_temp):
                     if df_temp.empty:
                         return 0.0
+                    if 'Close' in df_temp.columns:
+                        df_temp = df_temp.dropna(subset=['Close'])
+                    if df_temp.empty:
+                        return 0.0
+                        
                     for col in ['Change', 'Chg', 'Chg_Rate', 'Changes']:
                         if col in df_temp.columns:
                             val = df_temp[col].iloc[-1]
-                            if abs(val) > 1.0:
-                                return val
-                            return val * 100
+                            if pd.notna(val):
+                                if abs(val) > 1.0:
+                                    return val
+                                return val * 100
+                                
                     if 'Close' in df_temp.columns and len(df_temp) >= 2:
                         prev_close = df_temp['Close'].iloc[-2]
-                        if prev_close != 0:
+                        if prev_close != 0 and pd.notna(prev_close):
                             return (df_temp['Close'].iloc[-1] - prev_close) / prev_close * 100
+                            
                     try:
                         val = df_temp.iloc[-1, -1]
-                        if isinstance(val, (int, float)):
+                        if isinstance(val, (int, float)) and pd.notna(val):
                             if abs(val) > 1.0:
                                 return val
                             return val * 100

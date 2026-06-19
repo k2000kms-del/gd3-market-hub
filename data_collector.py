@@ -930,10 +930,27 @@ def collect_market_summary(token, df_intraday):
         df_usd = fdr.DataReader('USD/KRW', start_date)
 
         def last(df, col='Close'):
-            return float(df[col].iloc[-1]) if not df.empty and col in df.columns else 0
+            if df.empty:
+                return 0
+            if col in df.columns:
+                df_clean = df.dropna(subset=[col])
+                if not df_clean.empty:
+                    return float(df_clean[col].iloc[-1])
+            return 0
 
         def chg(df):
-            return float(df['Change'].iloc[-1] * 100) if not df.empty and 'Change' in df.columns else 0
+            if df.empty:
+                return 0
+            df_clean = df.dropna(subset=['Close'])
+            if 'Change' in df_clean.columns:
+                val = df_clean['Change'].iloc[-1]
+                if pd.notna(val):
+                    return float(val * 100)
+            if 'Close' in df_clean.columns and len(df_clean) >= 2:
+                prev_close = df_clean['Close'].iloc[-2]
+                if prev_close != 0 and pd.notna(prev_close):
+                    return float((df_clean['Close'].iloc[-1] - prev_close) / prev_close * 100)
+            return 0
 
         def trend(v):
             return '▲' if v > 0 else ('▼' if v < 0 else '-')
