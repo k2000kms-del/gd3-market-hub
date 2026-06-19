@@ -801,12 +801,16 @@ if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_w
 
 # 2. GitHub Actions 원격 재기동 버튼
 st.sidebar.markdown('<br>', unsafe_allow_html=True)
-gh_token = st.sidebar.text_input(
-    "GitHub Token (PAT) 입력",
-    type="password",
-    placeholder="github_pat_...",
-    help="GitHub Actions를 강제 가동하려면 Personal Access Token(repo 권한 필요)이 필요합니다."
-)
+gh_token = st.secrets.get("GITHUB_TOKEN", "")
+
+# secrets에 토큰이 정의되어 있지 않은 경우에만 입력 필드 노출
+if not gh_token:
+    gh_token = st.sidebar.text_input(
+        "GitHub Token (PAT) 입력",
+        type="password",
+        placeholder="github_pat_...",
+        help="GitHub Actions를 강제 가동하려면 Personal Access Token(repo 권한 필요)이 필요합니다."
+    )
 
 if st.sidebar.button("🔄 깃허브 수집기 원격 재가동", use_container_width=True, help="깃허브 API를 호출하여 백그라운드 Actions 데이터 수집기(collect_data.yml)를 강제로 즉시 가동시킵니다."):
     if not gh_token:
