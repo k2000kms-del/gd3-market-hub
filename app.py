@@ -844,23 +844,9 @@ if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_w
         except Exception as sync_err:
             st.sidebar.error(f"❌ 동기화 실패: {sync_err}")
 
-# KIS API Key 입력 (secrets에 없을 때만 노출)
+# KIS API Key 정보 (st.secrets 참조)
 kis_key = st.secrets.get("KIS_APP_KEY", "")
 kis_sec = st.secrets.get("KIS_APP_SECRET", "")
-
-if not kis_key:
-    kis_key = st.sidebar.text_input(
-        "KIS APP KEY 입력 (선택)",
-        type="password",
-        placeholder="KIS API Key",
-        help="수급 데이터 기반 퀀트 갱신을 위해 필요합니다. 미입력 시 기술적 지표 위주로 계산됩니다."
-    )
-if not kis_sec:
-    kis_sec = st.sidebar.text_input(
-        "KIS APP SECRET 입력 (선택)",
-        type="password",
-        placeholder="KIS API Secret"
-    )
 
 # 1-2. 실시간 퀀트 데이터 즉시 갱신 버튼
 if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
