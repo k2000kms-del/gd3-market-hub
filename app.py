@@ -1022,14 +1022,12 @@ try:
 except Exception as stale_err:
     print(f"DEBUG: 퀀트 신선도 체크 에러: {stale_err}")
 
-st.markdown("### 📊 실시간 시장 종합 대시보드")
+st.markdown(f"### 📊 실시간 시장 종합 대시보드 <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time})</span>", unsafe_allow_html=True)
 
 if is_stale:
     st.warning(f"⚠️ **현재 퀀트 데이터가 최종 장 마감 기준이 아닙니다.** (최종 업데이트: `{quant_time}`)\n\n"
                f"장 마감 이후의 최종 퀀트 스코어와 차트 형태를 반영하려면 사이드바 하단 **[모바일 자가 복구 도구]**에서 "
                f"**'실시간 퀀트 데이터 즉시 갱신'** 버튼을 실행하시거나 **'깃허브 수집기 원격 재가동'**을 실행해 주세요.")
-else:
-    st.info(f"✅ **퀀트 데이터 신선도 양호** (최종 업데이트: `{quant_time}`)")
 
 st.caption("차트 내부의 막대(종목)를 클릭하면, 아래에서 즉시 해당 종목의 일봉 차트를 볼 수 있습니다.")
 
