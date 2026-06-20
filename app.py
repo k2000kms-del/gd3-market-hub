@@ -216,37 +216,88 @@ def fetch_live_indices():
 
 @st.cache_data(ttl=60)  # 1분 캐시 — 로컬 우선 로드 및 원격 폴백 지원
 def load_data():
-    """로컬 CSV 파일을 최우선으로 시도하고, 없거나 실패 시 GitHub 원격 저장소에서 읽어옴 (Local First, Remote Fallback)"""
+    """
+    로컬 파일과 원격(GitHub Raw) 파일의 Last-Modified 시간을 체크하여
+    원격 파일이 로컬 파일보다 더 최신이거나 로컬 파일이 없는 경우 자동으로 원격에서 최신 데이터를 다운로드하여 덮어씁니다.
+    """
     import os
     import urllib.request
     from datetime import datetime, timezone, timedelta
+    from email.utils import parsedate_to_datetime
     
     dfs = {}
     update_times = {}
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
     for fname in DATA_FILES:
-        loaded = False
-        mtime = None
-        # 1. 로컬 디렉토리(data/) 내의 파일 시도
         local_path = os.path.join(base_dir, 'data', fname)
+        url = f'{GITHUB_RAW_BASE}/{fname}'
+        
+        # ── (1) 원격 파일 최종 수정 시각 확인 (HTTP HEAD) ──
+        remote_mtime = None
+        try:
+            req = urllib.request.Request(url, method='HEAD')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                last_mod = resp.info().get('Last-Modified')
+                if last_mod:
+                    dt = parsedate_to_datetime(last_mod)
+                    remote_mtime = dt.astimezone(timezone(timedelta(hours=9))) # KST
+        except Exception as e:
+            print(f"DEBUG: 원격 {fname} 헤더 조회 실패: {e}")
+            
+        # ── (2) 로컬 파일 수정 시각 확인 ──
+        local_mtime = None
+        if os.path.exists(local_path):
+            try:
+                mtime_ts = os.path.getmtime(local_path)
+                local_mtime = datetime.fromtimestamp(mtime_ts).astimezone(timezone(timedelta(hours=9)))
+            except Exception:
+                pass
+                
+        # ── (3) 자동 동기화 여부 판단: 원격이 더 최신이거나 로컬 파일이 없으면 다운로드 ──
+        should_download = False
+        if not os.path.exists(local_path):
+            should_download = True
+        elif remote_mtime and local_mtime:
+            # 원격 수정 시간이 로컬 수정 시간보다 10초 이상 최신일 때
+            if remote_mtime > local_mtime + timedelta(seconds=10):
+                should_download = True
+            # 또는 로컬 데이터가 현재 시간보다 30분 이상 낡았고 원격 데이터가 더 최신일 때
+            elif datetime.now(timezone(timedelta(hours=9))) - local_mtime > timedelta(minutes=30):
+                if remote_mtime > local_mtime:
+                    should_download = True
+                    
+        # ── (4) 동기화 실행 (원격 -> 로컬 다운로드) ──
+        if should_download:
+            try:
+                print(f"DEBUG: {fname} 최신 데이터 원격 자동 동기화 실행 중...")
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                urllib.request.urlretrieve(url, local_path)
+                # 다운로드 직후 로컬 시간 갱신
+                mtime_ts = os.path.getmtime(local_path)
+                local_mtime = datetime.fromtimestamp(mtime_ts).astimezone(timezone(timedelta(hours=9)))
+            except Exception as download_err:
+                print(f"DEBUG: {fname} 자동 동기화 실패 (기존 로컬 데이터로 Fallback): {download_err}")
+                
+        # ── (5) 최종 데이터 로드 ──
+        loaded = False
+        final_mtime_str = None
+        
+        # 로컬 우선 로드
         if os.path.exists(local_path):
             for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
                 try:
                     dfs[fname] = pd.read_csv(local_path, encoding=enc)
                     loaded = True
-                    # 로컬 파일 최종 수정 시각 획득 (KST)
                     mtime_ts = os.path.getmtime(local_path)
-                    mtime = datetime.fromtimestamp(mtime_ts).strftime('%Y-%m-%d %H:%M:%S')
+                    final_mtime_str = datetime.fromtimestamp(mtime_ts).strftime('%Y-%m-%d %H:%M:%S')
                     break
-                except Exception as local_err:
-                    print(f"DEBUG: 로컬 {fname} ({enc}) 로드 실패: {local_err}")
+                except Exception:
                     continue
-        
-        # 2. 로컬에서 불러오기 실패 시 GitHub raw URL에서 원격 로딩
+                    
+        # 원격 Fallback 로드 (임시 메모리 적재)
         if not loaded:
             try:
-                url = f'{GITHUB_RAW_BASE}/{fname}'
                 for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
                     try:
                         dfs[fname] = pd.read_csv(url, encoding=enc)
@@ -254,30 +305,17 @@ def load_data():
                         break
                     except Exception:
                         continue
-                if loaded:
-                    # HTTP Response Header의 Last-Modified 추출하여 KST 변환
-                    try:
-                        req = urllib.request.Request(url, method='HEAD')
-                        with urllib.request.urlopen(req) as resp:
-                            last_mod = resp.info().get('Last-Modified')
-                            if last_mod:
-                                from email.utils import parsedate_to_datetime
-                                dt = parsedate_to_datetime(last_mod)
-                                dt_kst = dt.astimezone(timezone(timedelta(hours=9)))
-                                mtime = dt_kst.strftime('%Y-%m-%d %H:%M:%S')
-                    except Exception:
-                        pass
-                    if not mtime:
-                        mtime = "원격 데이터 (시간 확인 불가)"
-            except Exception as remote_err:
-                print(f"DEBUG: 원격 {fname} 로드 실패: {remote_err}")
+                if loaded and remote_mtime:
+                    final_mtime_str = remote_mtime.strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                pass
                 
         if not loaded:
             dfs[fname] = pd.DataFrame()
-            mtime = "데이터 없음"
+            final_mtime_str = "데이터 없음"
             
-        update_times[fname] = mtime
-            
+        update_times[fname] = final_mtime_str
+        
     return dfs, update_times
 
 # ── 데이터 로드 ────────────────────────────────────────────────
@@ -1039,7 +1077,25 @@ row2_col1, row2_col2, row2_col3 = st.columns(3)
 with row1_col1:
     st.markdown("##### 📊 실시간 수급 (외/기/프)")
     if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
-        df1 = df_hd.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
+        df_hd_clean = df_hd.copy()
+        
+        # ── 1번 패널 이중 안전장치: ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
+        exclude_keywords = [
+            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
+            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
+            'plus', 'rise', 'woori', 'arirang', '곱버스'
+        ]
+        
+        df_hd_clean['Name_lower'] = df_hd_clean['Name'].fillna('').astype(str).str.lower()
+        df_hd_clean['Sector_lower'] = df_hd_clean['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_hd_clean.columns else ''
+        
+        is_fund = df_hd_clean['Name_lower'].apply(lambda x: any(kw in x for kw in exclude_keywords))
+        if 'Sector' in df_hd_clean.columns:
+            is_fund = is_fund | df_hd_clean['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
+            
+        df_hd_clean = df_hd_clean[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
+        
+        df1 = df_hd_clean.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
         df1['Code'] = df1['Code'].astype(str).str.zfill(6)
         
         # 실시간 외국인/기관 수급 조회
