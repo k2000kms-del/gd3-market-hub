@@ -1117,6 +1117,23 @@ with row1_col2:
     fig_p2 = go.Figure()
     if not df_q.empty and 'Total_Score' in df_q.columns:
         df2 = df_q.copy()
+        
+        # ── 대시보드 화면 이중 안전장치: ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
+        exclude_keywords = [
+            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
+            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
+            'plus', 'rise', 'woori', 'arirang', '곱버스'
+        ]
+        
+        df2['Name_lower'] = df2['Name'].fillna('').astype(str).str.lower()
+        df2['Sector_lower'] = df2['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df2.columns else ''
+        
+        is_fund = df2['Name_lower'].apply(lambda x: any(kw in x for kw in exclude_keywords))
+        if 'Sector' in df2.columns:
+            is_fund = is_fund | df2['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
+            
+        df2 = df2[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
+        
         df2['Code'] = df2['Code'].astype(str).str.split('.').str[0].str.zfill(6)
         if not df_m.empty and 'Code' in df_m.columns:
             df2 = df2.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
