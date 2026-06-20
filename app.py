@@ -1850,21 +1850,6 @@ if st.session_state.sel_code:
     </div>
 </div>
 
-<!-- 💵 실시간 권장 자산 배분 가이드 추가 -->
-<div style="margin-bottom: 15px; background-color: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-        <span style="font-size: 12px; font-weight: bold; color: #ff922b; font-family: 'malgun gothic', sans-serif;">💵 권장 자산 배분 가이드</span>
-        <span style="font-size: 11px; color: {regime_color}; font-weight: bold; font-family: 'malgun gothic', sans-serif;">{market_regime}</span>
-    </div>
-    <div style="display: flex; height: 16px; border-radius: 8px; overflow: hidden; background-color: #333; margin-bottom: 6px;">
-        <div style="width: {rec_stock}%; background-color: #3498db; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold; font-family: 'malgun gothic', sans-serif;">주식 {rec_stock:.0f}%</div>
-        <div style="width: {rec_cash}%; background-color: #e67e22; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold; font-family: 'malgun gothic', sans-serif;">현금 {rec_cash:.0f}%</div>
-    </div>
-    <div style="font-size: 11px; color: #bbb; line-height: 1.4; font-family: 'malgun gothic', sans-serif;">
-        <strong>지침:</strong> {regime_desc}
-    </div>
-</div>
-
 <div style="background-color: rgba(255, 255, 255, 0.03); padding: 10px; border-radius: 6px; border-left: 4px solid #ff922b; font-size: 13px; line-height: 1.5; color: #eee; font-family: 'malgun gothic', sans-serif;">
     <strong>🤖 AI 퀀트 리스크 조언:</strong><br/>
     {ai_comment}
