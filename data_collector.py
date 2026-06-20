@@ -16,6 +16,14 @@ import time
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 
+# ── TA-Lib 임포트 및 예외 처리 (하이브리드 구조) ─────────────────
+HAS_TALIB = False
+try:
+    import talib
+    HAS_TALIB = True
+except ImportError:
+    print("  ⚠️ TA-Lib 임포트 실패 - 순수 파이썬(pandas) 폴백 엔진으로 대체 동작합니다.")
+
 # ── KIS API 설정 (환경변수에서 읽기) ────────────────────────────
 APP_KEY    = os.environ.get('KIS_APP_KEY', '')
 APP_SECRET = os.environ.get('KIS_APP_SECRET', '')
@@ -483,6 +491,136 @@ def _classify_sector(code, name, fdr_sector="", fdr_industry=""):
     return '기타'
 
 
+def detect_candle_patterns(df_hist):
+    """상승장악형(Bullish Engulfing) 및 샛별형(Morning Star) 캔들 패턴 감지"""
+    is_engulfing = False
+    is_morning_star = False
+    
+    if len(df_hist) < 3:
+        return False, False
+        
+    if HAS_TALIB:
+        try:
+            o = df_hist['Open'].values.astype(float)
+            h = df_hist['High'].values.astype(float)
+            l = df_hist['Low'].values.astype(float)
+            c = df_hist['Close'].values.astype(float)
+            
+            engullf = talib.CDLENGULFING(o, h, l, c)
+            if len(engullf) > 0 and engullf[-1] == 100:
+                is_engulfing = True
+                
+            m_star = talib.CDLMORNINGSTAR(o, h, l, c)
+            if len(m_star) > 0 and m_star[-1] == 100:
+                is_morning_star = True
+        except Exception as e:
+            print(f"  ⚠️ CDL Pattern Check via TA-Lib failed: {e}")
+            
+    if not HAS_TALIB or (not is_engulfing and not is_morning_star):
+        try:
+            prev_o = float(df_hist['Open'].iloc[-2])
+            prev_c = float(df_hist['Close'].iloc[-2])
+            curr_o = float(df_hist['Open'].iloc[-1])
+            curr_c = float(df_hist['Close'].iloc[-1])
+            
+            if prev_c < prev_o and curr_c > curr_o:
+                if curr_c >= prev_o and curr_o <= prev_c:
+                    if (curr_c - curr_o) > (prev_o - prev_c):
+                        is_engulfing = True
+                        
+            o1, c1 = float(df_hist['Open'].iloc[-3]), float(df_hist['Close'].iloc[-3])
+            o2, c2 = float(df_hist['Open'].iloc[-2]), float(df_hist['Close'].iloc[-2])
+            o3, c3 = float(df_hist['Open'].iloc[-1]), float(df_hist['Close'].iloc[-1])
+            
+            if c1 < o1 and (o1 - c1) / o1 >= 0.015:
+                if abs(o2 - c2) / o2 <= 0.004:
+                    if c3 > o3 and c3 > (o1 + c1) / 2:
+                        is_morning_star = True
+        except Exception:
+            pass
+            
+    return is_engulfing, is_morning_star
+
+
+def detect_double_bottom(df_hist):
+    """최근 60거래일 데이터를 활용해 이중 바닥(쌍바닥) 패턴 수학적 감지"""
+    if len(df_hist) < 40:
+        return False
+        
+    try:
+        df_60 = df_hist.tail(60).copy()
+        prices = df_60['Close'].values
+        lows = df_60['Low'].values
+        
+        idx1 = int(np.argmin(lows))
+        L_min1 = lows[idx1]
+        
+        mask = np.ones(len(lows), dtype=bool)
+        start_mask = max(0, idx1 - 8)
+        end_mask = min(len(lows), idx1 + 9)
+        mask[start_mask:end_mask] = False
+        
+        if not np.any(mask):
+            return False
+            
+        remaining_indices = np.where(mask)[0]
+        idx2_rel = np.argmin(lows[mask])
+        idx2 = int(remaining_indices[idx2_rel])
+        L_min2 = lows[idx2]
+        
+        if abs(idx1 - idx2) < 10:
+            return False
+            
+        price_diff_ratio = abs(L_min1 - L_min2) / max(L_min1, L_min2)
+        if price_diff_ratio > 0.025:
+            return False
+            
+        mid_start = min(idx1, idx2)
+        mid_end = max(idx1, idx2)
+        mid_high = np.max(prices[mid_start:mid_end])
+        
+        if mid_high < max(L_min1, L_min2) * 1.035:
+            return False
+            
+        curr_price = float(df_hist['Close'].iloc[-1])
+        base_bottom = min(L_min1, L_min2)
+        if base_bottom * 1.015 <= curr_price <= base_bottom * 1.18:
+            return True
+    except Exception:
+        pass
+        
+    return False
+
+
+def detect_triangle_convergence(df_hist):
+    """최근 40거래일의 변동성 축소 비율(Volatility Contraction)을 활용한 삼각 수렴 패턴 수학적 감지"""
+    if len(df_hist) < 35:
+        return False
+        
+    try:
+        df_40 = df_hist.tail(40).copy()
+        df_40['range_pct'] = (df_40['High'] - df_40['Low']) / df_40['Close']
+        
+        vol_prev = df_40['range_pct'].iloc[0:20].mean()
+        vol_curr = df_40['range_pct'].iloc[20:40].mean()
+        
+        if vol_curr < vol_prev * 0.75:
+            vol_5d = df_40['range_pct'].tail(5).mean()
+            if vol_5d < vol_curr * 0.85:
+                highs = df_40['High'].tail(20).values
+                lows = df_40['Low'].tail(20).values
+                
+                high_slope = np.polyfit(np.arange(20), highs, 1)[0]
+                low_slope = np.polyfit(np.arange(20), lows, 1)[0]
+                
+                if high_slope < 0 and low_slope > 0:
+                    return True
+    except Exception:
+        pass
+        
+    return False
+
+
 def collect_quant_final(token, df_hd, df_full):
     """Quant 점수 계산 - 선행 매수 타이밍 포착 전용 스크리너
 
@@ -852,6 +990,17 @@ def collect_quant_final(token, df_hd, df_full):
                         else:
                             score_candle = 0.0   # 고거래량 하락 = 매도 압력 강함
 
+                # ── 캔들 패턴 가산점 적용 (상승장악형/샛별형) ─────────────────────
+                is_engulfing, is_morning_star = detect_candle_patterns(df_hist)
+                if is_engulfing:
+                    score_candle += 4.0
+                    print(f"  🔥 [{name}] 상승장악형 캔들 패턴 감지 (+4.0점)")
+                elif is_morning_star:
+                    score_candle += 5.0
+                    print(f"  🔥 [{name}] 샛별형 캔들 패턴 감지 (+5.0점)")
+                
+                score_candle = min(15.0, max(0.0, score_candle))
+
         except Exception as e:
             print(f'  ⚠️ [{name}] 가격 이력 조회 실패: {e}')
 
@@ -895,9 +1044,25 @@ def collect_quant_final(token, df_hd, df_full):
         except:
             vol_penalty = 1.0
 
+        # ── 중기 차트 패턴 가산점 적용 (이중 바닥 / 삼각 수렴) ───────────────
+        chart_bonus = 0.0
+        try:
+            if df_hist is not None and len(df_hist) >= 40:
+                is_double_bottom = detect_double_bottom(df_hist)
+                is_triangle = detect_triangle_convergence(df_hist)
+                
+                if is_double_bottom:
+                    chart_bonus += 4.0
+                    print(f"  🚀 [{name}] 이중 바닥(쌍바닥) 차트 패턴 감지 (+4.0점)")
+                if is_triangle:
+                    chart_bonus += 3.0
+                    print(f"  🚀 [{name}] 삼각 수렴 변동성축소 패턴 감지 (+3.0점)")
+        except Exception as chart_err:
+            print(f"  ⚠️ [{name}] 차트 패턴 분석 중 예외 발생: {chart_err}")
+
         # ── 합산 점수 + 전체 보정 계수 적용 ──────────────────────────
-        # 적용 순서: 원점수 → 이중신호보정 → 변동성조정 → 섹터가중치 → 시장국면패널티
-        raw_score   = score_momentum + score_supply + score_volume + score_ma + score_candle
+        # 적용 순서: (원점수 + 차트보너스) → 이중신호보정 → 변동성조정 → 섹터가중치 → 시장국면패널티
+        raw_score   = score_momentum + score_supply + score_volume + score_ma + score_candle + chart_bonus
         total_score = round(raw_score * vol_penalty * sector_mult * market_penalty, 1)
 
         # FDR 당일 거래대금(today_amount)이 산출되어 있으면 사용, 없으면 df_hd의 Amount 사용 (단위: 원)
