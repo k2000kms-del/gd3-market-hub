@@ -214,30 +214,75 @@ def fetch_live_indices():
     return result
 
 
-@st.cache_data(ttl=60)  # 1분 캐시 — GitHub raw 다운로드 반복 방지 (최신 데이터 빠른 반영)
+@st.cache_data(ttl=60)  # 1분 캐시 — 로컬 우선 로드 및 원격 폴백 지원
 def load_data():
-    """GitHub 레포지토리 raw URL에서 CSV 읽기 (간단하고 인증 불필요)"""
+    """로컬 CSV 파일을 최우선으로 시도하고, 없거나 실패 시 GitHub 원격 저장소에서 읽어옴 (Local First, Remote Fallback)"""
+    import os
+    import urllib.request
+    from datetime import datetime, timezone, timedelta
+    
     dfs = {}
+    update_times = {}
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
     for fname in DATA_FILES:
-        try:
-            url = f'{GITHUB_RAW_BASE}/{fname}'
-            loaded = False
+        loaded = False
+        mtime = None
+        # 1. 로컬 디렉토리(data/) 내의 파일 시도
+        local_path = os.path.join(base_dir, 'data', fname)
+        if os.path.exists(local_path):
             for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
                 try:
-                    dfs[fname] = pd.read_csv(url, encoding=enc)
+                    dfs[fname] = pd.read_csv(local_path, encoding=enc)
                     loaded = True
+                    # 로컬 파일 최종 수정 시각 획득 (KST)
+                    mtime_ts = os.path.getmtime(local_path)
+                    mtime = datetime.fromtimestamp(mtime_ts).strftime('%Y-%m-%d %H:%M:%S')
                     break
-                except Exception:
+                except Exception as local_err:
+                    print(f"DEBUG: 로컬 {fname} ({enc}) 로드 실패: {local_err}")
                     continue
-            if not loaded:
-                dfs[fname] = pd.DataFrame()
-        except Exception:
+        
+        # 2. 로컬에서 불러오기 실패 시 GitHub raw URL에서 원격 로딩
+        if not loaded:
+            try:
+                url = f'{GITHUB_RAW_BASE}/{fname}'
+                for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
+                    try:
+                        dfs[fname] = pd.read_csv(url, encoding=enc)
+                        loaded = True
+                        break
+                    except Exception:
+                        continue
+                if loaded:
+                    # HTTP Response Header의 Last-Modified 추출하여 KST 변환
+                    try:
+                        req = urllib.request.Request(url, method='HEAD')
+                        with urllib.request.urlopen(req) as resp:
+                            last_mod = resp.info().get('Last-Modified')
+                            if last_mod:
+                                from email.utils import parsedate_to_datetime
+                                dt = parsedate_to_datetime(last_mod)
+                                dt_kst = dt.astimezone(timezone(timedelta(hours=9)))
+                                mtime = dt_kst.strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        pass
+                    if not mtime:
+                        mtime = "원격 데이터 (시간 확인 불가)"
+            except Exception as remote_err:
+                print(f"DEBUG: 원격 {fname} 로드 실패: {remote_err}")
+                
+        if not loaded:
             dfs[fname] = pd.DataFrame()
-    return dfs
+            mtime = "데이터 없음"
+            
+        update_times[fname] = mtime
+            
+    return dfs, update_times
 
 # ── 데이터 로드 ────────────────────────────────────────────────
 with st.spinner('📡 데이터 불러오는 중...'):
-    data = load_data()
+    data, update_times = load_data()
 
 df_hd       = data['df_high_density.csv']
 df_q        = data['df_quant_final.csv']
@@ -799,6 +844,64 @@ if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_w
         except Exception as sync_err:
             st.sidebar.error(f"❌ 동기화 실패: {sync_err}")
 
+# KIS API Key 입력 (secrets에 없을 때만 노출)
+kis_key = st.secrets.get("KIS_APP_KEY", "")
+kis_sec = st.secrets.get("KIS_APP_SECRET", "")
+
+if not kis_key:
+    kis_key = st.sidebar.text_input(
+        "KIS APP KEY 입력 (선택)",
+        type="password",
+        placeholder="KIS API Key",
+        help="수급 데이터 기반 퀀트 갱신을 위해 필요합니다. 미입력 시 기술적 지표 위주로 계산됩니다."
+    )
+if not kis_sec:
+    kis_sec = st.sidebar.text_input(
+        "KIS APP SECRET 입력 (선택)",
+        type="password",
+        placeholder="KIS API Secret"
+    )
+
+# 1-2. 실시간 퀀트 데이터 즉시 갱신 버튼
+if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
+    with st.sidebar.spinner("🎯 퀀트 연산 및 데이터 수집 중 (약 30~50초 소요)..."):
+        try:
+            import subprocess
+            import os
+            
+            # 환경변수 주입
+            env = os.environ.copy()
+            if kis_key:
+                env["KIS_APP_KEY"] = kis_key
+            if kis_sec:
+                env["KIS_APP_SECRET"] = kis_sec
+            if "SUPABASE_URL" in st.secrets:
+                env["SUPABASE_URL"] = st.secrets["SUPABASE_URL"]
+            if "SUPABASE_ANON_KEY" in st.secrets:
+                env["SUPABASE_ANON_KEY"] = st.secrets["SUPABASE_ANON_KEY"]
+                
+            # 윈도우 터미널 인코딩(CP949) 환경에서 이모지 출력 시의 UnicodeEncodeError 방지
+            env["PYTHONIOENCODING"] = "utf-8"
+                
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            script_path = os.path.join(base_dir, 'data_collector.py')
+            
+            # 가상환경 파이썬 사용
+            python_exe = os.path.join(base_dir, '.venv', 'Scripts', 'python.exe')
+            if not os.path.exists(python_exe):
+                python_exe = 'python'
+                
+            res = subprocess.run([python_exe, script_path], env=env, capture_output=True, encoding='utf-8')
+            if res.returncode == 0:
+                st.sidebar.success("✅ 퀀트 데이터 실시간 갱신 성공!")
+                # 데이터 새로 로드 및 캐시 날림
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.sidebar.error(f"❌ 갱신 실패 (코드 {res.returncode}): {res.stderr[:200]}")
+        except Exception as e:
+            st.sidebar.error(f"❌ 퀀트 연산 중 오류 발생: {e}")
+
 # 2. GitHub Actions 원격 재기동 버튼
 st.sidebar.markdown('<br>', unsafe_allow_html=True)
 gh_token = st.secrets.get("GITHUB_TOKEN", "")
@@ -907,7 +1010,41 @@ def handle_chart_click(event_data):
         st.rerun()
 
 # ── 개별 차트 6분할 레이아웃 (3열 그리드 개편) ───────────────
+quant_time = update_times.get('df_quant_final.csv', '알 수 없음')
+is_stale = False
+
+try:
+    if '알 수 없음' not in quant_time and '원격' not in quant_time and '데이터 없음' not in quant_time:
+        from datetime import datetime, timezone, timedelta
+        _KST = timezone(timedelta(hours=9))
+        _now_kst = datetime.now(_KST)
+        is_weekend = _now_kst.weekday() >= 5
+        q_dt = datetime.strptime(quant_time, '%Y-%m-%d %H:%M:%S')
+        today_date = _now_kst.date()
+        
+        if q_dt.date() < today_date:
+            if is_weekend:
+                # 주말인 경우 마지막 금요일 영업일의 장 마감(15:30) 데이터가 반영되었는지 체크
+                if q_dt.weekday() != 4 or (q_dt.hour * 100 + q_dt.minute) < 1530:
+                    is_stale = True
+            else:
+                is_stale = True
+        elif q_dt.date() == today_date and (_now_kst.hour * 100 + _now_kst.minute) >= 1530:
+            # 오늘인데 현재 시각이 장 마감(15:30)을 지났음에도 데이터 시각이 15:30 이전인 경우
+            if (q_dt.hour * 100 + q_dt.minute) < 1530:
+                is_stale = True
+except Exception as stale_err:
+    print(f"DEBUG: 퀀트 신선도 체크 에러: {stale_err}")
+
 st.markdown("### 📊 실시간 시장 종합 대시보드")
+
+if is_stale:
+    st.warning(f"⚠️ **현재 퀀트 데이터가 최종 장 마감 기준이 아닙니다.** (최종 업데이트: `{quant_time}`)\n\n"
+               f"장 마감 이후의 최종 퀀트 스코어와 차트 형태를 반영하려면 사이드바 하단 **[모바일 자가 복구 도구]**에서 "
+               f"**'실시간 퀀트 데이터 즉시 갱신'** 버튼을 실행하시거나 **'깃허브 수집기 원격 재가동'**을 실행해 주세요.")
+else:
+    st.info(f"✅ **퀀트 데이터 신선도 양호** (최종 업데이트: `{quant_time}`)")
+
 st.caption("차트 내부의 막대(종목)를 클릭하면, 아래에서 즉시 해당 종목의 일봉 차트를 볼 수 있습니다.")
 
 # 첫 번째 행 (Row 1)과 두 번째 행 (Row 2) 정의
