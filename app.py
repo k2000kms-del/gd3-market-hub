@@ -1160,11 +1160,49 @@ try:
 except Exception as stale_err:
     print(f"DEBUG: 퀀트 신선도 체크 에러: {stale_err}")
 
-st.markdown(f"### 📊 실시간 시장 종합 대시보드 <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time})</span>", unsafe_allow_html=True)
+# KOSPI 20일선 기반 실시간 자산배분 판단
+kospi_close, kospi_ma20, success = get_kospi_ma20()
+if success:
+    if kospi_close >= kospi_ma20:
+        market_regime = "상승/횡보 국면 (KOSPI 20일선 상회)"
+        rec_cash = 20.0
+        rec_stock = 80.0
+        regime_desc = "시장 단기 추세가 견고하여 적극적인 개별 종목 매수 전략이 유효합니다."
+        regime_color = "#2ecc71"
+    else:
+        market_regime = "약세/보수 국면 (KOSPI 20일선 하회)"
+        rec_cash = 70.0
+        rec_stock = 30.0
+        regime_desc = "시장 단기 추세가 약화되었습니다. 신규 매수를 자제하고 현금 비중을 대폭 늘려 리스크를 방어하십시오."
+        regime_color = "#e74c3c"
+else:
+    market_regime = "판단 유보 (지수 수집 실패)"
+    rec_cash = 30.0
+    rec_stock = 70.0
+    regime_desc = "지수 수집 실패로 기본 자산배분 비중(현금 30% / 주식 70%)을 권장합니다."
+    regime_color = "#7f8c8d"
 
-# 퀀트 신선도 체크 및 경고 출력부 제거됨 (사용자 요청 반영)
+title_col_left, title_col_right = st.columns([7, 5])
 
-st.caption("차트 내부의 막대(종목)를 클릭하면, 아래에서 즉시 해당 종목의 일봉 차트를 볼 수 있습니다.")
+with title_col_left:
+    st.markdown(f"### 📊 실시간 시장 종합 대시보드 <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time})</span>", unsafe_allow_html=True)
+    st.caption("차트 내부의 막대(종목)를 클릭하면, 아래에서 즉시 해당 종목의 일봉 차트를 볼 수 있습니다.")
+
+with title_col_right:
+    regime_html = f"""<div style="background-color: #111920; padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); color: #fff; margin-bottom: 5px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+            <span style="font-size: 11px; font-weight: bold; color: #ff922b; font-family: 'malgun gothic', sans-serif;">💵 권장 자산 배분 가이드</span>
+            <span style="font-size: 10px; color: {regime_color}; font-weight: bold; font-family: 'malgun gothic', sans-serif;">{market_regime}</span>
+        </div>
+        <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #333; margin-bottom: 5px;">
+            <div style="width: {rec_stock}%; background-color: #3498db; display: flex; align-items: center; justify-content: center; color: white; font-size: 9px; font-weight: bold; font-family: 'malgun gothic', sans-serif;">주식 {rec_stock:.0f}%</div>
+            <div style="width: {rec_cash}%; background-color: #e67e22; display: flex; align-items: center; justify-content: center; color: white; font-size: 9px; font-weight: bold; font-family: 'malgun gothic', sans-serif;">현금 {rec_cash:.0f}%</div>
+        </div>
+        <div style="font-size: 10px; color: #bbb; line-height: 1.3; font-family: 'malgun gothic', sans-serif;">
+            <strong>지침:</strong> {regime_desc}
+        </div>
+    </div>"""
+    st.markdown(regime_html, unsafe_allow_html=True)
 
 # 첫 번째 행 (Row 1)과 두 번째 행 (Row 2) 정의
 row1_col1, row1_col2, row1_col3 = st.columns(3)
