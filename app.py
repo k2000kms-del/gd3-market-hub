@@ -3,9 +3,11 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import numpy as np
 import FinanceDataReader as fdr
 import requests
 import time
+import os
 from datetime import datetime
 
 # ── Supabase 클라이언트 초기화 ────────────────────────────────
@@ -16,6 +18,70 @@ if "SUPABASE_URL" in st.secrets and "SUPABASE_ANON_KEY" in st.secrets:
         supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_ANON_KEY"])
     except Exception as e:
         print(f"DEBUG: Supabase initialization failed: {e}")
+
+from datetime import timedelta
+
+@st.cache_data(ttl=1200) # 20분 캐시로 API 비용 및 지연 최소화
+def get_kospi_ma20():
+    """실시간 KOSPI 지수와 20일 이동평균선(MA20) 계산"""
+    try:
+        # 최근 60일 코스피 지수 데이터 수집
+        df_ks = fdr.DataReader('KS11', (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d'))
+        if not df_ks.empty:
+            df_ks['MA20'] = df_ks['Close'].rolling(20).mean()
+            current_close = float(df_ks['Close'].iloc[-1])
+            ma20 = float(df_ks['MA20'].iloc[-1])
+            return current_close, ma20, True
+    except Exception as e:
+        print(f"DEBUG: Failed to get KOSPI MA20: {e}")
+    return 0.0, 0.0, False
+
+@st.cache_data(ttl=1200)
+def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key):
+    """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성"""
+    if not api_key:
+        return "🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요."
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json"}
+    
+    system_instruction = (
+        "너는 주식 분석 대시보드의 전문 퀀트 애널리스트이자 자산운용가야. "
+        "주어진 종목의 퀀트 매수 점수, 매도 점수, 등락률, 그리고 권장 자산배분 비중(현금 vs 주식 %) 정보를 바탕으로, "
+        "왜 이 종목에 그러한 의견이 제시되었는지 팩트 위주로 투자 리스크 관리 관점에서 조언을 작성해줘. "
+        "만약 권장 현금 비중이 70%로 높다면, 시장 하락 추세이므로 매수에 극히 조심하고 보수적으로 관망하라는 조언을 포함해줘. "
+        "출력은 2~3문장 이내의 짧고 굵은 존댓말(해요체)로 제한하고, 지나치게 기술적이거나 장황한 수식어는 배제해줘."
+    )
+    
+    prompt = (
+        f"종목명: {name} ({code})\n"
+        f"당일 등락률: {change:+.2f}%\n"
+        f"매수 퀀트 원점수: {t_score}점 (하락장 상대보정 점수: {t_score_adj}점)\n"
+        f"매도 퀀트 점수: {s_score}점\n"
+        f"현재 시장 판단 국면: {market_cond}\n"
+        f"권장 자산배분: 현금 {cash_ratio}% / 주식 {stock_ratio}%\n"
+        "상기 데이터를 면밀히 검토하고 퀀트 및 리스크 자산배분 관점의 2문장 내외 요약 코멘터리를 작성해줘."
+    )
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "systemInstruction": {"parts": [{"text": system_instruction}]}
+    }
+    
+    # 간헐적 네트워크 지연 대비 최대 2회 재시도 루프
+    last_err = None
+    for attempt in range(2):
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=25)
+            if r.status_code == 200:
+                return r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            else:
+                last_err = f"API 응답 코드: {r.status_code}"
+        except Exception as e:
+            last_err = str(e)
+        time.sleep(1.0) # 재시도 전 1초 대기
+
+    return f"⚠️ AI 코멘터리 생성 실패 (네트워크 지연/오류: {last_err})"
 
 @st.cache_data(ttl=30)  # 30초 캐시 (실시간이지만 너무 잦은 호출 방지)
 def fetch_naver_realtime_indices():
@@ -328,6 +394,18 @@ df_m        = data['df_full_market.csv']
 df_summary  = data['df_market_summary.csv']
 df_intraday = data['df_supply_intraday.csv']
 
+# ── [고도화] 매수 퀀트 점수 상대평가 표준화 (z-score Calibration) ──
+if df_q is not None and not df_q.empty and 'Total_Score' in df_q.columns:
+    try:
+        mean_score = df_q['Total_Score'].mean()
+        std_score = df_q['Total_Score'].std()
+        if std_score > 0:
+            df_q['Total_Score_Adj'] = df_q['Total_Score'].apply(lambda x: round(min(100.0, max(0.0, ((x - mean_score) / std_score * 25.0) + 50.0)), 1))
+        else:
+            df_q['Total_Score_Adj'] = df_q['Total_Score']
+    except Exception as z_err:
+        df_q['Total_Score_Adj'] = df_q['Total_Score']
+
 # ── df_summary 컬럼명 정규화 (GitHub CSV 인코딩 깨짐 방지) ───────
 # utf-8-sig로 저장되어도 GitHub raw 다운로드 시 cp949 환경에서 깨질 수 있음
 SUMMARY_COLS = ['종목/종류', '지수', '등락률', '추이', '외국인(억)', '개인(억)', '기관(억)']
@@ -417,8 +495,10 @@ if df_m is not None and not df_m.empty:
         try:
             # 2. 실시간 지수 및 환율 반영 (캐시 함수 사용 → rerun 시 소요 없음)
             if df_summary is not None and not df_summary.empty and '종목/종류' in df_summary.columns:
-                st.write("📊 주요 지수 및 환율 조회 중...")
+                idx_status_placeholder = st.empty()
+                idx_status_placeholder.write("📊 주요 지수 및 환율 조회 중...")
                 live_idx = fetch_live_indices()
+                idx_status_placeholder.write("✅ 주요 지수 및 환율 조회 완료")
                 ks_df  = live_idx.get('KS11',    pd.DataFrame())
                 kq_df  = live_idx.get('KQ11',    pd.DataFrame())
                 usd_df = live_idx.get('USD/KRW', pd.DataFrame())
@@ -1082,10 +1162,7 @@ except Exception as stale_err:
 
 st.markdown(f"### 📊 실시간 시장 종합 대시보드 <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time})</span>", unsafe_allow_html=True)
 
-if is_stale:
-    st.warning(f"⚠️ **현재 퀀트 데이터가 최종 장 마감 기준이 아닙니다.** (최종 업데이트: `{quant_time}`)\n\n"
-               f"장 마감 이후의 최종 퀀트 스코어와 차트 형태를 반영하려면 사이드바 하단 **[모바일 자가 복구 도구]**에서 "
-               f"**'실시간 퀀트 데이터 즉시 갱신'** 버튼을 실행하시거나 **'깃허브 수집기 원격 재가동'**을 실행해 주세요.")
+# 퀀트 신선도 체크 및 경고 출력부 제거됨 (사용자 요청 반영)
 
 st.caption("차트 내부의 막대(종목)를 클릭하면, 아래에서 즉시 해당 종목의 일봉 차트를 볼 수 있습니다.")
 
@@ -1228,10 +1305,10 @@ with row1_col2:
             hover_label = '거래대금: %{x:,.1f}억원'
             text_labels = df2['Amount'].apply(lambda x: f" {x/1e8:,.0f}")
         else:
-            df2 = df2.sort_values('Total_Score', ascending=True).tail(10).copy()
-            x_val = df2['Total_Score']
-            hover_label = 'Quant 점수: %{x:.1f}점'
-            text_labels = df2['Total_Score'].apply(lambda x: f" {x:.1f}")
+            df2 = df2.sort_values('Total_Score_Adj', ascending=True).tail(10).copy()
+            x_val = df2['Total_Score_Adj']
+            hover_label = '보정 Quant 점수: %{x:.1f}점'
+            text_labels = df2['Total_Score_Adj'].apply(lambda x: f" {x:.1f}")
 
         fig_p2.add_trace(go.Bar(
             y=df2['Name'],
@@ -1239,19 +1316,19 @@ with row1_col2:
             orientation='h',
             marker=dict(
                 colorscale='Reds',
-                color=df2['Total_Score'],
+                color=df2['Total_Score_Adj'] if 'Total_Score_Adj' in df2.columns else df2['Total_Score'],
                 showscale=False,
                 line=dict(color='rgba(255,255,255,0.1)', width=1)
             ),
             text=text_labels,
             textposition='outside',
-            customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score']].values,
+            customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score_Adj', 'Total_Score']].values,
             hovertemplate=(
                 '<b>%{y}</b> (%{customdata[0]})<br>'
                 '━━━━━━━━━━━━━━━<br>'
                 + hover_label + '<br>'
                 '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)<br>'
-                'Quant 종합 점수: %{customdata[3]:.1f}점'
+                'Quant 보정 점수: %{customdata[3]:.1f}점 (원점수: %{customdata[4]:.1f}점)'
                 '<extra></extra>'
             )
         ))
@@ -1601,6 +1678,20 @@ if st.session_state.sel_code:
         # MA 계산
         df_candle['MA5']  = df_candle['Close'].rolling(5).mean()
         df_candle['MA20'] = df_candle['Close'].rolling(20).mean()
+
+        # ── [고도화 1단계] ATR 계산 및 ATR 14일 계산 ───────────────
+        try:
+            high = df_candle['High'].values
+            low = df_candle['Low'].values
+            close = df_candle['Close'].values
+            tr = np.maximum(high[1:] - low[1:], np.maximum(abs(high[1:] - close[:-1]), abs(low[1:] - close[:-1])))
+            tr = np.insert(tr, 0, high[0] - low[0])
+            atr = pd.Series(tr).rolling(14).mean().values
+            df_candle['ATR'] = atr
+            df_candle['Stop_Loss'] = df_candle['Close'] - 2.5 * df_candle['ATR']
+        except Exception as atr_err:
+            st.error(f"ATR 계산 오류: {atr_err}")
+
         df_candle = df_candle.tail(90)  # 최근 90 거래일만 표시
 
         # 당일 등락률 계산
@@ -1655,6 +1746,94 @@ if st.session_state.sel_code:
         """
         st.markdown(stats_html, unsafe_allow_html=True)
 
+        # ── 💡 퀀트 종합 매매 의견 카드 추가 ──────────────────────────────────
+        q_row = df_q[df_q['Code'] == code_disp]
+        if not q_row.empty:
+            t_score = q_row.iloc[0].get('Total_Score', 0.0)
+            t_score_adj = q_row.iloc[0].get('Total_Score_Adj', t_score)
+            s_score = q_row.iloc[0].get('Sell_Score', 0.0)
+            
+            # KOSPI 20일선 기반 실시간 자산배분 판단
+            kospi_close, kospi_ma20, success = get_kospi_ma20()
+            if success:
+                if kospi_close >= kospi_ma20:
+                    market_regime = "상승/횡보 국면 (KOSPI 20일선 상회)"
+                    rec_cash = 20.0
+                    rec_stock = 80.0
+                    regime_desc = "시장 단기 추세가 견고하여 적극적인 개별 종목 매수 전략이 유효합니다."
+                    regime_color = "#2ecc71"
+                else:
+                    market_regime = "약세/보수 국면 (KOSPI 20일선 하회)"
+                    rec_cash = 70.0
+                    rec_stock = 30.0
+                    regime_desc = "시장 단기 추세가 약화되었습니다. 신규 매수를 자제하고 현금 비중을 대폭 늘려 리스크를 방어하십시오."
+                    regime_color = "#e74c3c"
+            else:
+                market_regime = "판단 유보 (지수 수집 실패)"
+                rec_cash = 30.0
+                rec_stock = 70.0
+                regime_desc = "지수 수집 실패로 기본 자산배분 비중(현금 30% / 주식 70%)을 권장합니다."
+                regime_color = "#7f8c8d"
+
+            # 종합 등급 판정 (보정 매수 점수 t_score_adj 기준)
+            if t_score_adj >= 80.0:
+                quant_grade = "적극 매수 (Strong Buy)"
+                grade_color = "#2ecc71"
+            elif t_score_adj >= 60.0:
+                quant_grade = "매수 (Buy)"
+                grade_color = "#3498db"
+            elif s_score >= 70.0:
+                # 매도는 절대 리스크 지표이므로 보정 없는 원점수 사용
+                quant_grade = "적극 매도 (Strong Sell)"
+                grade_color = "#e74c3c"
+            elif s_score >= 50.0:
+                quant_grade = "매도 (Sell)"
+                grade_color = "#e67e22"
+            else:
+                quant_grade = "관망/중립 (Hold)"
+                grade_color = "#7f8c8d"
+                
+            # Gemini AI 코멘터리 요청 (자산 배분 비율 연동)
+            market_cond = q_row.iloc[0].get('Market_Condition', 'N/A')
+            ai_comment = get_gemini_commentary(
+                code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key
+            )
+            
+            opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
+<h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
+<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+    <div>
+        <span style="font-size: 14px; color: #aaa; font-family: 'malgun gothic', sans-serif;">보정 평가 등급:</span>
+        <strong style="font-size: 18px; color: {grade_color}; margin-left: 8px; font-family: 'malgun gothic', sans-serif;">{quant_grade}</strong>
+    </div>
+    <div style="text-align: right; min-width: 140px;">
+        <span style="font-size: 13px; color: #2ecc71; font-family: 'malgun gothic', sans-serif;">매수 보정 점수: <strong>{t_score_adj:.1f}점</strong> <span style="font-size: 11px; color: #888;">(원점수: {t_score:.1f}점)</span></span><br/>
+        <span style="font-size: 13px; color: #e74c3c; font-family: 'malgun gothic', sans-serif;">매도 퀀트 점수: <strong>{s_score:.1f}점</strong></span>
+    </div>
+</div>
+
+<!-- 💵 실시간 권장 자산 배분 가이드 추가 -->
+<div style="margin-bottom: 15px; background-color: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 12px; font-weight: bold; color: #ff922b; font-family: 'malgun gothic', sans-serif;">💵 권장 자산 배분 가이드</span>
+        <span style="font-size: 11px; color: {regime_color}; font-weight: bold; font-family: 'malgun gothic', sans-serif;">{market_regime}</span>
+    </div>
+    <div style="display: flex; height: 16px; border-radius: 8px; overflow: hidden; background-color: #333; margin-bottom: 6px;">
+        <div style="width: {rec_stock}%; background-color: #3498db; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold; font-family: 'malgun gothic', sans-serif;">주식 {rec_stock:.0f}%</div>
+        <div style="width: {rec_cash}%; background-color: #e67e22; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold; font-family: 'malgun gothic', sans-serif;">현금 {rec_cash:.0f}%</div>
+    </div>
+    <div style="font-size: 11px; color: #bbb; line-height: 1.4; font-family: 'malgun gothic', sans-serif;">
+        <strong>지침:</strong> {regime_desc}
+    </div>
+</div>
+
+<div style="background-color: rgba(255, 255, 255, 0.03); padding: 10px; border-radius: 6px; border-left: 4px solid #ff922b; font-size: 13px; line-height: 1.5; color: #eee; font-family: 'malgun gothic', sans-serif;">
+    <strong>🤖 AI 퀀트 리스크 조언:</strong><br/>
+    {ai_comment}
+</div>
+</div>"""
+            st.markdown(opinion_html, unsafe_allow_html=True)
+
         # 캔들 차트 생성
         fig_c = make_subplots(
             rows=2, cols=1,
@@ -1686,6 +1865,14 @@ if st.session_state.sel_code:
             name='MA20', mode='lines',
             line=dict(color='#ff922b', width=1.5)
         ), row=1, col=1)
+
+        # ATR 손절 가이드선 (2.5 ATR)
+        if 'Stop_Loss' in df_candle.columns:
+            fig_c.add_trace(go.Scatter(
+                x=df_candle.index, y=df_candle['Stop_Loss'],
+                name='ATR 손절선', mode='lines',
+                line=dict(color='#e74c3c', width=1.5, dash='dash')
+            ), row=1, col=1)
 
         # 거래량 막대 (색상: 상승일=빨강, 하락일=파랑)
         vol_colors = [

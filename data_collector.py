@@ -8,17 +8,6 @@ GD 3.0 Market Hub - 데이터 수집기 (GitHub Actions 전용)
 """
 
 import os
-import sys
-
-# ── 윈도우 환경 이모지 출력 시 cp949 디코딩 에러 방지 ───────────────
-try:
-    if sys.stdout.encoding != 'utf-8':
-        sys.stdout.reconfigure(encoding='utf-8')
-    if sys.stderr.encoding != 'utf-8':
-        sys.stderr.reconfigure(encoding='utf-8')
-except AttributeError:
-    pass
-
 import json
 import requests
 import pandas as pd
@@ -36,9 +25,8 @@ except ImportError:
     print("  ⚠️ TA-Lib 임포트 실패 - 순수 파이썬(pandas) 폴백 엔진으로 대체 동작합니다.")
 
 # ── KIS API 설정 (환경변수에서 읽기) ────────────────────────────
-# KIS API 인증 키 탐색 (대체 별칭 KIS_KEY / KIS_SECRET 지원)
-APP_KEY    = os.environ.get('KIS_APP_KEY', os.environ.get('KIS_KEY', ''))
-APP_SECRET = os.environ.get('KIS_APP_SECRET', os.environ.get('KIS_SECRET', ''))
+APP_KEY    = os.environ.get('KIS_APP_KEY', '')
+APP_SECRET = os.environ.get('KIS_APP_SECRET', '')
 URL_BASE   = 'https://openapi.koreainvestment.com:9443'
 
 # ── Supabase 설정 (환경변수에서 읽기) ───────────────────────────
@@ -804,18 +792,8 @@ def collect_quant_final(token, df_hd, df_full):
 
     for _, row in df_hd.iterrows():
         code = str(row.get('Code', '')).zfill(6)
-        name = str(row.get('Name', ''))
+        name = row.get('Name', '')
         
-        # ── ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
-        name_lower = name.lower()
-        exclude_keywords = [
-            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
-            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
-            'plus', 'rise', 'woori', 'arirang', '곱버스'
-        ]
-        if any(kw in name_lower for kw in exclude_keywords):
-            continue
-            
         # 이전 루프의 변수 오염을 막기 위한 초기화
         df_hist = None
         today_amount = 0
@@ -1356,7 +1334,7 @@ def main():
 
     if not APP_KEY or not APP_SECRET:
         print('❌ KIS_APP_KEY / KIS_APP_SECRET 환경변수가 설정되지 않았습니다.')
-        sys.exit(1)
+        return
 
     # KIS 토큰 발급
     print('\n🔑 KIS API 토큰 발급 중...')
