@@ -36,8 +36,9 @@ except ImportError:
     print("  ⚠️ TA-Lib 임포트 실패 - 순수 파이썬(pandas) 폴백 엔진으로 대체 동작합니다.")
 
 # ── KIS API 설정 (환경변수에서 읽기) ────────────────────────────
-APP_KEY    = os.environ.get('KIS_APP_KEY', '')
-APP_SECRET = os.environ.get('KIS_APP_SECRET', '')
+# KIS API 인증 키 탐색 (대체 별칭 KIS_KEY / KIS_SECRET 지원)
+APP_KEY    = os.environ.get('KIS_APP_KEY', os.environ.get('KIS_KEY', ''))
+APP_SECRET = os.environ.get('KIS_APP_SECRET', os.environ.get('KIS_SECRET', ''))
 URL_BASE   = 'https://openapi.koreainvestment.com:9443'
 
 # ── Supabase 설정 (환경변수에서 읽기) ───────────────────────────

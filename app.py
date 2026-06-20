@@ -882,9 +882,9 @@ if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_w
         except Exception as sync_err:
             st.sidebar.error(f"❌ 동기화 실패: {sync_err}")
 
-# KIS API Key 정보 (st.secrets 참조)
-kis_key = st.secrets.get("KIS_APP_KEY", "")
-kis_sec = st.secrets.get("KIS_APP_SECRET", "")
+# KIS API Key 정보 (st.secrets 및 os.environ 다각적 별칭 탐색)
+kis_key = st.secrets.get("KIS_APP_KEY", st.secrets.get("KIS_KEY", os.environ.get("KIS_APP_KEY", os.environ.get("KIS_KEY", ""))))
+kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.environ.get("KIS_APP_SECRET", os.environ.get("KIS_SECRET", ""))))
 
 # 1-2. 실시간 퀀트 데이터 즉시 갱신 버튼
 if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
@@ -897,8 +897,10 @@ if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_contai
             env = os.environ.copy()
             if kis_key:
                 env["KIS_APP_KEY"] = kis_key
+                env["KIS_KEY"] = kis_key
             if kis_sec:
                 env["KIS_APP_SECRET"] = kis_sec
+                env["KIS_SECRET"] = kis_sec
             if "SUPABASE_URL" in st.secrets:
                 env["SUPABASE_URL"] = st.secrets["SUPABASE_URL"]
             if "SUPABASE_ANON_KEY" in st.secrets:
@@ -918,11 +920,29 @@ if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_contai
             res = subprocess.run([python_exe, script_path], env=env, capture_output=True, encoding='utf-8')
             if res.returncode == 0:
                 st.sidebar.success("✅ 퀀트 데이터 실시간 갱신 성공!")
-                # 데이터 새로 로드 및 캐시 날림
                 st.cache_data.clear()
                 st.rerun()
             else:
-                st.sidebar.error(f"❌ 갱신 실패 (코드 {res.returncode}): {res.stderr[:200]}")
+                err_msg = res.stderr if res.stderr else res.stdout
+                if not err_msg:
+                    err_msg = "알 수 없는 오류가 발생했습니다."
+                
+                # 인증 키 누락 조건 또는 프로세스 에러 내용 파악
+                if "KIS_APP_KEY" in err_msg or "환경변수" in err_msg or not kis_key or not kis_sec:
+                    st.sidebar.error(
+                        "❌ **갱신 실패 (인증키 누락)**\n\n"
+                        "로컬 환경에 **한국투자증권 API 인증키가 설정되지 않았습니다.**\n\n"
+                        "**해결 방법:**\n"
+                        "1. 프로젝트 폴더 내 `.streamlit/secrets.toml` 파일을 엽니다.\n"
+                        "2. 아래 형식을 채워 저장해 주세요:\n"
+                        "```toml\n"
+                        "KIS_APP_KEY = \"발급받은_APP_KEY\"\n"
+                        "KIS_APP_SECRET = \"발급받은_APP_SECRET\"\n"
+                        "```\n"
+                        "3. 또는 하단의 **'원격 수집기 재가동'** 도구를 가동하여 원격 Actions 서버에서 자동으로 데이터 수집 커밋을 하도록 실행할 수 있습니다."
+                    )
+                else:
+                    st.sidebar.error(f"❌ 갱신 실패 (코드 {res.returncode}): {err_msg[:200]}")
         except Exception as e:
             st.sidebar.error(f"❌ 퀀트 연산 중 오류 발생: {e}")
 
@@ -1256,7 +1276,25 @@ with row1_col3:
     st.markdown("##### 🔥 거래대금 리더 (12)")
     fig_p3 = go.Figure()
     if not df_m.empty and 'Amount' in df_m.columns:
-        df3 = df_m.sort_values('Amount', ascending=True).tail(12).copy()
+        df_m_clean3 = df_m.copy()
+        
+        # ── 3번 패널 이중 안전장치: ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
+        exclude_keywords = [
+            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
+            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
+            'plus', 'rise', 'woori', 'arirang', '곱버스'
+        ]
+        
+        df_m_clean3['Name_lower'] = df_m_clean3['Name'].fillna('').astype(str).str.lower()
+        df_m_clean3['Sector_lower'] = df_m_clean3['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_m_clean3.columns else ''
+        
+        is_fund = df_m_clean3['Name_lower'].apply(lambda x: any(kw in x for kw in exclude_keywords))
+        if 'Sector' in df_m_clean3.columns:
+            is_fund = is_fund | df_m_clean3['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
+            
+        df_m_clean3 = df_m_clean3[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
+        
+        df3 = df_m_clean3.sort_values('Amount', ascending=True).tail(12).copy()
         df3['Amount_100M'] = df3['Amount'] / 100000000
         
         fig_p3.add_trace(go.Bar(
@@ -1466,7 +1504,25 @@ with row2_col3:
     st.markdown("##### 🚀 상승률 리더 (12)")
     fig_p6 = go.Figure()
     if not df_m.empty and 'ChagesRatio' in df_m.columns:
-        df6 = df_m.sort_values('ChagesRatio', ascending=True).tail(12).copy()
+        df_m_clean6 = df_m.copy()
+        
+        # ── 6번 패널 이중 안전장치: ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
+        exclude_keywords = [
+            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
+            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
+            'plus', 'rise', 'woori', 'arirang', '곱버스'
+        ]
+        
+        df_m_clean6['Name_lower'] = df_m_clean6['Name'].fillna('').astype(str).str.lower()
+        df_m_clean6['Sector_lower'] = df_m_clean6['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_m_clean6.columns else ''
+        
+        is_fund = df_m_clean6['Name_lower'].apply(lambda x: any(kw in x for kw in exclude_keywords))
+        if 'Sector' in df_m_clean6.columns:
+            is_fund = is_fund | df_m_clean6['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
+            
+        df_m_clean6 = df_m_clean6[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
+        
+        df6 = df_m_clean6.sort_values('ChagesRatio', ascending=True).tail(12).copy()
         
         fig_p6.add_trace(go.Bar(
             y=df6['Name'],
