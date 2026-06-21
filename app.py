@@ -1399,6 +1399,34 @@ with row1_col1:
     text-shadow: none !important;
 }
 </style>"""
+
+        # 초정밀 스크롤 위치 유지 및 자동 복원 스크립트
+        js_scroll_restore = """<script>
+(function() {
+    try {
+        window.addEventListener('beforeunload', function() {
+            localStorage.setItem('st_dashboard_scroll', window.scrollY);
+        });
+        
+        var targetScroll = localStorage.getItem('st_dashboard_scroll');
+        if (targetScroll) {
+            var scrollPos = parseInt(targetScroll);
+            var attempts = 0;
+            var interval = setInterval(function() {
+                window.scrollTo(0, scrollPos);
+                attempts++;
+                if (attempts > 15 || Math.abs(window.scrollY - scrollPos) < 5) {
+                    clearInterval(interval);
+                    localStorage.removeItem('st_dashboard_scroll');
+                }
+            }, 80);
+        }
+    } catch (e) {
+        console.error("Scroll restore failed:", e);
+    }
+})();
+</script>"""
+
         def get_card_color(change_ratio):
             val = change_ratio
             if val > 3.0:
