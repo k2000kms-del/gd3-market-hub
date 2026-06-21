@@ -729,6 +729,22 @@ if 'sel_name' not in st.session_state:
     st.session_state.sel_name = "삼성전자"
 if 'chart_key_index' not in st.session_state:
     st.session_state.chart_key_index = 0
+if 'js_helper_input' not in st.session_state:
+    st.session_state.js_helper_input = ""
+
+# JS 수급 트리맵 클릭 시 하드 리로드 없이 소프트 rerun 처리
+if st.session_state.js_helper_input:
+    parts = st.session_state.js_helper_input.split(',')
+    if len(parts) == 2:
+        code_val, name_val = parts[0].strip(), parts[1].strip()
+        st.session_state.sel_code = code_val
+        st.session_state.sel_name = name_val
+        st.query_params['sel_code'] = code_val
+        st.query_params['sel_name'] = name_val
+        st.session_state.chart_key_index += 1
+    st.session_state.js_helper_input = ""
+    st.rerun()
+
 
 try:
     q_params = st.query_params
@@ -786,6 +802,8 @@ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_
 
 # ── 사이드바 정렬 옵션 ──
 st.sidebar.title("🎛️ 대시보드 설정")
+st.sidebar.text_input("js_helper_input", key="js_helper_input", value="", label_visibility="collapsed")
+
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
 q_sort_by = st.sidebar.radio(
     "정렬 기준 선택",
@@ -1313,6 +1331,13 @@ with row1_col1:
 
         # 스타일 정의: 프리미엄 다크 대시보드 맞춤형 CSS (들여쓰기 없이 마크다운 파싱 방지)
         style_html = """<style>
+/* 숨김 처리를 위한 JS 헬퍼 위젯 CSS 규격 */
+div[data-testid="stTextInput"]:has(input[id="js_helper_input"]) {
+    display: none !important;
+}
+input[id="js_helper_input"] {
+    display: none !important;
+}
 .tm-container {
     display: flex;
     width: 100%;
@@ -1400,7 +1425,7 @@ with row1_col1:
 }
 </style>"""
 
-        # 초정밀 스크롤 위치 유지 및 자동 복원 스크립트
+        # 초정밀 스크롤 위치 유지 및 자동 복원 스크립트 (비동기 종목 선택 기능 추가)
         js_scroll_restore = """<script>
 (function() {
     try {
@@ -1425,6 +1450,35 @@ with row1_col1:
         console.error("Scroll restore failed:", e);
     }
 })();
+
+// 수급 트리맵 카드 클릭 시 하드 리로드 방지용 비동기 종목 교체 함수
+window.selectStock = function(code, name) {
+    try {
+        var doc = window.parent.document;
+        var input = doc.querySelector('input[id="js_helper_input"]');
+        if (input) {
+            // 현재 스크롤 유지 데이터 저장
+            localStorage.setItem('st_dashboard_scroll', window.scrollY);
+            
+            // value 설정 및 React 이벤트 발화
+            input.value = code + "," + name;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            
+            // 엔터 키 다운 이벤트 전송으로 Streamlit rerun 강제 트리거
+            var ke = new KeyboardEvent('keydown', {
+                bubbles: true, cancelable: true, keyCode: 13, key: 'Enter'
+            });
+            input.dispatchEvent(ke);
+        } else {
+            // 위젯을 찾을 수 없는 경우 안전하게 URL 하드 폴백
+            window.location.search = "?sel_code=" + code + "&sel_name=" + encodeURIComponent(name);
+        }
+    } catch (err) {
+        console.error("selectStock failed:", err);
+        window.location.search = "?sel_code=" + code + "&sel_name=" + encodeURIComponent(name);
+    }
+};
 </script>"""
 
         def get_card_color(change_ratio):
@@ -1469,7 +1523,7 @@ with row1_col1:
                 
                 tooltip_html = f"<div class='tm-tooltip'><b style='font-size: 12px; color: #fff;'>{name} ({code})</b><br><hr style='border: 0; border-top: 1px solid #333; margin: 6px 0;'>합산 순매수: <b>{comb:+,}주</b><br>🔴 외국인 순매수: {fgn:+,}주<br>🔵 기관 순매수: {inst:+,}주<br>현재가: {price:,.0f}원 ({chg:+.2f}%)</div>"
                 
-                card_html = f"<div class='tm-card-wrapper' style='flex: {card_flex:.1f}; height: 0; min-height: 35px;'><a href='/?sel_code={code}&sel_name={name}' target='_self' class='tm-card' style='background-color: {bg_color};'><div style='text-align: center; padding: 4px; box-sizing: border-box;'><span style='display: block; font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span style='display: block; font-size: 11px; margin-top: 1px; color: rgba(255,255,255,0.95);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
+                card_html = f"<div class='tm-card-wrapper' style='flex: {card_flex:.1f}; height: 0; min-height: 35px;'><a href='javascript:void(0);' onclick='window.selectStock(\"{code}\", \"{name}\");' class='tm-card' style='background-color: {bg_color};'><div style='text-align: center; padding: 4px; box-sizing: border-box;'><span style='display: block; font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span style='display: block; font-size: 11px; margin-top: 1px; color: rgba(255,255,255,0.95);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
                 cards_html.append(card_html)
                 
             col_inner = "".join(cards_html)
