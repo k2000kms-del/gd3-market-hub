@@ -1303,71 +1303,69 @@ with row1_col1:
         else:
             right_df['height_px'] = []
 
-        # 스타일 정의: 프리미엄 다크 대시보드 맞춤형 CSS
-        style_html = """
-        <style>
-        .tm-card {
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            width: 100%;
-            height: 100%;
-            text-decoration: none;
-            color: white;
-            border-radius: 4px;
-            cursor: pointer;
-            box-sizing: border-box;
-            border: 1px solid rgba(255,255,255,0.08);
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .tm-card:hover {
-            transform: translateY(-1px);
-            filter: brightness(1.15);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            border-color: rgba(255,255,255,0.2);
-        }
-        .tm-card-wrapper {
-            position: relative;
-            width: 100%;
-            box-sizing: border-box;
-            z-index: 1;
-        }
-        .tm-card-wrapper:hover {
-            z-index: 9999 !important;
-        }
-        .tm-card-wrapper:hover .tm-tooltip {
-            visibility: visible !important;
-            opacity: 1 !important;
-            left: 105% !important;
-            top: 50% !important;
-            transform: translateY(-50%) !important;
-        }
-        .tm-column:last-child .tm-card-wrapper:hover .tm-tooltip {
-            left: auto !important;
-            right: 105% !important;
-        }
-        .tm-tooltip {
-            visibility: hidden;
-            position: absolute;
-            width: 210px;
-            background-color: #1a1a1a;
-            color: #eeeeee;
-            text-align: left;
-            padding: 12px;
-            border-radius: 6px;
-            border: 1px solid #444;
-            font-size: 11px;
-            font-family: 'malgun gothic', sans-serif;
-            line-height: 1.6;
-            z-index: 9999;
-            opacity: 0;
-            transition: opacity 0.15s ease-in-out;
-            pointer-events: none;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-        }
-        </style>
-        """
+        # 스타일 정의: 프리미엄 다크 대시보드 맞춤형 CSS (들여쓰기 없이 마크다운 파싱 방지)
+        style_html = """<style>
+.tm-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+    text-decoration: none;
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    box-sizing: border-box;
+    border: 1px solid rgba(255,255,255,0.08);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.tm-card:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.15);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    border-color: rgba(255,255,255,0.2);
+}
+.tm-card-wrapper {
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    z-index: 1;
+}
+.tm-card-wrapper:hover {
+    z-index: 9999 !important;
+}
+.tm-card-wrapper:hover .tm-tooltip {
+    visibility: visible !important;
+    opacity: 1 !important;
+    left: 105% !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+}
+.tm-column:last-child .tm-card-wrapper:hover .tm-tooltip {
+    left: auto !important;
+    right: 105% !important;
+}
+.tm-tooltip {
+    visibility: hidden;
+    position: absolute;
+    width: 210px;
+    background-color: #1a1a1a;
+    color: #eeeeee;
+    text-align: left;
+    padding: 12px;
+    border-radius: 6px;
+    border: 1px solid #444;
+    font-size: 11px;
+    font-family: 'malgun gothic', sans-serif;
+    line-height: 1.6;
+    z-index: 9999;
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+    pointer-events: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+}
+</style>"""
         st.markdown(style_html, unsafe_allow_html=True)
 
         def get_card_color(change_ratio):
@@ -1391,43 +1389,15 @@ with row1_col1:
             height_px = row['height_px']
             bg_color = get_card_color(chg)
             
-            tooltip_html = f"""
-            <div class='tm-tooltip'>
-                <b style='font-size: 12px; color: #fff;'>{name} ({code})</b><br>
-                <hr style='border: 0; border-top: 1px solid #333; margin: 6px 0;'>
-                합산 순매수: <b>{comb:+,}주</b><br>
-                🔴 외국인 순매수: {fgn:+,}주<br>
-                🔵 기관 순매수: {inst:+,}주<br>
-                현재가: {price:,.0f}원 ({chg:+.2f}%)
-            </div>
-            """
+            tooltip_html = f"<div class='tm-tooltip'><b style='font-size: 12px; color: #fff;'>{name} ({code})</b><br><hr style='border: 0; border-top: 1px solid #333; margin: 6px 0;'>합산 순매수: <b>{comb:+,}주</b><br>🔴 외국인 순매수: {fgn:+,}주<br>🔵 기관 순매수: {inst:+,}주<br>현재가: {price:,.0f}원 ({chg:+.2f}%)</div>"
             
-            card_html = f"""
-            <div class='tm-card-wrapper' style='height: {height_px:.0f}px;'>
-                <a href='/?sel_code={code}&sel_name={name}' target='_self' class='tm-card' style='background-color: {bg_color};'>
-                    <div style='text-align: center; padding: 4px; box-sizing: border-box;'>
-                        <span style='display: block; font-weight: bold; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span>
-                        <span style='display: block; font-size: 10px; margin-top: 1px; color: rgba(255,255,255,0.8);'>{chg:+.2f}%</span>
-                    </div>
-                    {tooltip_html}
-                </a>
-            </div>
-            """
+            card_html = f"<div class='tm-card-wrapper' style='height: {height_px:.0f}px;'><a href='/?sel_code={code}&sel_name={name}' target='_self' class='tm-card' style='background-color: {bg_color};'><div style='text-align: center; padding: 4px; box-sizing: border-box;'><span style='display: block; font-weight: bold; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span style='display: block; font-size: 10px; margin-top: 1px; color: rgba(255,255,255,0.8);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
             return card_html
 
         left_cards = "".join([make_card_html(row) for _, row in left_df.iterrows()])
         right_cards = "".join([make_card_html(row) for _, row in right_df.iterrows()])
         
-        html_treemap = f"""
-        <div class='tm-container' style='display: flex; width: 100%; height: 320px; background-color: #0e1117; border-radius: 4px; gap: 4px; padding: 2px; box-sizing: border-box;'>
-            <div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%; gap: 4px;'>
-                {left_cards}
-            </div>
-            <div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%; gap: 4px;'>
-                {right_cards}
-            </div>
-        </div>
-        """
+        html_treemap = f"<div class='tm-container' style='display: flex; width: 100%; height: 320px; background-color: #0e1117; border-radius: 4px; gap: 4px; padding: 2px; box-sizing: border-box;'><div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%; gap: 4px;'>{left_cards}</div><div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%; gap: 4px;'>{right_cards}</div></div>"
         st.markdown(html_treemap, unsafe_allow_html=True)
 # ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
 with row1_col2:
