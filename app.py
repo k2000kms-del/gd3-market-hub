@@ -1264,47 +1264,40 @@ with row1_col1:
         
         df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
         
-        style_html = """<style>.tm-card:hover { transform: scale(0.97) !important; filter: brightness(1.2) !important; z-index: 10 !important; } .tm-card-wrapper { z-index: 1; } .tm-card-wrapper:hover { z-index: 999 !important; } .tm-card-wrapper:hover .tm-tooltip { visibility: visible !important; opacity: 1 !important; left: 105% !important; top: 50% !important; transform: translateY(-50%) !important; } .tm-column:last-child .tm-card-wrapper:hover .tm-tooltip { left: auto !important; right: 105% !important; }</style>"""
-        st.markdown(style_html, unsafe_allow_html=True)
-
-        df1['Abs_Net'] = df1['Total_Combined_Net'].abs()
-        left_df = df1.iloc[::2].copy()
-        right_df = df1.iloc[1::2].copy()
-        
-        sum_left = left_df['Abs_Net'].sum() if left_df['Abs_Net'].sum() > 0 else 1
-        sum_right = right_df['Abs_Net'].sum() if right_df['Abs_Net'].sum() > 0 else 1
-        
-        # 균등 높이로 고정 및 최소 높이 확보
-        left_df['height_px'] = 310 / len(left_df) if len(left_df) > 0 else 62
-        right_df['height_px'] = 310 / len(right_df) if len(right_df) > 0 else 62
-        
-        def get_card_color(change_ratio):
-            val = max(-10.0, min(10.0, change_ratio))
-            alpha = 0.2 + (abs(val) / 10.0) * 0.8
-            if val >= 0:
-                return f"rgba(222, 45, 38, {alpha:.2f})"
-            else:
-                return f"rgba(49, 130, 189, {alpha:.2f})"
-                
-        def make_card_html(row, height_px):
-            name = row['Name']
-            code = row['Code']
-            chg = row['ChagesRatio']
-            price = row['Current_Price_Val']
-            vol = row['Trade_Volume_Val']
-            fgn = row['Foreign_Net']
-            inst = row['Institutional_Net']
-            bg_color = get_card_color(chg)
-            
-            tooltip_html = f"<div class='tm-tooltip' style='visibility: hidden; position: absolute; width: 200px; background-color: #141414; color: #fff; text-align: left; padding: 10px; border-radius: 6px; border: 1px solid #444; font-size: 11px; font-family: sans-serif; line-height: 1.5; z-index: 9999; opacity: 0; transition: opacity 0.2s ease; pointer-events: none; box-shadow: 0 4px 10px rgba(0,0,0,0.5);'><b>{name} ({code})</b><br>현재가: {price:,.0f}원<br>등락률: {chg:+.2f}%<br>거래량: {vol:,.0f}주<br>외국인 순매수: {fgn:+,}주<br>기관 순매수: {inst:+,}주</div>"
-            card_html = f"<div class='tm-card-wrapper' style='position: relative; width: 100%; height: {height_px:.0f}px; padding: 2px; box-sizing: border-box;'><a href='/?sel_code={code}&sel_name={name}' target='_self' class='tm-card' style='display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100%; height: 100%; text-decoration: none; color: white; border-radius: 3px; cursor: pointer; box-shadow: inset 0 0 10px rgba(0,0,0,0.2); box-sizing: border-box; background-color: {bg_color}; transition: transform 0.1s ease, filter 0.1s ease;'><div class='tm-card-content' style='text-align: center; font-family: sans-serif;'><span class='tm-card-name' style='display: block; font-weight: bold; font-size: 12px; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span class='tm-card-chg' style='display: block; font-size: 10px; margin-top: 1px; color: rgba(255,255,255,0.9);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
-            return card_html
-            
-        left_cards = "".join([make_card_html(row, row['height_px']) for _, row in left_df.iterrows()])
-        right_cards = "".join([make_card_html(row, row['height_px']) for _, row in right_df.iterrows()])
-        
-        html_treemap = f"<div class='tm-container' style='display: flex; width: 100%; height: 320px; background-color: #0e1117; border-radius: 4px; gap: 0px;'><div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%;'>{left_cards}</div><div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%;'>{right_cards}</div></div>"
-        st.markdown(html_treemap, unsafe_allow_html=True)
+        fig_p1 = go.Figure(go.Treemap(
+            labels=df1['Name'],
+            parents=[""] * len(df1),
+            values=df1['Total_Combined_Net'].abs(),
+            marker=dict(
+                colorscale=kr_scale,
+                colors=df1['ChagesRatio'],
+                cmid=0,
+                showscale=False,
+                line=dict(color='rgba(255,255,255,0.1)', width=1)
+            ),
+            texttemplate="<b>%{label}</b><br>%{customdata[2]:+.2f}%",
+            textposition="middle center",
+            customdata=df1[['Code', 'Close', 'ChagesRatio', 'Total_Combined_Net', 'Foreign_Net', 'Institutional_Net']].values,
+            hovertemplate=(
+                '<b>%{label}</b> (%{customdata[0]})<br>'
+                '━━━━━━━━━━━━━━━━<br>'
+                '합산 순매수: <b>%{customdata[3]:+,}주</b><br>'
+                '🔴 외국인 순매수: %{customdata[4]:+,}주<br>'
+                '🔵 기관 순매수: %{customdata[5]:+,}주<br>'
+                '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)'
+                '<extra></extra>'
+            )
+        ))
+        fig_p1.update_layout(
+            height=320,
+            template='plotly_dark',
+            margin=dict(t=10, b=10, l=10, r=10),
+            clickmode='event+select',
+            font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+            dragmode=False
+        )
+        ev_p1 = st.plotly_chart(fig_p1, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p1_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
+        handle_chart_click(ev_p1)
 # ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
 with row1_col2:
     st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
