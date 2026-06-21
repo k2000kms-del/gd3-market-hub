@@ -1415,32 +1415,83 @@ with row1_col3:
         df3 = df_m_clean3.sort_values('Amount', ascending=True).tail(12).copy()
         df3['Amount_100M'] = df3['Amount'] / 100000000
         
+        # 매수/매도 거래대금 추정 (CLV + 등락률 하이브리드 모델)
+        buy_fractions = []
+        for idx, row_i in df3.iterrows():
+            close_val = float(row_i.get('Close', 0))
+            high_val = float(row_i.get('High', 0))
+            low_val = float(row_i.get('Low', 0))
+            ratio_val = float(row_i.get('ChagesRatio', 0))
+            
+            clv = 0.0
+            if high_val > low_val:
+                clv = ((close_val - low_val) - (high_val - close_val)) / (high_val - low_val)
+            
+            # 하이브리드 가중치: CLV 30% + 등락률 20% + 기본 50%
+            buy_frac = 0.5 + 0.3 * clv + 0.2 * (ratio_val / 30.0)
+            buy_frac = max(0.1, min(0.9, buy_frac))
+            buy_fractions.append(buy_frac)
+            
+        df3['Buy_Fraction'] = buy_fractions
+        df3['Sell_Fraction'] = 1.0 - df3['Buy_Fraction']
+        df3['Buy_Amount_100M'] = df3['Amount_100M'] * df3['Buy_Fraction']
+        df3['Sell_Amount_100M'] = df3['Amount_100M'] * df3['Sell_Fraction']
+        
+        custom_data_values = df3[['Code', 'Close', 'ChagesRatio', 'Amount_100M', 'Buy_Amount_100M', 'Sell_Amount_100M', 'Buy_Fraction', 'Sell_Fraction']].values
+        
+        # 1. 매수 거래대금 Trace (빨간색)
         fig_p3.add_trace(go.Bar(
+            name='매수 대금',
             y=df3['Name'],
-            x=df3['Amount_100M'],
+            x=df3['Buy_Amount_100M'],
             orientation='h',
             marker=dict(
-                colorscale=kr_scale,
-                color=df3['ChagesRatio'],
-                cmid=0,
-                showscale=False,
+                color='#ff6b6b',
                 line=dict(color='rgba(255,255,255,0.1)', width=1)
             ),
-            text=df3['Amount_100M'].apply(lambda x: f" {x:,.0f}"),
-            textposition='outside',
-            customdata=df3[['Code', 'Close', 'ChagesRatio']].values,
+            customdata=custom_data_values,
             hovertemplate=(
                 '<b>%{y}</b> (%{customdata[0]})<br>'
-                '거래대금: %{x:,.0f}억원<br>'
+                '━━━━━━━━━━━━━━━━<br>'
+                '총 거래대금: <b>%{customdata[3]:,.0f}억원</b><br>'
+                '🔴 매수 대금: %{customdata[4]:,.0f}억원 (%{customdata[6]:.1%})<br>'
+                '🔵 매도 대금: %{customdata[5]:,.0f}억원 (%{customdata[7]:.1%})<br>'
                 '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)'
                 '<extra></extra>'
             )
         ))
+        
+        # 2. 매도 거래대금 Trace (파란색) - 누적으로 쌓임
+        fig_p3.add_trace(go.Bar(
+            name='매도 대금',
+            y=df3['Name'],
+            x=df3['Sell_Amount_100M'],
+            orientation='h',
+            marker=dict(
+                color='#4e9ff5',
+                line=dict(color='rgba(255,255,255,0.1)', width=1)
+            ),
+            text=df3['Amount_100M'].apply(lambda x: f" {x:,.0f}"),
+            textposition='outside',
+            customdata=custom_data_values,
+            hovertemplate=(
+                '<b>%{y}</b> (%{customdata[0]})<br>'
+                '━━━━━━━━━━━━━━━━<br>'
+                '총 거래대금: <b>%{customdata[3]:,.0f}억원</b><br>'
+                '🔴 매수 대금: %{customdata[4]:,.0f}억원 (%{customdata[6]:.1%})<br>'
+                '🔵 매도 대금: %{customdata[5]:,.0f}억원 (%{customdata[7]:.1%})<br>'
+                '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)'
+                '<extra></extra>'
+            )
+        ))
+        
     fig_p3.update_layout(
         height=320,
         template='plotly_dark',
         margin=dict(t=10, b=10, l=85, r=60),
         clickmode='event+select',
+        barmode='stack',
+        showlegend=False,
         font=dict(family='malgun gothic, nanum gothic, sans-serif'),
         xaxis=dict(fixedrange=True),
         yaxis=dict(fixedrange=True),
