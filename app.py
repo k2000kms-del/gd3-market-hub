@@ -187,14 +187,26 @@ def on_js_trigger():
         print(f"DEBUG: on_js_trigger failed: {e}")
 
 st.markdown("""
-<style>
-div[data-testid="stButton"]:has(button[id*="js_trigger_btn"]) {
-    display: none !important;
-}
-button[id*="js_trigger_btn"] {
-    display: none !important;
-}
-</style>
+<script>
+(function() {
+    function hideBtn() {
+        var doc = window.parent.document;
+        var buttons = doc.querySelectorAll('button');
+        for (var i = 0; i < buttons.length; i++) {
+            if (buttons[i].textContent.trim() === "js_trigger_btn") {
+                var container = buttons[i].closest('div[data-testid="stButton"]');
+                if (container) {
+                    container.style.display = 'none';
+                    var outer = container.closest('.element-container');
+                    if (outer) outer.style.display = 'none';
+                }
+            }
+        }
+    }
+    hideBtn();
+    setInterval(hideBtn, 100);
+})();
+</script>
 """, unsafe_allow_html=True)
 st.button("js_trigger_btn", key="js_trigger_btn", on_click=on_js_trigger)
 
@@ -1340,13 +1352,6 @@ with row1_col1:
 
         # 스타일 정의: 프리미엄 다크 대시보드 맞춤형 CSS (들여쓰기 없이 마크다운 파싱 방지)
         style_html = """<style>
-/* 숨김 처리를 위한 JS 헬퍼 위젯 CSS 규격 */
-div[data-testid="stButton"]:has(button[id*="js_trigger_btn"]) {
-    display: none !important;
-}
-button[id*="js_trigger_btn"] {
-    display: none !important;
-}
 .tm-container {
     display: flex;
     width: 100%;
@@ -1473,14 +1478,12 @@ window.selectStock = function(code, name) {
         
         // 3. 숨겨진 Streamlit 버튼을 찾아 클릭 이벤트 트리거
         var doc = parentWin.document;
-        var btn = doc.querySelector('button[id*="js_trigger_btn"]');
-        if (!btn) {
-            var buttons = doc.querySelectorAll('button');
-            for (var i = 0; i < buttons.length; i++) {
-                if (buttons[i].id && buttons[i].id.includes("js_trigger_btn")) {
-                    btn = buttons[i];
-                    break;
-                }
+        var btn = null;
+        var buttons = doc.querySelectorAll('button');
+        for (var i = 0; i < buttons.length; i++) {
+            if (buttons[i].textContent.trim() === "js_trigger_btn") {
+                btn = buttons[i];
+                break;
             }
         }
         
