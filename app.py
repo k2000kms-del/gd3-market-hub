@@ -1342,13 +1342,18 @@ with row1_col2:
 
         if q_sort_by == "거래대금 순" and 'Amount' in df2.columns:
             df2 = df2.sort_values('Amount', ascending=True).tail(10).copy()
-            x_val = df2['Amount'] / 1e8
-            hover_label = '거래대금: %{x:,.1f}억원'
-            text_labels = df2['Amount'].apply(lambda x: f" {x/1e8:,.0f}")
+            df2['Amount_100M'] = df2['Amount'] / 1e8
+            # 시각적 스케일링: 아웃라이어로 인해 막대가 압착되는 현상 완화
+            df2['Visual_Val'] = df2['Amount_100M'] ** 0.55
+            x_val = df2['Visual_Val']
+            hover_label = '거래대금: <b>%{customdata[5]:,.0f}억원</b>'
+            text_labels = df2['Amount_100M'].apply(lambda x: f" {x:,.0f}")
         else:
             df2 = df2.sort_values('Total_Score_Adj', ascending=True).tail(10).copy()
-            x_val = df2['Total_Score_Adj']
-            hover_label = '보정 Quant 점수: %{x:.1f}점'
+            df2['Amount_100M'] = df2['Amount'] / 1e8
+            df2['Visual_Val'] = df2['Total_Score_Adj']
+            x_val = df2['Visual_Val']
+            hover_label = '보정 Quant 점수: <b>%{x:.1f}점</b>'
             text_labels = df2['Total_Score_Adj'].apply(lambda x: f" {x:.1f}")
 
         fig_p2.add_trace(go.Bar(
@@ -1363,7 +1368,7 @@ with row1_col2:
             ),
             text=text_labels,
             textposition='outside',
-            customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score_Adj', 'Total_Score']].values,
+            customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score_Adj', 'Total_Score', 'Amount_100M']].values,
             hovertemplate=(
                 '<b>%{y}</b> (%{customdata[0]})<br>'
                 '━━━━━━━━━━━━━━━<br>'
@@ -1376,7 +1381,7 @@ with row1_col2:
     fig_p2.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=85, r=60),
+        margin=dict(t=10, b=10, l=95, r=80),  # 좌우 여백을 넓혀 기기별 잘림 방지
         clickmode='event+select',
         font=dict(family='malgun gothic, nanum gothic, sans-serif'),
         xaxis=dict(fixedrange=True),
@@ -1385,7 +1390,7 @@ with row1_col2:
     )
     fig_p2.update_yaxes(automargin=True)
     max_x = float(x_val.max()) if not x_val.empty else 100
-    fig_p2.update_xaxes(range=[0, max_x * 1.25])
+    fig_p2.update_xaxes(range=[0, max_x * 1.30])
     ev_p2 = st.plotly_chart(fig_p2, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p2_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
     handle_chart_click(ev_p2)
 
@@ -1437,13 +1442,18 @@ with row1_col3:
         df3['Buy_Amount_100M'] = df3['Amount_100M'] * df3['Buy_Fraction']
         df3['Sell_Amount_100M'] = df3['Amount_100M'] * df3['Sell_Fraction']
         
+        # 시각적 가로막대 길이 완화 (아웃라이어 왜곡 방지 및 태블릿 가독성 제고)
+        df3['Visual_Total'] = df3['Amount_100M'] ** 0.55
+        df3['Buy_Visual'] = df3['Visual_Total'] * df3['Buy_Fraction']
+        df3['Sell_Visual'] = df3['Visual_Total'] * df3['Sell_Fraction']
+        
         custom_data_values = df3[['Code', 'Close', 'ChagesRatio', 'Amount_100M', 'Buy_Amount_100M', 'Sell_Amount_100M', 'Buy_Fraction', 'Sell_Fraction']].values
         
         # 1. 매수 거래대금 Trace (빨간색)
         fig_p3.add_trace(go.Bar(
             name='매수 대금',
             y=df3['Name'],
-            x=df3['Buy_Amount_100M'],
+            x=df3['Buy_Visual'],
             orientation='h',
             marker=dict(
                 color='#ff6b6b',
@@ -1465,7 +1475,7 @@ with row1_col3:
         fig_p3.add_trace(go.Bar(
             name='매도 대금',
             y=df3['Name'],
-            x=df3['Sell_Amount_100M'],
+            x=df3['Sell_Visual'],
             orientation='h',
             marker=dict(
                 color='#4e9ff5',
@@ -1488,7 +1498,7 @@ with row1_col3:
     fig_p3.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=85, r=60),
+        margin=dict(t=10, b=10, l=95, r=80),  # 좌우 여백을 넓혀 기기별 잘림 방지
         clickmode='event+select',
         barmode='stack',
         showlegend=False,
@@ -1498,8 +1508,8 @@ with row1_col3:
         dragmode=False
     )
     fig_p3.update_yaxes(automargin=True)
-    max_x = float(df3['Amount_100M'].max()) if not df3.empty else 100
-    fig_p3.update_xaxes(range=[0, max_x * 1.25])
+    max_x = float(df3['Visual_Total'].max()) if not df3.empty else 100
+    fig_p3.update_xaxes(range=[0, max_x * 1.30])
     ev_p3 = st.plotly_chart(fig_p3, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p3_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
     handle_chart_click(ev_p3)
 
@@ -1718,7 +1728,7 @@ with row2_col3:
     fig_p6.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=85, r=60),
+        margin=dict(t=10, b=10, l=95, r=80),  # 좌우 여백을 넓혀 기기별 잘림 방지
         clickmode='event+select',
         font=dict(family='malgun gothic, nanum gothic, sans-serif'),
         xaxis=dict(fixedrange=True),
@@ -1727,7 +1737,7 @@ with row2_col3:
     )
     fig_p6.update_yaxes(automargin=True)
     max_x = float(df6['ChagesRatio'].max()) if not df6.empty else 30
-    fig_p6.update_xaxes(range=[0, max_x * 1.25])
+    fig_p6.update_xaxes(range=[0, max_x * 1.30])
     ev_p6 = st.plotly_chart(fig_p6, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p6_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
     handle_chart_click(ev_p6)
 
