@@ -8,6 +8,17 @@ GD 3.0 Market Hub - 데이터 수집기 (GitHub Actions 전용)
 """
 
 import os
+import sys
+
+# ── 윈도우 환경 이모지 출력 시 cp949 디코딩 에러 방지 ───────────────
+try:
+    if sys.stdout.encoding != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+    if sys.stderr.encoding != 'utf-8':
+        sys.stderr.reconfigure(encoding='utf-8')
+except AttributeError:
+    pass
+
 import json
 import requests
 import pandas as pd
@@ -25,8 +36,9 @@ except ImportError:
     print("  ⚠️ TA-Lib 임포트 실패 - 순수 파이썬(pandas) 폴백 엔진으로 대체 동작합니다.")
 
 # ── KIS API 설정 (환경변수에서 읽기) ────────────────────────────
-APP_KEY    = os.environ.get('KIS_APP_KEY', '')
-APP_SECRET = os.environ.get('KIS_APP_SECRET', '')
+# KIS API 인증 키 탐색 (대체 별칭 KIS_KEY / KIS_SECRET 지원)
+APP_KEY    = os.environ.get('KIS_APP_KEY', os.environ.get('KIS_KEY', ''))
+APP_SECRET = os.environ.get('KIS_APP_SECRET', os.environ.get('KIS_SECRET', ''))
 URL_BASE   = 'https://openapi.koreainvestment.com:9443'
 
 # ── Supabase 설정 (환경변수에서 읽기) ───────────────────────────
@@ -542,6 +554,82 @@ def detect_candle_patterns(df_hist):
     return is_engulfing, is_morning_star
 
 
+def detect_bearish_patterns(df_hist):
+    """최근 3~5거래일 데이터를 활용해 하락 반전 패턴 수학적 감지"""
+    if len(df_hist) < 5:
+        return False, False, False
+        
+    is_bearish_engulfing = False
+    is_evening_star = False
+    is_bearish_pinbar = False
+    
+    o = df_hist['Open'].values.astype(float)
+    h = df_hist['High'].values.astype(float)
+    l = df_hist['Low'].values.astype(float)
+    c = df_hist['Close'].values.astype(float)
+    v = df_hist['Volume'].values.astype(float) if 'Volume' in df_hist.columns else np.zeros(len(df_hist))
+    
+    if HAS_TALIB:
+        try:
+            engulf = talib.CDLENGULFING(o, h, l, c)
+            if len(engulf) > 0 and engulf[-1] == -100:
+                is_bearish_engulfing = True
+                
+            e_star = talib.CDLEVENINGSTAR(o, h, l, c)
+            if len(e_star) > 0 and e_star[-1] == -100:
+                is_evening_star = True
+        except Exception as e:
+            print(f"  ⚠️ CDL Bearish Pattern Check via TA-Lib failed: {e}")
+            
+    # Fallback 수식
+    if not is_bearish_engulfing or not is_evening_star:
+        try:
+            prev_o = float(df_hist['Open'].iloc[-2])
+            prev_c = float(df_hist['Close'].iloc[-2])
+            curr_o = float(df_hist['Open'].iloc[-1])
+            curr_c = float(df_hist['Close'].iloc[-1])
+            
+            # 1) 하락 장악형 (전일 양봉 몸통을 오늘 음봉 몸통이 장악)
+            if prev_c > prev_o and curr_c < curr_o:
+                if curr_o >= prev_c and curr_c <= prev_o:
+                    if (curr_o - curr_c) > (prev_c - prev_o):
+                        is_bearish_engulfing = True
+                        
+            # 2) 석별형 (3일 전 장대양봉 → 2일 전 스타 도지 → 1일 전 장대음봉)
+            o1, c1 = float(df_hist['Open'].iloc[-3]), float(df_hist['Close'].iloc[-3])
+            o2, c2 = float(df_hist['Open'].iloc[-2]), float(df_hist['Close'].iloc[-2])
+            o3, c3 = float(df_hist['Open'].iloc[-1]), float(df_hist['Close'].iloc[-1])
+            
+            if c1 > o1 and (c1 - o1) / o1 >= 0.015:  # 3일 전 장대양봉
+                if abs(o2 - c2) / o2 <= 0.004:         # 2일 전 도지/스타
+                    if c3 < o3 and c3 < (o1 + c1) / 2: # 1일 전 장대음봉이 양봉의 절반 이하로 하락
+                        is_evening_star = True
+        except Exception:
+            pass
+
+    # 3) 위꼬리 고거래량 음봉 (Bearish Pinbar with Volume Spike)
+    try:
+        curr_o = float(df_hist['Open'].iloc[-1])
+        curr_c = float(df_hist['Close'].iloc[-1])
+        curr_h = float(df_hist['High'].iloc[-1])
+        curr_l = float(df_hist['Low'].iloc[-1])
+        
+        body = abs(curr_c - curr_o)
+        rng = curr_h - curr_l
+        upper_shadow = curr_h - max(curr_o, curr_c)
+        
+        if rng > 0 and upper_shadow >= rng * 0.5 and curr_c <= curr_o * 1.01:
+            if len(df_hist) >= 6:
+                vol_today = float(v[-1])
+                avg_vol_5d = float(np.mean(v[-6:-1]))
+                if avg_vol_5d > 0 and vol_today >= avg_vol_5d * 2.0:
+                    is_bearish_pinbar = True
+    except Exception:
+        pass
+        
+    return is_bearish_engulfing, is_evening_star, is_bearish_pinbar
+
+
 def detect_double_bottom(df_hist):
     """최근 60거래일 데이터를 활용해 이중 바닥(쌍바닥) 패턴 수학적 감지"""
     if len(df_hist) < 40:
@@ -794,6 +882,16 @@ def collect_quant_final(token, df_hd, df_full):
         code = str(row.get('Code', '')).zfill(6)
         name = row.get('Name', '')
         
+        # ── ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
+        name_lower = name.lower()
+        exclude_keywords = [
+            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
+            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
+            'plus', 'rise', 'woori', 'arirang', '곱버스'
+        ]
+        if any(kw in name_lower for kw in exclude_keywords):
+            continue
+            
         # 이전 루프의 변수 오염을 막기 위한 초기화
         df_hist = None
         today_amount = 0
@@ -1065,6 +1163,80 @@ def collect_quant_final(token, df_hd, df_full):
         raw_score   = score_momentum + score_supply + score_volume + score_ma + score_candle + chart_bonus
         total_score = round(raw_score * vol_penalty * sector_mult * market_penalty, 1)
 
+        # ── [고도화] 매도 퀀트 점수(Sell Score) 산출 (최대 100점) ─────────────────────
+        score_sell = 0.0
+        try:
+            if df_hist is not None and not df_hist.empty:
+                # 1) 하락 모멘텀 점수 (최대 20점)
+                score_sell_mom = 0.0
+                if change < 0:
+                    score_sell_mom = min(10.0, abs(change) * 2.0)  # -5% 하락 시 10점 만점
+                if len(df_hist) >= 6:
+                    price_5d_ago = float(df_hist['Close'].iloc[-6])
+                    price_now = float(df_hist['Close'].iloc[-1])
+                    ret_5d = ((price_now - price_5d_ago) / price_5d_ago * 100) if price_5d_ago > 0 else 0
+                    if ret_5d < -10:
+                        score_sell_mom += 10.0  # 단기 폭락
+                    elif ret_5d > 25:
+                        score_sell_mom += 10.0  # 극단적 과열 (이격 과다)
+                score_sell += min(20.0, score_sell_mom)
+
+                # 2) 수급 이탈 점수 (최대 30점)
+                score_sell_supply = 0.0
+                net_sell_qty = - (foreign_qty + inst_qty)
+                if net_sell_qty > 0:
+                    net_sell_amount = net_sell_qty * close
+                    if marcap > 0:
+                        sell_ratio = (net_sell_amount / marcap) * 100
+                        score_sell_supply = min(30.0, (sell_ratio / 0.05) * 15)  # 시총 대비 0.1% 순매도 시 30점
+                    else:
+                        score_sell_supply = min(30.0, net_sell_amount / 100_000_000 * 3)
+                score_sell += score_sell_supply
+
+                # 3) 거래량 터진 음봉 점수 (최대 20점)
+                score_sell_vol = 0.0
+                if change < 0 and 'Volume' in df_hist.columns and len(df_hist) >= 20:
+                    df_hist['Amount_Hist'] = df_hist['Close'] * df_hist['Volume']
+                    today_amt = df_hist['Amount_Hist'].iloc[-1]
+                    hist_l = len(df_hist)
+                    avg_amt_20d = df_hist['Amount_Hist'].iloc[max(0, hist_l-21):hist_l-1].mean()
+                    if avg_amt_20d > 0:
+                        vol_surge = today_amt / avg_amt_20d
+                        if vol_surge >= 2.0:
+                            score_sell_vol = min(20.0, (vol_surge - 1.0) * 10)
+                score_sell += score_sell_vol
+
+                # 4) 기술적 하락 및 하락 패턴 점수 (최대 30점)
+                score_sell_tech = 0.0
+                ma5_val = df_hist['Close'].rolling(5).mean().iloc[-1]
+                ma20_val = df_hist['Close'].rolling(20).mean().iloc[-1] if len(df_hist) >= 20 else ma5_val
+                if today_close < ma5_val and today_close < ma20_val:
+                    if ma5_val <= ma20_val:
+                        score_sell_tech += 15.0  # 데드크로스/역배열
+                    else:
+                        score_sell_tech += 8.0   # 5/20일선 모두 하회
+                
+                disp_ma20 = (today_close / ma20_val) * 100 if ma20_val > 0 else 100
+                if disp_ma20 >= 115:
+                    score_sell_tech += 15.0  # 이격 과열
+
+                is_bear_engulf, is_eve_star, is_bear_pin = detect_bearish_patterns(df_hist)
+                if is_bear_engulf:
+                    score_sell_tech += 10.0
+                    print(f"  💀 [{name}] 하락장악형 캔들 패턴 감지 (매도점수 +10.0)")
+                if is_eve_star:
+                    score_sell_tech += 12.0
+                    print(f"  💀 [{name}] 석별형 캔들 패턴 감지 (매도점수 +12.0)")
+                if is_bear_pin:
+                    score_sell_tech += 8.0
+                    print(f"  💀 [{name}] 위꼬리 고거래량 음봉 패턴 감지 (매도점수 +8.0)")
+
+                score_sell += min(30.0, score_sell_tech)
+        except Exception as sell_score_err:
+            print(f"  ⚠️ [{name}] 매도 점수 산출 중 예외 발생: {sell_score_err}")
+
+        sell_score = round(min(100.0, max(0.0, score_sell)), 1)
+
         # FDR 당일 거래대금(today_amount)이 산출되어 있으면 사용, 없으면 df_hd의 Amount 사용 (단위: 원)
         amount = today_amount if today_amount > 0 else float(row.get('Amount', 0))
 
@@ -1072,6 +1244,7 @@ def collect_quant_final(token, df_hd, df_full):
             'Code':             code,
             'Name':             name,
             'Total_Score':      total_score,
+            'Sell_Score':       sell_score,
             'Score_Momentum':   round(score_momentum, 1),
             'Score_Supply':     round(score_supply, 1),
             'Score_Volume':     round(score_volume, 1),
@@ -1334,7 +1507,7 @@ def main():
 
     if not APP_KEY or not APP_SECRET:
         print('❌ KIS_APP_KEY / KIS_APP_SECRET 환경변수가 설정되지 않았습니다.')
-        return
+        sys.exit(1)
 
     # KIS 토큰 발급
     print('\n🔑 KIS API 토큰 발급 중...')
