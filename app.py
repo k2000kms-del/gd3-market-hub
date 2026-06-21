@@ -175,6 +175,21 @@ st.set_page_config(
     initial_sidebar_state='collapsed'
 )
 
+# ── 숨김 처리를 위한 JS 헬퍼 위젯과 CSS (항상 DOM에 존재하도록 메인 바디 상단에 배치) ──
+st.markdown("""
+<style>
+div[data-testid="stTextInput"]:has(input[id*="js_helper_input"]),
+div[data-testid="stTextInput"]:has(input[aria-label="js_helper_input"]) {
+    display: none !important;
+}
+input[id*="js_helper_input"] {
+    display: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+st.text_input("js_helper_input", key="js_helper_input", value="", label_visibility="collapsed")
+
+
 # ── GitHub 레포지토리 raw URL (data/ 폴더) ────────────────────────
 GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/k2000kms-del/gd3-market-hub/main/data'
 DATA_FILES = [
@@ -802,8 +817,6 @@ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_
 
 # ── 사이드바 정렬 옵션 ──
 st.sidebar.title("🎛️ 대시보드 설정")
-st.sidebar.text_input("js_helper_input", key="js_helper_input", value="", label_visibility="collapsed")
-
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
 q_sort_by = st.sidebar.radio(
     "정렬 기준 선택",
@@ -1451,11 +1464,22 @@ input[id="js_helper_input"] {
     }
 })();
 
-// 수급 트리맵 카드 클릭 시 하드 리로드 방지용 비동기 종목 교체 함수
 window.selectStock = function(code, name) {
     try {
         var doc = window.parent.document;
-        var input = doc.querySelector('input[id="js_helper_input"]');
+        var input = doc.querySelector('input[id*="js_helper_input"]') || doc.querySelector('input[aria-label="js_helper_input"]');
+        if (!input) {
+            var inputs = doc.querySelectorAll('input');
+            for (var i = 0; i < inputs.length; i++) {
+                var id = inputs[i].id || "";
+                var ariaLabel = inputs[i].getAttribute('aria-label') || "";
+                if (id.includes("js_helper_input") || ariaLabel === "js_helper_input") {
+                    input = inputs[i];
+                    break;
+                }
+            }
+        }
+        
         if (input) {
             // 현재 스크롤 유지 데이터 저장
             localStorage.setItem('st_dashboard_scroll', window.scrollY);
