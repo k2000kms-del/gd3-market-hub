@@ -38,11 +38,10 @@ def get_kospi_ma20():
 
 @st.cache_data(ttl=1200)
 def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key):
-    """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성"""
+    """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
         return "🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     
     system_instruction = (
@@ -68,20 +67,39 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         "systemInstruction": {"parts": [{"text": system_instruction}]}
     }
     
-    # 간헐적 네트워크 지연 대비 최대 2회 재시도 루프
+    # 순차적 시도할 모델 리스트 (요청 한도가 넉넉한 2.5-flash 및 2.0-flash 우선 배치)
+    models_to_try = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-3.5-flash"
+    ]
+    
     last_err = None
-    for attempt in range(2):
-        try:
-            r = requests.post(url, json=payload, headers=headers, timeout=25)
-            if r.status_code == 200:
-                return r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            else:
-                last_err = f"API 응답 코드: {r.status_code}"
-        except Exception as e:
-            last_err = str(e)
-        time.sleep(1.0) # 재시도 전 1초 대기
-
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        for attempt in range(2):
+            try:
+                r = requests.post(url, json=payload, headers=headers, timeout=15)
+                if r.status_code == 200:
+                    res_json = r.json()
+                    candidates = res_json.get('candidates', [])
+                    if candidates:
+                        content = candidates[0].get('content', {})
+                        parts = content.get('parts', [])
+                        if parts:
+                            return parts[0].get('text', '').strip()
+                    last_err = "API 응답 본문에 텍스트 데이터가 누락되었습니다."
+                else:
+                    last_err = f"API 응답 코드: {r.status_code} ({r.text[:100]})"
+                    # 할당량 초과(429) 시 신속한 전환을 위해 즉시 다음 모델로 폴백
+                    if r.status_code == 429:
+                        break
+            except Exception as e:
+                last_err = str(e)
+            time.sleep(0.5)
+            
     return f"⚠️ AI 코멘터리 생성 실패 (네트워크 지연/오류: {last_err})"
+
 
 @st.cache_data(ttl=30)  # 30초 캐시 (실시간이지만 너무 잦은 호출 방지)
 def fetch_naver_realtime_indices():
@@ -1381,36 +1399,6 @@ with row1_col1:
     text-shadow: none !important;
 }
 </style>"""
-        st.markdown(style_html, unsafe_allow_html=True)
-
-        # 초정밀 스크롤 위치 유지 및 자동 복원 스크립트
-        js_scroll_restore = """<script>
-(function() {
-    try {
-        window.addEventListener('beforeunload', function() {
-            localStorage.setItem('st_dashboard_scroll', window.scrollY);
-        });
-        
-        var targetScroll = localStorage.getItem('st_dashboard_scroll');
-        if (targetScroll) {
-            var scrollPos = parseInt(targetScroll);
-            var attempts = 0;
-            var interval = setInterval(function() {
-                window.scrollTo(0, scrollPos);
-                attempts++;
-                if (attempts > 15 || Math.abs(window.scrollY - scrollPos) < 5) {
-                    clearInterval(interval);
-                    localStorage.removeItem('st_dashboard_scroll');
-                }
-            }, 80);
-        }
-    } catch (e) {
-        console.error("Scroll restore failed:", e);
-    }
-})();
-</script>"""
-        st.markdown(js_scroll_restore, unsafe_allow_html=True)
-
         def get_card_color(change_ratio):
             val = change_ratio
             if val > 3.0:
@@ -1427,6 +1415,7 @@ with row1_col1:
                 return "#3b82f6"  # 밝은 파랑
             else:
                 return "#4b5563"  # 회색
+
 
         col_html_list = []
         for col_idx, group in enumerate(col_groups):
@@ -1461,7 +1450,10 @@ with row1_col1:
             
         all_cols_html = "".join(col_html_list)
         html_treemap = f"<div class='tm-container'>{all_cols_html}</div>"
-        st.markdown(html_treemap, unsafe_allow_html=True)
+        
+        # 1번 패널의 상단 오프셋을 2번 패널과 일치시키기 위해 단일 markdown 호출로 결합
+        final_element_html = f"{style_html}\n{js_scroll_restore}\n{html_treemap}"
+        st.markdown(final_element_html, unsafe_allow_html=True)
 # ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
 with row1_col2:
     st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
