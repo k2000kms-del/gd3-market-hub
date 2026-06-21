@@ -1318,19 +1318,24 @@ with row1_col1:
     align-items: center;
     width: 100%;
     height: 100%;
-    text-decoration: none;
-    color: white;
-    border-radius: 4px;
+    text-decoration: none !important;
+    color: #ffffff !important;
+    border-radius: 6px;
     cursor: pointer;
     box-sizing: border-box;
-    border: 1px solid rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .tm-card:hover {
     transform: translateY(-1px);
     filter: brightness(1.15);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    border-color: rgba(255,255,255,0.2);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    border-color: rgba(255,255,255,0.3);
+}
+.tm-card span {
+    color: #ffffff !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 .tm-card-wrapper {
     position: relative;
@@ -1371,17 +1376,57 @@ with row1_col1:
     pointer-events: none;
     box-shadow: 0 8px 24px rgba(0,0,0,0.6);
 }
+.tm-tooltip b, .tm-tooltip span {
+    color: inherit !important;
+    text-shadow: none !important;
+}
 </style>"""
         st.markdown(style_html, unsafe_allow_html=True)
 
+        # 초정밀 스크롤 위치 유지 및 자동 복원 스크립트
+        js_scroll_restore = """<script>
+(function() {
+    try {
+        window.addEventListener('beforeunload', function() {
+            localStorage.setItem('st_dashboard_scroll', window.scrollY);
+        });
+        
+        var targetScroll = localStorage.getItem('st_dashboard_scroll');
+        if (targetScroll) {
+            var scrollPos = parseInt(targetScroll);
+            var attempts = 0;
+            var interval = setInterval(function() {
+                window.scrollTo(0, scrollPos);
+                attempts++;
+                if (attempts > 15 || Math.abs(window.scrollY - scrollPos) < 5) {
+                    clearInterval(interval);
+                    localStorage.removeItem('st_dashboard_scroll');
+                }
+            }, 80);
+        }
+    } catch (e) {
+        console.error("Scroll restore failed:", e);
+    }
+})();
+</script>"""
+        st.markdown(js_scroll_restore, unsafe_allow_html=True)
+
         def get_card_color(change_ratio):
-            val = max(-6.0, min(6.0, change_ratio))  # -6% ~ +6% 범위 클램프
-            if val >= 0:
-                alpha = 0.2 + (val / 6.0) * 0.7
-                return f"rgba(235, 77, 75, {alpha:.2f})"
+            val = change_ratio
+            if val > 3.0:
+                return "#991b1b"  # 진한 빨강
+            elif val > 1.0:
+                return "#dc2626"  # 중간 빨강
+            elif val > 0.0:
+                return "#ef4444"  # 밝은 빨강
+            elif val < -3.0:
+                return "#1e3a8a"  # 진한 파랑
+            elif val < -1.0:
+                return "#2563eb"  # 중간 파랑
+            elif val < 0.0:
+                return "#3b82f6"  # 밝은 파랑
             else:
-                alpha = 0.2 + (abs(val) / 6.0) * 0.7
-                return f"rgba(74, 159, 245, {alpha:.2f})"
+                return "#4b5563"  # 회색
 
         col_html_list = []
         for col_idx, group in enumerate(col_groups):
@@ -1407,7 +1452,7 @@ with row1_col1:
                 
                 tooltip_html = f"<div class='tm-tooltip'><b style='font-size: 12px; color: #fff;'>{name} ({code})</b><br><hr style='border: 0; border-top: 1px solid #333; margin: 6px 0;'>합산 순매수: <b>{comb:+,}주</b><br>🔴 외국인 순매수: {fgn:+,}주<br>🔵 기관 순매수: {inst:+,}주<br>현재가: {price:,.0f}원 ({chg:+.2f}%)</div>"
                 
-                card_html = f"<div class='tm-card-wrapper' style='flex: {card_flex:.1f}; height: 0; min-height: 35px;'><a href='/?sel_code={code}&sel_name={name}' target='_self' class='tm-card' style='background-color: {bg_color};'><div style='text-align: center; padding: 4px; box-sizing: border-box;'><span style='display: block; font-weight: bold; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span style='display: block; font-size: 10px; margin-top: 1px; color: rgba(255,255,255,0.8);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
+                card_html = f"<div class='tm-card-wrapper' style='flex: {card_flex:.1f}; height: 0; min-height: 35px;'><a href='/?sel_code={code}&sel_name={name}' target='_self' class='tm-card' style='background-color: {bg_color};'><div style='text-align: center; padding: 4px; box-sizing: border-box;'><span style='display: block; font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span style='display: block; font-size: 11px; margin-top: 1px; color: rgba(255,255,255,0.95);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
                 cards_html.append(card_html)
                 
             col_inner = "".join(cards_html)
