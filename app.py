@@ -1264,40 +1264,171 @@ with row1_col1:
         
         df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
         
-        fig_p1 = go.Figure(go.Treemap(
-            labels=df1['Name'],
-            parents=[""] * len(df1),
-            values=df1['Total_Combined_Net'].abs(),
-            marker=dict(
-                colorscale=kr_scale,
-                colors=df1['ChagesRatio'],
-                cmid=0,
-                showscale=False,
-                line=dict(color='rgba(255,255,255,0.1)', width=1)
-            ),
-            texttemplate="<b>%{label}</b><br>%{customdata[2]:+.2f}%",
-            textposition="middle center",
-            customdata=df1[['Code', 'Close', 'ChagesRatio', 'Total_Combined_Net', 'Foreign_Net', 'Institutional_Net']].values,
-            hovertemplate=(
-                '<b>%{label}</b> (%{customdata[0]})<br>'
-                '━━━━━━━━━━━━━━━━<br>'
-                '합산 순매수: <b>%{customdata[3]:+,}주</b><br>'
-                '🔴 외국인 순매수: %{customdata[4]:+,}주<br>'
-                '🔵 기관 순매수: %{customdata[5]:+,}주<br>'
-                '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)'
-                '<extra></extra>'
-            )
-        ))
-        fig_p1.update_layout(
-            height=320,
-            template='plotly_dark',
-            margin=dict(t=10, b=10, l=10, r=10),
-            clickmode='event+select',
-            font=dict(family='malgun gothic, nanum gothic, sans-serif'),
-            dragmode=False
-        )
-        ev_p1 = st.plotly_chart(fig_p1, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p1_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
-        handle_chart_click(ev_p1)
+        df1['Abs_Net'] = df1['Total_Combined_Net'].abs()
+        left_df = df1.iloc[::2].copy()
+        right_df = df1.iloc[1::2].copy()
+        
+        total_height = 320
+        n_left = len(left_df)
+        n_right = len(right_df)
+        
+        # 각 카드 사이의 4px 간격을 고려한 가용 높이 계산
+        gap_total_l = (n_left - 1) * 4 if n_left > 0 else 0
+        usable_h_l = total_height - gap_total_l
+        
+        gap_total_r = (n_right - 1) * 4 if n_right > 0 else 0
+        usable_h_r = total_height - gap_total_r
+        
+        # 좌측 열 높이 비례 분배 (최소 높이 35px 보장)
+        if n_left > 0:
+            sum_left = left_df['Abs_Net'].sum() if left_df['Abs_Net'].sum() > 0 else 1
+            min_h = 35
+            rem_h = usable_h_l - (min_h * n_left)
+            if rem_h < 0:
+                min_h = usable_h_l / n_left
+                rem_h = 0
+            left_df['height_px'] = min_h + rem_h * (left_df['Abs_Net'] / sum_left)
+        else:
+            left_df['height_px'] = []
+            
+        # 우측 열 높이 비례 분배 (최소 높이 35px 보장)
+        if n_right > 0:
+            sum_right = right_df['Abs_Net'].sum() if right_df['Abs_Net'].sum() > 0 else 1
+            min_h = 35
+            rem_h = usable_h_r - (min_h * n_right)
+            if rem_h < 0:
+                min_h = usable_h_r / n_right
+                rem_h = 0
+            right_df['height_px'] = min_h + rem_h * (right_df['Abs_Net'] / sum_right)
+        else:
+            right_df['height_px'] = []
+
+        # 스타일 정의: 프리미엄 다크 대시보드 맞춤형 CSS
+        style_html = """
+        <style>
+        .tm-card {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+            text-decoration: none;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            box-sizing: border-box;
+            border: 1px solid rgba(255,255,255,0.08);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .tm-card:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.15);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            border-color: rgba(255,255,255,0.2);
+        }
+        .tm-card-wrapper {
+            position: relative;
+            width: 100%;
+            box-sizing: border-box;
+            z-index: 1;
+        }
+        .tm-card-wrapper:hover {
+            z-index: 9999 !important;
+        }
+        .tm-card-wrapper:hover .tm-tooltip {
+            visibility: visible !important;
+            opacity: 1 !important;
+            left: 105% !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+        }
+        .tm-column:last-child .tm-card-wrapper:hover .tm-tooltip {
+            left: auto !important;
+            right: 105% !important;
+        }
+        .tm-tooltip {
+            visibility: hidden;
+            position: absolute;
+            width: 210px;
+            background-color: #1a1a1a;
+            color: #eeeeee;
+            text-align: left;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            font-size: 11px;
+            font-family: 'malgun gothic', sans-serif;
+            line-height: 1.6;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.15s ease-in-out;
+            pointer-events: none;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+        }
+        </style>
+        """
+        st.markdown(style_html, unsafe_allow_html=True)
+
+        def get_card_color(change_ratio):
+            val = max(-6.0, min(6.0, change_ratio))  # -6% ~ +6% 범위 클램프
+            if val >= 0:
+                alpha = 0.2 + (val / 6.0) * 0.7
+                return f"rgba(235, 77, 75, {alpha:.2f})"
+            else:
+                alpha = 0.2 + (abs(val) / 6.0) * 0.7
+                return f"rgba(74, 159, 245, {alpha:.2f})"
+
+        def make_card_html(row):
+            name = row['Name']
+            code = row['Code']
+            chg = row['ChagesRatio']
+            price = row['Current_Price_Val']
+            vol = row['Trade_Volume_Val']
+            fgn = row['Foreign_Net']
+            inst = row['Institutional_Net']
+            comb = row['Total_Combined_Net']
+            height_px = row['height_px']
+            bg_color = get_card_color(chg)
+            
+            tooltip_html = f"""
+            <div class='tm-tooltip'>
+                <b style='font-size: 12px; color: #fff;'>{name} ({code})</b><br>
+                <hr style='border: 0; border-top: 1px solid #333; margin: 6px 0;'>
+                합산 순매수: <b>{comb:+,}주</b><br>
+                🔴 외국인 순매수: {fgn:+,}주<br>
+                🔵 기관 순매수: {inst:+,}주<br>
+                현재가: {price:,.0f}원 ({chg:+.2f}%)
+            </div>
+            """
+            
+            card_html = f"""
+            <div class='tm-card-wrapper' style='height: {height_px:.0f}px;'>
+                <a href='/?sel_code={code}&sel_name={name}' target='_self' class='tm-card' style='background-color: {bg_color};'>
+                    <div style='text-align: center; padding: 4px; box-sizing: border-box;'>
+                        <span style='display: block; font-weight: bold; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span>
+                        <span style='display: block; font-size: 10px; margin-top: 1px; color: rgba(255,255,255,0.8);'>{chg:+.2f}%</span>
+                    </div>
+                    {tooltip_html}
+                </a>
+            </div>
+            """
+            return card_html
+
+        left_cards = "".join([make_card_html(row) for _, row in left_df.iterrows()])
+        right_cards = "".join([make_card_html(row) for _, row in right_df.iterrows()])
+        
+        html_treemap = f"""
+        <div class='tm-container' style='display: flex; width: 100%; height: 320px; background-color: #0e1117; border-radius: 4px; gap: 4px; padding: 2px; box-sizing: border-box;'>
+            <div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%; gap: 4px;'>
+                {left_cards}
+            </div>
+            <div class='tm-column' style='display: flex; flex-direction: column; width: 50%; height: 100%; gap: 4px;'>
+                {right_cards}
+            </div>
+        </div>
+        """
+        st.markdown(html_treemap, unsafe_allow_html=True)
 # ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
 with row1_col2:
     st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
