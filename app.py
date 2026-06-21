@@ -1131,6 +1131,9 @@ def handle_chart_click(event_data):
         else:
             st.session_state.sel_name = clicked_name or found_code
             st.query_params['sel_name'] = clicked_name or found_code
+            
+        # 차트의 selection 상태를 완전히 리셋하기 위해 key 값 증가 (태블릿/모바일 터치 2번 클릭 문제 해결)
+        st.session_state.chart_key_index += 1
         st.rerun()
 
 # ── 개별 차트 6분할 레이아웃 (3열 그리드 개편) ───────────────
