@@ -176,18 +176,28 @@ st.set_page_config(
 )
 
 # ── 숨김 처리를 위한 JS 헬퍼 위젯과 CSS (항상 DOM에 존재하도록 메인 바디 상단에 배치) ──
+def on_js_trigger():
+    try:
+        q_params = st.query_params
+        if 'sel_code' in q_params:
+            st.session_state.sel_code = q_params['sel_code'].strip().zfill(6)
+            st.session_state.sel_name = q_params.get('sel_name', '')
+            st.session_state.chart_key_index += 1
+    except Exception as e:
+        print(f"DEBUG: on_js_trigger failed: {e}")
+
 st.markdown("""
 <style>
-div[data-testid="stTextInput"]:has(input[id*="js_helper_input"]),
-div[data-testid="stTextInput"]:has(input[aria-label="js_helper_input"]) {
+div[data-testid="stButton"]:has(button[id*="js_trigger_btn"]) {
     display: none !important;
 }
-input[id*="js_helper_input"] {
+button[id*="js_trigger_btn"] {
     display: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
-st.text_input("js_helper_input", key="js_helper_input", value="", label_visibility="collapsed")
+st.button("js_trigger_btn", key="js_trigger_btn", on_click=on_js_trigger)
+
 
 
 # ── GitHub 레포지토리 raw URL (data/ 폴더) ────────────────────────
@@ -744,21 +754,7 @@ if 'sel_name' not in st.session_state:
     st.session_state.sel_name = "삼성전자"
 if 'chart_key_index' not in st.session_state:
     st.session_state.chart_key_index = 0
-if 'js_helper_input' not in st.session_state:
-    st.session_state.js_helper_input = ""
 
-# JS 수급 트리맵 클릭 시 하드 리로드 없이 소프트 rerun 처리
-if st.session_state.js_helper_input:
-    parts = st.session_state.js_helper_input.split(',')
-    if len(parts) == 2:
-        code_val, name_val = parts[0].strip(), parts[1].strip()
-        st.session_state.sel_code = code_val
-        st.session_state.sel_name = name_val
-        st.query_params['sel_code'] = code_val
-        st.query_params['sel_name'] = name_val
-        st.session_state.chart_key_index += 1
-    st.session_state.js_helper_input = ""
-    st.rerun()
 
 
 try:
@@ -1345,10 +1341,10 @@ with row1_col1:
         # 스타일 정의: 프리미엄 다크 대시보드 맞춤형 CSS (들여쓰기 없이 마크다운 파싱 방지)
         style_html = """<style>
 /* 숨김 처리를 위한 JS 헬퍼 위젯 CSS 규격 */
-div[data-testid="stTextInput"]:has(input[id="js_helper_input"]) {
+div[data-testid="stButton"]:has(button[id*="js_trigger_btn"]) {
     display: none !important;
 }
-input[id="js_helper_input"] {
+button[id*="js_trigger_btn"] {
     display: none !important;
 }
 .tm-container {
@@ -1466,37 +1462,33 @@ input[id="js_helper_input"] {
 
 window.selectStock = function(code, name) {
     try {
-        var doc = window.parent.document;
-        var input = doc.querySelector('input[id*="js_helper_input"]') || doc.querySelector('input[aria-label="js_helper_input"]');
-        if (!input) {
-            var inputs = doc.querySelectorAll('input');
-            for (var i = 0; i < inputs.length; i++) {
-                var id = inputs[i].id || "";
-                var ariaLabel = inputs[i].getAttribute('aria-label') || "";
-                if (id.includes("js_helper_input") || ariaLabel === "js_helper_input") {
-                    input = inputs[i];
+        var parentWin = window.parent || window;
+        
+        // 1. 브라우저 주소창의 URL을 페이지 리로드 없이 업데이트 (History API)
+        var newUrl = parentWin.location.protocol + '//' + parentWin.location.host + parentWin.location.pathname + '?sel_code=' + code + '&sel_name=' + encodeURIComponent(name);
+        parentWin.history.pushState({ path: newUrl }, '', newUrl);
+        
+        // 2. 현재 화면의 스크롤 위치 보존
+        localStorage.setItem('st_dashboard_scroll', window.scrollY);
+        
+        // 3. 숨겨진 Streamlit 버튼을 찾아 클릭 이벤트 트리거
+        var doc = parentWin.document;
+        var btn = doc.querySelector('button[id*="js_trigger_btn"]');
+        if (!btn) {
+            var buttons = doc.querySelectorAll('button');
+            for (var i = 0; i < buttons.length; i++) {
+                if (buttons[i].id && buttons[i].id.includes("js_trigger_btn")) {
+                    btn = buttons[i];
                     break;
                 }
             }
         }
         
-        if (input) {
-            // 현재 스크롤 유지 데이터 저장
-            localStorage.setItem('st_dashboard_scroll', window.scrollY);
-            
-            // value 설정 및 React 이벤트 발화
-            input.value = code + "," + name;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            
-            // 엔터 키 다운 이벤트 전송으로 Streamlit rerun 강제 트리거
-            var ke = new KeyboardEvent('keydown', {
-                bubbles: true, cancelable: true, keyCode: 13, key: 'Enter'
-            });
-            input.dispatchEvent(ke);
+        if (btn) {
+            btn.click();
         } else {
-            // 위젯을 찾을 수 없는 경우 안전하게 URL 하드 폴백
-            window.location.search = "?sel_code=" + code + "&sel_name=" + encodeURIComponent(name);
+            // 버튼을 찾을 수 없는 경우 안전하게 URL 하드 폴백
+            parentWin.location.href = newUrl;
         }
     } catch (err) {
         console.error("selectStock failed:", err);
