@@ -760,6 +760,12 @@ if df_m is not None and not df_m.empty:
         status.update(label="⚡ 실시간 시세 반영 완료", state="complete")
 
 # ── 세션 스테이트 초기화 (종목 클릭 차트용 및 실시간 수급 누적) ────────────────────
+q_params = st.query_params
+if 'sel_code' in q_params:
+    st.session_state.sel_code = q_params['sel_code'].strip().zfill(6)
+    if 'sel_name' in q_params:
+        st.session_state.sel_name = q_params['sel_name']
+
 if 'sel_code' not in st.session_state:
     st.session_state.sel_code = "005930"
 if 'sel_name' not in st.session_state:
@@ -1542,7 +1548,9 @@ window.selectStock = function(code, name) {
                 
                 tooltip_html = f"<div class='tm-tooltip'><b style='font-size: 12px; color: #fff;'>{name} ({code})</b><br><hr style='border: 0; border-top: 1px solid #333; margin: 6px 0;'>합산 순매수: <b>{comb:+,}주</b><br>🔴 외국인 순매수: {fgn:+,}주<br>🔵 기관 순매수: {inst:+,}주<br>현재가: {price:,.0f}원 ({chg:+.2f}%)</div>"
                 
-                card_html = f"<div class='tm-card-wrapper' style='flex: {card_flex:.1f}; height: 0; min-height: 35px;'><a href='javascript:void(0);' onclick='window.selectStock(\"{code}\", \"{name}\");' class='tm-card' style='background-color: {bg_color};'><div style='text-align: center; padding: 4px; box-sizing: border-box;'><span style='display: block; font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span style='display: block; font-size: 11px; margin-top: 1px; color: rgba(255,255,255,0.95);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
+                import urllib.parse
+                enc_name = urllib.parse.quote(name)
+                card_html = f"<div class='tm-card-wrapper' style='flex: {card_flex:.1f}; height: 0; min-height: 35px;'><a href='/?sel_code={code}&sel_name={enc_name}' target='_parent' class='tm-card' style='background-color: {bg_color};'><div style='text-align: center; padding: 4px; box-sizing: border-box;'><span style='display: block; font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span style='display: block; font-size: 11px; margin-top: 1px; color: rgba(255,255,255,0.95);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
                 cards_html.append(card_html)
                 
             col_inner = "".join(cards_html)
