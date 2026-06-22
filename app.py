@@ -40,26 +40,25 @@ def get_kospi_ma20():
 def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
-        return "🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요."
+        raise RuntimeWarning("🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요.")
     
     headers = {"Content-Type": "application/json"}
     
     system_instruction = (
-        "너는 주식 분석 대시보드의 전문 퀀트 애널리스트이자 자산운용가야. "
-        "주어진 종목의 퀀트 매수 점수, 매도 점수, 등락률, 그리고 권장 자산배분 비중(현금 vs 주식 %) 정보를 바탕으로, "
-        "왜 이 종목에 그러한 의견이 제시되었는지 팩트 위주로 투자 리스크 관리 관점에서 조언을 작성해줘. "
-        "만약 권장 현금 비중이 70%로 높다면, 시장 하락 추세이므로 매수에 극히 조심하고 보수적으로 관망하라는 조언을 포함해줘. "
-        "출력은 2~3문장 이내의 짧고 굵은 존댓말(해요체)로 제한하고, 지나치게 기술적이거나 장황한 수식어는 배제해줘."
+        "너는 주식 분석 대시보드의 전문 퀀트 애널리스트야. "
+        "주어진 종목의 퀀트 매수 점수, 매도 점수, 그리고 현재 시장 판단 국면(매크로 환경)을 종합적으로 분석하여, "
+        "해당 종목에 대한 투자 리스크 및 매매 방향성을 팩트 위주로 조언해줘. "
+        "자산배분 비중 수치를 불필요하게 앵무새처럼 나열하지 말고, 매수/매도 강도와 시장 상황이 종목에 미치는 핵심적인 영향에 집중해. "
+        "출력은 2~3문장 이내의 짧고 굵은 존댓말(해요체)로 제한하고, 지나치게 장황한 수식어는 배제해."
     )
     
     prompt = (
         f"종목명: {name} ({code})\n"
         f"당일 등락률: {change:+.2f}%\n"
-        f"매수 퀀트 원점수: {t_score}점 (하락장 상대보정 점수: {t_score_adj}점)\n"
+        f"매수 퀀트 점수: {t_score_adj}점 (원점수: {t_score}점)\n"
         f"매도 퀀트 점수: {s_score}점\n"
         f"현재 시장 판단 국면: {market_cond}\n"
-        f"권장 자산배분: 현금 {cash_ratio}% / 주식 {stock_ratio}%\n"
-        "상기 데이터를 면밀히 검토하고 퀀트 및 리스크 자산배분 관점의 2문장 내외 요약 코멘터리를 작성해줘."
+        "상기 데이터를 바탕으로 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하여 2문장 내외의 요약 코멘터리를 작성해줘."
     )
     
     payload = {
@@ -67,11 +66,13 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         "systemInstruction": {"parts": [{"text": system_instruction}]}
     }
     
-    # 순차적 시도할 모델 리스트 (요청 한도가 넉넉한 2.5-flash 및 2.0-flash 우선 배치)
+    # 최신 3.x 세대를 우선 시도하되, 트래픽 폭주/한도 초과 시 안정적인 2.0/1.5 세대로 자동 순차 폴백
     models_to_try = [
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
         "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-3.5-flash"
+        "gemini-flash-latest"
     ]
     
     last_err = None
@@ -91,14 +92,24 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
                     last_err = "API 응답 본문에 텍스트 데이터가 누락되었습니다."
                 else:
                     last_err = f"API 응답 코드: {r.status_code} ({r.text[:100]})"
-                    # 할당량 초과(429) 시 신속한 전환을 위해 즉시 다음 모델로 폴백
-                    if r.status_code == 429:
+                    # 할당량 초과(429), 서버 정체(503), 모델 없음(404) 시 신속한 전환을 위해 즉시 다음 모델로 폴백
+                    if r.status_code in [404, 429, 503]:
                         break
             except Exception as e:
                 last_err = str(e)
             time.sleep(0.5)
             
-    return f"⚠️ AI 코멘터리 생성 실패 (네트워크 지연/오류: {last_err})"
+    # 에러 메시지 한글 정제
+    friendly_err = "현재 API 서버와의 통신이 일시적으로 지연되고 있습니다. 잠시 후 다시 시도해 주세요."
+    if last_err:
+        if "503" in last_err or "high demand" in last_err:
+            friendly_err = "Gemini API 서버에 일시적으로 접속자가 몰려 응답이 지연되고 있습니다. 잠시 후 새로고침해 주세요."
+        elif "429" in last_err or "Quota" in last_err:
+            friendly_err = "Gemini API 호출 속도 제한을 초과했습니다. 잠시 후 다시 시도해 주세요."
+        elif "400" in last_err or "API key" in last_err:
+            friendly_err = "입력하신 Gemini API Key가 올바르지 않습니다. 사이드바 설정을 다시 확인해 주세요."
+            
+    raise RuntimeWarning(f"⚠️ {friendly_err}")
 
 
 @st.cache_data(ttl=30)  # 30초 캐시 (실시간이지만 너무 잦은 호출 방지)
@@ -174,43 +185,6 @@ st.set_page_config(
     layout='wide',
     initial_sidebar_state='collapsed'
 )
-
-# ── 숨김 처리를 위한 JS 헬퍼 위젯과 CSS (항상 DOM에 존재하도록 메인 바디 상단에 배치) ──
-def on_js_trigger():
-    try:
-        q_params = st.query_params
-        if 'sel_code' in q_params:
-            st.session_state.sel_code = q_params['sel_code'].strip().zfill(6)
-            st.session_state.sel_name = q_params.get('sel_name', '')
-            st.session_state.chart_key_index += 1
-    except Exception as e:
-        print(f"DEBUG: on_js_trigger failed: {e}")
-
-st.markdown("""
-<script>
-(function() {
-    function hideBtn() {
-        var doc = window.parent.document;
-        var buttons = doc.querySelectorAll('button');
-        for (var i = 0; i < buttons.length; i++) {
-            if (buttons[i].textContent.trim() === "js_trigger_btn") {
-                var container = buttons[i].closest('div[data-testid="stButton"]');
-                if (container) {
-                    container.style.display = 'none';
-                    var outer = container.closest('.element-container');
-                    if (outer) outer.style.display = 'none';
-                }
-            }
-        }
-    }
-    hideBtn();
-    setInterval(hideBtn, 100);
-})();
-</script>
-""", unsafe_allow_html=True)
-st.button("js_trigger_btn", key="js_trigger_btn", on_click=on_js_trigger)
-
-
 
 # ── GitHub 레포지토리 raw URL (data/ 폴더) ────────────────────────
 GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/k2000kms-del/gd3-market-hub/main/data'
@@ -775,6 +749,7 @@ if 'chart_key_index' not in st.session_state:
 
 
 
+
 try:
     q_params = st.query_params
     if 'sel_code' in q_params:
@@ -839,6 +814,52 @@ q_sort_by = st.sidebar.radio(
     help="Quant Buy TOP 10 종목을 정렬하는 기준을 선택합니다."
 )
 
+# ── 실시간 관심 종목 리스트 생성 (사이드바 드롭다운용) ──
+top_stocks = []
+try:
+    if not df_hd.empty:
+        exclude_keywords = ['etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef']
+        df_hd_filtered = df_hd[~df_hd['Name'].fillna('').astype(str).str.lower().apply(lambda x: any(kw in x for kw in exclude_keywords))]
+        top_stocks.extend(df_hd_filtered.sort_values('Total_Combined_Net', ascending=False).head(10)[['Code', 'Name']].values.tolist())
+    
+    if not df_q.empty:
+        exclude_keywords = ['etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef']
+        df_q_filtered = df_q[~df_q['Name'].fillna('').astype(str).str.lower().apply(lambda x: any(kw in x for kw in exclude_keywords))]
+        if q_sort_by == "거래대금 순" and 'Amount' in df_q_filtered.columns:
+            df_q_sub = df_q_filtered.sort_values('Amount', ascending=False).head(10)
+        else:
+            df_q_sub = df_q_filtered.sort_values('Total_Score_Adj', ascending=False).head(10)
+        top_stocks.extend(df_q_sub[['Code', 'Name']].values.tolist())
+
+    if not df_m.empty:
+        exclude_keywords = ['etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef']
+        df_m_filtered = df_m[~df_m['Name'].fillna('').astype(str).str.lower().apply(lambda x: any(kw in x for kw in exclude_keywords))]
+        top_stocks.extend(df_m_filtered.sort_values('Amount', ascending=False).head(10)[['Code', 'Name']].values.tolist())
+except Exception as list_err:
+    print(f"DEBUG: Failed to extract top stocks: {list_err}")
+
+unique_stocks = []
+seen_codes = set()
+for item in top_stocks:
+    code = str(item[0]).strip().zfill(6)
+    name = str(item[1]).strip()
+    if code not in seen_codes:
+        seen_codes.add(code)
+        unique_stocks.append((code, name))
+
+unique_stocks = sorted(unique_stocks, key=lambda x: x[1])
+
+options_list = ["선택 안 함 (검색 사용)"]
+code_to_name_map = {}
+for code, name in unique_stocks:
+    label = f"{name} ({code})"
+    options_list.append(label)
+    code_to_name_map[label] = (code, name)
+
+# 좌측 관심 종목 바로가기 기능 제거됨
+options_list = ["선택 안 함 (검색 사용)"]
+code_to_name_map = {}
+default_idx = 0
 st.sidebar.markdown('---')
 st.sidebar.markdown('### 🔍 종목 검색')
 st.sidebar.caption('종목명 또는 코드로 검색하면 대시보드 아래에 일봉 차트가 표시됩니다.')
@@ -885,7 +906,8 @@ st.sidebar.markdown('### 🤖 Gemini AI 헬프 센터')
 st.sidebar.caption('대시보드 동작에 문제가 있거나 질문이 있는 경우, 구글 Gemini AI에게 물어보세요.')
 
 # 1. API Key 불러오기 및 입력창
-gemini_api_key = st.secrets.get("GEMINI_API_KEY", "")
+import os
+gemini_api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
 if not gemini_api_key:
     gemini_api_key = st.sidebar.text_input(
         "Gemini API Key 입력",
@@ -932,32 +954,49 @@ if st.sidebar.button("Gemini에게 질문하기", use_container_width=True):
                 diag_info += f"- 세션 수급 데이터 개수: {accum_df_len}행\n"
                 diag_info += "===========================\n\n"
             
-            # API 호출
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={gemini_api_key}"
-            headers = {"Content-Type": "application/json"}
+            # 헬프 센터 다중 모델 순차 폴백 호출
+            models_to_try = [
+                "gemini-3.5-flash",
+                "gemini-3.1-pro-preview",
+                "gemini-2.5-flash",
+                "gemini-2.0-flash",
+                "gemini-flash-latest"
+            ]
             
+            headers = {"Content-Type": "application/json"}
             system_instruction = (
                 "너는 주식 분석 대시보드 'GD 3.0 Market Hub'의 모니터링 및 기술 지원을 담당하는 AI 챗봇이야. "
                 "사용자가 대시보드 오류나 데이터 미출력 원인을 물으면, 첨부된 '대시보드 진단 데이터'를 면밀히 분석해서 원인을 찾아내고 구체적인 해결 가이드를 한국어로 제시해줘야 해. "
                 "코드는 파이썬, Streamlit으로 구현되어 있고 백그라운드 수집기는 GitHub Actions로 구동되며 데이터베이스는 Supabase를 사용해."
             )
-            
             full_prompt = f"{diag_info}질문: {gemini_prompt}"
             payload = {
                 "contents": [{"parts": [{"text": full_prompt}]}],
                 "systemInstruction": {"parts": [{"text": system_instruction}]}
             }
             
-            try:
-                r = requests.post(url, json=payload, headers=headers, timeout=20)
-                if r.status_code == 200:
-                    ans = r.json()['candidates'][0]['content']['parts'][0]['text']
-                    st.sidebar.success("🤖 Gemini 답변:")
-                    st.sidebar.markdown(ans)
-                else:
-                    st.sidebar.error(f"❌ API 에러 (코드 {r.status_code}): {r.text[:200]}")
-            except Exception as ex:
-                st.sidebar.error(f"❌ 요청 중 오류 발생: {ex}")
+            success = False
+            last_err = None
+            for model_name in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
+                try:
+                    r = requests.post(url, json=payload, headers=headers, timeout=20)
+                    if r.status_code == 200:
+                        ans = r.json()['candidates'][0]['content']['parts'][0]['text']
+                        st.sidebar.success("🤖 Gemini 답변:")
+                        st.sidebar.markdown(ans)
+                        success = True
+                        break
+                    else:
+                        last_err = f"API 에러 (코드 {r.status_code}): {r.text[:200]}"
+                        if r.status_code in [404, 429, 503]:
+                            continue
+                except Exception as ex:
+                    last_err = str(ex)
+                time.sleep(0.5)
+                
+            if not success:
+                st.sidebar.error(f"❌ Gemini 답변 생성 실패: {last_err}")
 
 
 # ── 사이드바 맨 아래: 모바일 자가 복구 도구 ─────────────────
@@ -993,16 +1032,20 @@ if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_w
                         p_val = clean_sup(m_sup.get('개인', 0))
                         i_val = clean_sup(m_sup.get('기관', 0))
                         
-                        # Supabase에 강제 upsert (기존 데이터 삭제 없이 업데이트)
+                        # Supabase에 강제 upsert (중복 시 무시하도록 예외 처리)
                         if supabase:
-                            supabase.table("supply_intraday").upsert({
-                                "date": today_date_str,
-                                "time": now_time,
-                                "market": mkt_name,
-                                "foreign_net": int(f_val),
-                                "individual_net": int(p_val),
-                                "institutional_net": int(i_val)
-                            }).execute()
+                            try:
+                                supabase.table("supply_intraday").upsert({
+                                    "date": today_date_str,
+                                    "time": now_time,
+                                    "market": mkt_name,
+                                    "foreign_net": int(f_val),
+                                    "individual_net": int(p_val),
+                                    "institutional_net": int(i_val)
+                                }).execute()
+                            except Exception:
+                                # 이미 동일한 시간(분)의 데이터가 적재되어 있다면 에러 무시
+                                pass
                             success_count += 1
                 
                 # Supabase에서 당일 전체 데이터 다시 로드해 세션 갱신
@@ -1031,6 +1074,21 @@ kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.envir
 
 # 1-2. 실시간 퀀트 데이터 즉시 갱신 버튼
 if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
+    if not kis_key or not kis_sec:
+        st.sidebar.error(
+            "❌ **갱신 불가 (인증키 누락)**\n\n"
+            "로컬 환경에 **한국투자증권 API 인증키가 설정되지 않았습니다.**\n\n"
+            "**해결 방법:**\n"
+            "1. 프로젝트 폴더 내 `.streamlit/secrets.toml` 파일을 엽니다.\n"
+            "2. 아래 형식을 채워 저장해 주세요:\n"
+            "```toml\n"
+            "KIS_APP_KEY = \"발급받은_APP_KEY\"\n"
+            "KIS_APP_SECRET = \"발급받은_APP_SECRET\"\n"
+            "```\n"
+            "3. 또는 하단의 **'원격 수집기 재가동'** 도구를 가동하여 원격 Actions 서버에서 갱신하세요."
+        )
+        st.stop()
+        
     with st.sidebar.spinner("🎯 퀀트 연산 및 데이터 수집 중 (약 30~50초 소요)..."):
         try:
             import subprocess
@@ -1038,12 +1096,10 @@ if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_contai
             
             # 환경변수 주입
             env = os.environ.copy()
-            if kis_key:
-                env["KIS_APP_KEY"] = kis_key
-                env["KIS_KEY"] = kis_key
-            if kis_sec:
-                env["KIS_APP_SECRET"] = kis_sec
-                env["KIS_SECRET"] = kis_sec
+            env["KIS_APP_KEY"] = kis_key
+            env["KIS_KEY"] = kis_key
+            env["KIS_APP_SECRET"] = kis_sec
+            env["KIS_SECRET"] = kis_sec
             if "SUPABASE_URL" in st.secrets:
                 env["SUPABASE_URL"] = st.secrets["SUPABASE_URL"]
             if "SUPABASE_ANON_KEY" in st.secrets:
@@ -1134,8 +1190,6 @@ kr_scale = 'RdBu_r'
 
 # ── 클릭 이벤트 공통 핸들러 함수 ─────────────────────────────
 def handle_chart_click(event_data):
-    if event_data:
-        print("DEBUG: handle_chart_click event_data:", event_data)
     if not event_data:
         return
         
@@ -1157,16 +1211,37 @@ def handle_chart_click(event_data):
     if not points or len(points) == 0:
         return
         
+
+    print(f"DEBUG: handle_chart_click raw_data: {event_data}")
+        
     pt = points[0]
-    # Treemap은 label, Bar 차트는 y에 레이블이 얹혀 리턴됨
-    clicked_name = pt.get('label', '') or pt.get('y', '')
-    cd = pt.get('customdata', [])
+    
+    clicked_name = ''
+    cd = []
+    
+    # 딕셔너리인지 객체인지 판별하여 안전하게 속성 추출
+    if isinstance(pt, dict):
+        clicked_name = pt.get('label', '') or pt.get('y', '')
+        cd = pt.get('customdata', [])
+    else:
+        clicked_name = getattr(pt, 'label', '') or getattr(pt, 'y', '')
+        cd = getattr(pt, 'customdata', [])
     
     found_code = None
     import numpy as np
-    if isinstance(cd, (list, tuple, np.ndarray)) and len(cd) > 0:
-        for val in cd:
-            v_str = str(val).split('.')[0].zfill(6)
+    
+    flat_cd = []
+    if isinstance(cd, (list, tuple, np.ndarray)):
+        if len(cd) > 0 and isinstance(cd[0], (list, tuple, np.ndarray)):
+            flat_cd = list(cd[0])
+        else:
+            flat_cd = list(cd)
+            
+    if len(flat_cd) > 0:
+        for val in flat_cd:
+            if val is None:
+                continue
+            v_str = str(val).split('.')[0].strip().zfill(6)
             if v_str.isdigit() and len(v_str) == 6:
                 found_code = v_str
                 break
@@ -1194,6 +1269,9 @@ def handle_chart_click(event_data):
         else:
             st.session_state.sel_name = clicked_name or found_code
             st.query_params['sel_name'] = clicked_name or found_code
+            
+        # 성공적으로 종목 변경이 완료된 시점에 알림 표시 제거 (요청 반영)
+        pass
             
         # 차트의 selection 상태를 완전히 리셋하기 위해 key 값 증가 (태블릿/모바일 터치 2번 클릭 문제 해결)
         st.session_state.chart_key_index += 1
@@ -1252,7 +1330,7 @@ title_col_left, title_col_right = st.columns([7, 5])
 
 with title_col_left:
     st.markdown(f"### 📊 실시간 시장 종합 대시보드 <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time})</span>", unsafe_allow_html=True)
-    st.caption("차트 내부의 막대(종목)를 클릭하면, 아래에서 즉시 해당 종목의 일봉 차트를 볼 수 있습니다.")
+    st.caption("💡 주요 관심 종목은 왼쪽 사이드바의 '관심 종목 바로가기'에서 선택하시면 하단 일봉 차트가 실시간 비동기로 즉시 갱신됩니다.")
 
 with title_col_right:
     regime_html = f"""<div style="background-color: #111920; padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); color: #fff; margin-bottom: 5px;">
@@ -1330,239 +1408,71 @@ with row1_col1:
         df1['Abs_Net'] = df1['Total_Combined_Net'].abs()
         df1['visual_val'] = df1['Abs_Net'] ** 0.55
         
-        total_len = len(df1)
-        if total_len >= 8:
-            # 4개 열 분배 (2, 3, 3, 2 구조)
-            col_groups = [
-                df1.iloc[0:2],
-                df1.iloc[2:5],
-                df1.iloc[5:8],
-                df1.iloc[8:total_len]
-            ]
-        elif total_len >= 5:
-            # 3개 열 분배
-            col_groups = [
-                df1.iloc[0:2],
-                df1.iloc[2:4],
-                df1.iloc[4:total_len]
-            ]
-        else:
-            # 2개 열 분배
-            col_groups = [
-                df1.iloc[0:max(1, int(total_len/2))],
-                df1.iloc[max(1, int(total_len/2)):total_len]
-            ]
-            
-        col_sums = [g['visual_val'].sum() if not g.empty else 0 for g in col_groups]
-        col_flexes = [max(200.0, s) if s > 0 else 0 for s in col_sums]
-
-        # 스타일 정의: 프리미엄 다크 대시보드 맞춤형 CSS (들여쓰기 없이 마크다운 파싱 방지)
-        style_html = """<style>
-.tm-container {
-    display: flex;
-    width: 100%;
-    height: 320px;
-    background-color: #0e1117;
-    border-radius: 4px;
-    gap: 4px;
-    padding: 2px;
-    box-sizing: border-box;
-}
-.tm-column {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    height: 100%;
-}
-.tm-card {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    width: 100%;
-    height: 100%;
-    text-decoration: none !important;
-    color: #ffffff !important;
-    border-radius: 6px;
-    cursor: pointer;
-    box-sizing: border-box;
-    border: 1px solid rgba(255,255,255,0.15);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.tm-card:hover {
-    transform: translateY(-1px);
-    filter: brightness(1.15);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    border-color: rgba(255,255,255,0.3);
-}
-.tm-card span {
-    color: #ffffff !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-}
-.tm-card-wrapper {
-    position: relative;
-    width: 100%;
-    box-sizing: border-box;
-    z-index: 1;
-}
-.tm-card-wrapper:hover {
-    z-index: 9999 !important;
-}
-.tm-card-wrapper:hover .tm-tooltip {
-    visibility: visible !important;
-    opacity: 1 !important;
-    left: 105% !important;
-    top: 50% !important;
-    transform: translateY(-50%) !important;
-}
-.tm-column:last-child .tm-card-wrapper:hover .tm-tooltip {
-    left: auto !important;
-    right: 105% !important;
-}
-.tm-tooltip {
-    visibility: hidden;
-    position: absolute;
-    width: 210px;
-    background-color: #1a1a1a;
-    color: #eeeeee;
-    text-align: left;
-    padding: 12px;
-    border-radius: 6px;
-    border: 1px solid #444;
-    font-size: 11px;
-    font-family: 'malgun gothic', sans-serif;
-    line-height: 1.6;
-    z-index: 9999;
-    opacity: 0;
-    transition: opacity 0.15s ease-in-out;
-    pointer-events: none;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-}
-.tm-tooltip b, .tm-tooltip span {
-    color: inherit !important;
-    text-shadow: none !important;
-}
-</style>"""
-
-        # 초정밀 스크롤 위치 유지 및 자동 복원 스크립트 (비동기 종목 선택 기능 추가)
-        js_scroll_restore = """<script>
-(function() {
-    try {
-        window.addEventListener('beforeunload', function() {
-            localStorage.setItem('st_dashboard_scroll', window.scrollY);
-        });
+        # 1번 패널 실시간 수급을 Plotly Horizontal Bar 차트로 전면 개편 (동작 일관성 및 CORS 보안 극복)
+        import plotly.graph_objects as go
         
-        var targetScroll = localStorage.getItem('st_dashboard_scroll');
-        if (targetScroll) {
-            var scrollPos = parseInt(targetScroll);
-            var attempts = 0;
-            var interval = setInterval(function() {
-                window.scrollTo(0, scrollPos);
-                attempts++;
-                if (attempts > 15 || Math.abs(window.scrollY - scrollPos) < 5) {
-                    clearInterval(interval);
-                    localStorage.removeItem('st_dashboard_scroll');
-                }
-            }, 80);
-        }
-    } catch (e) {
-        console.error("Scroll restore failed:", e);
-    }
-})();
-
-window.selectStock = function(code, name) {
-    try {
-        var parentWin = window.parent || window;
+        fig_p1 = go.Figure()
         
-        // 1. 브라우저 주소창의 URL을 페이지 리로드 없이 업데이트 (History API)
-        var newUrl = parentWin.location.protocol + '//' + parentWin.location.host + parentWin.location.pathname + '?sel_code=' + code + '&sel_name=' + encodeURIComponent(name);
-        parentWin.history.pushState({ path: newUrl }, '', newUrl);
+        df1_sorted = df1.sort_values('Total_Combined_Net', ascending=True).copy()
+        x_val_sorted = df1_sorted['visual_val']
+        text_labels_sorted = df1_sorted['Total_Combined_Net'].apply(lambda x: f" {x/10000:.1f}만" if abs(x) >= 10000 else f" {x:,}")
         
-        // 2. 현재 화면의 스크롤 위치 보존
-        localStorage.setItem('st_dashboard_scroll', window.scrollY);
+        custom_data_values = df1_sorted[['Code', 'Close', 'ChagesRatio', 'Total_Combined_Net', 'Foreign_Net', 'Institutional_Net']].values
         
-        // 3. 숨겨진 Streamlit 버튼을 찾아 클릭 이벤트 트리거
-        var doc = parentWin.document;
-        var btn = null;
-        var buttons = doc.querySelectorAll('button');
-        for (var i = 0; i < buttons.length; i++) {
-            if (buttons[i].textContent.trim() === "js_trigger_btn") {
-                btn = buttons[i];
-                break;
-            }
-        }
+        fig_p1.add_trace(go.Bar(
+            y=df1_sorted['Name'],
+            x=x_val_sorted,
+            orientation='h',
+            marker=dict(
+                colorscale=[
+                    [0.0, "#1e3a8a"], # 진한 파랑 (<-3%)
+                    [0.3, "#3b82f6"], # 밝은 파랑
+                    [0.5, "#4b5563"], # 회색 (0%)
+                    [0.7, "#ef4444"], # 밝은 빨강
+                    [1.0, "#991b1b"]  # 진한 빨강 (>3%)
+                ],
+                cmin=-4.0,
+                cmax=4.0,
+                color=df1_sorted['ChagesRatio'],
+                showscale=False,
+                line=dict(color='rgba(255,255,255,0.1)', width=1)
+            ),
+            text=text_labels_sorted,
+            textposition='outside',
+            customdata=custom_data_values,
+            hovertemplate=(
+                '<b>%{y}</b> (%{customdata[0]})<br>'
+                '━━━━━━━━━━━━━━━━<br>'
+                '합산 순매수: <b>%{customdata[3]:+,}주</b><br>'
+                '🔴 외국인 순매수: %{customdata[4]:+,}주<br>'
+                '🔵 기관 순매수: %{customdata[5]:+,}주<br>'
+                '현재가: %{customdata[1]:,}원 (%{customdata[2]:+.2f}%)'
+                '<extra></extra>'
+            )
+        ))
         
-        if (btn) {
-            btn.click();
-        } else {
-            // 버튼을 찾을 수 없는 경우 안전하게 URL 하드 폴백
-            parentWin.location.href = newUrl;
-        }
-    } catch (err) {
-        console.error("selectStock failed:", err);
-        window.location.search = "?sel_code=" + code + "&sel_name=" + encodeURIComponent(name);
-    }
-};
-</script>"""
-
-        def get_card_color(change_ratio):
-            val = change_ratio
-            if val > 3.0:
-                return "#991b1b"  # 진한 빨강
-            elif val > 1.0:
-                return "#dc2626"  # 중간 빨강
-            elif val > 0.0:
-                return "#ef4444"  # 밝은 빨강
-            elif val < -3.0:
-                return "#1e3a8a"  # 진한 파랑
-            elif val < -1.0:
-                return "#2563eb"  # 중간 파랑
-            elif val < 0.0:
-                return "#3b82f6"  # 밝은 파랑
-            else:
-                return "#4b5563"  # 회색
-
-
-        col_html_list = []
-        for col_idx, group in enumerate(col_groups):
-            if group.empty:
-                continue
-            col_flex = col_flexes[col_idx]
-            
-            cards_html = []
-            for _, row in group.iterrows():
-                name = row['Name']
-                code = row['Code']
-                chg = row['ChagesRatio']
-                price = row['Current_Price_Val']
-                vol = row['Trade_Volume_Val']
-                fgn = row['Foreign_Net']
-                inst = row['Institutional_Net']
-                comb = row['Total_Combined_Net']
-                val = row['visual_val']
-                bg_color = get_card_color(chg)
-                
-                # 최소 flex 값 80 부여
-                card_flex = max(80.0, val)
-                
-                tooltip_html = f"<div class='tm-tooltip'><b style='font-size: 12px; color: #fff;'>{name} ({code})</b><br><hr style='border: 0; border-top: 1px solid #333; margin: 6px 0;'>합산 순매수: <b>{comb:+,}주</b><br>🔴 외국인 순매수: {fgn:+,}주<br>🔵 기관 순매수: {inst:+,}주<br>현재가: {price:,.0f}원 ({chg:+.2f}%)</div>"
-                
-                import urllib.parse
-                enc_name = urllib.parse.quote(name)
-                card_html = f"<div class='tm-card-wrapper' style='flex: {card_flex:.1f}; height: 0; min-height: 35px;'><a href='/?sel_code={code}&sel_name={enc_name}' target='_parent' class='tm-card' style='background-color: {bg_color};'><div style='text-align: center; padding: 4px; box-sizing: border-box;'><span style='display: block; font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{name}</span><span style='display: block; font-size: 11px; margin-top: 1px; color: rgba(255,255,255,0.95);'>{chg:+.2f}%</span></div>{tooltip_html}</a></div>"
-                cards_html.append(card_html)
-                
-            col_inner = "".join(cards_html)
-            col_html = f"<div class='tm-column' style='display: flex; flex-direction: column; flex: {col_flex:.1f}; width: 0; min-width: 15%; height: 100%; gap: 4px;'>{col_inner}</div>"
-            col_html_list.append(col_html)
-            
-        all_cols_html = "".join(col_html_list)
-        html_treemap = f"<div class='tm-container'>{all_cols_html}</div>"
+        fig_p1.update_layout(
+            height=320,
+            template='plotly_dark',
+            margin=dict(t=10, b=10, l=95, r=80),
+            clickmode='event+select',
+            font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+            xaxis=dict(fixedrange=True),
+            yaxis=dict(fixedrange=True)
+        )
+        fig_p1.update_yaxes(automargin=True)
+        max_x = float(x_val_sorted.max()) if not x_val_sorted.empty else 100
+        fig_p1.update_xaxes(range=[0, max_x * 1.30])
         
-        # 1번 패널의 상단 오프셋을 2번 패널과 일치시키기 위해 단일 markdown 호출로 결합
-        final_element_html = f"{style_html}\n{js_scroll_restore}\n{html_treemap}"
-        st.markdown(final_element_html, unsafe_allow_html=True)
+        ev_p1 = st.plotly_chart(
+            fig_p1,
+            use_container_width=True,
+            on_select='rerun',
+            selection_mode=['points'],
+            key=f"p1_chart_{st.session_state.chart_key_index}",
+            config={'displayModeBar': False}
+        )
+        handle_chart_click(ev_p1)
 # ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
 with row1_col2:
     st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
@@ -1643,13 +1553,19 @@ with row1_col2:
         clickmode='event+select',
         font=dict(family='malgun gothic, nanum gothic, sans-serif'),
         xaxis=dict(fixedrange=True),
-        yaxis=dict(fixedrange=True),
-        dragmode=False
+        yaxis=dict(fixedrange=True)
     )
     fig_p2.update_yaxes(automargin=True)
     max_x = float(x_val.max()) if not x_val.empty else 100
     fig_p2.update_xaxes(range=[0, max_x * 1.30])
-    ev_p2 = st.plotly_chart(fig_p2, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p2_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
+    ev_p2 = st.plotly_chart(
+        fig_p2, 
+        use_container_width=True, 
+        on_select='rerun', 
+        selection_mode=['points'], 
+        key=f"p2_chart_{st.session_state.chart_key_index}", 
+        config={'displayModeBar': False}
+    )
     handle_chart_click(ev_p2)
 
 # ── [Panel 3] 거래대금 리더 (Horizontal Bar) ─────────────────
@@ -1762,13 +1678,19 @@ with row1_col3:
         showlegend=False,
         font=dict(family='malgun gothic, nanum gothic, sans-serif'),
         xaxis=dict(fixedrange=True),
-        yaxis=dict(fixedrange=True),
-        dragmode=False
+        yaxis=dict(fixedrange=True)
     )
     fig_p3.update_yaxes(automargin=True)
     max_x = float(df3['Visual_Total'].max()) if not df3.empty else 100
     fig_p3.update_xaxes(range=[0, max_x * 1.30])
-    ev_p3 = st.plotly_chart(fig_p3, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p3_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
+    ev_p3 = st.plotly_chart(
+        fig_p3, 
+        use_container_width=True, 
+        on_select='rerun', 
+        selection_mode=['points'], 
+        key=f"p3_chart_{st.session_state.chart_key_index}", 
+        config={'displayModeBar': False}
+    )
     handle_chart_click(ev_p3)
 
 # ── [Panel 4] 시장 요약 테이블 ──────────────────────────────
@@ -1990,13 +1912,19 @@ with row2_col3:
         clickmode='event+select',
         font=dict(family='malgun gothic, nanum gothic, sans-serif'),
         xaxis=dict(fixedrange=True),
-        yaxis=dict(fixedrange=True),
-        dragmode=False
+        yaxis=dict(fixedrange=True)
     )
     fig_p6.update_yaxes(automargin=True)
     max_x = float(df6['ChagesRatio'].max()) if not df6.empty else 30
     fig_p6.update_xaxes(range=[0, max_x * 1.30])
-    ev_p6 = st.plotly_chart(fig_p6, use_container_width=True, on_select='rerun', selection_mode=['points'], key=f"p6_chart_{st.session_state.chart_key_index}", config={'displayModeBar': False})
+    ev_p6 = st.plotly_chart(
+        fig_p6, 
+        use_container_width=True, 
+        on_select='rerun', 
+        selection_mode=['points'], 
+        key=f"p6_chart_{st.session_state.chart_key_index}", 
+        config={'displayModeBar': False}
+    )
     handle_chart_click(ev_p6)
 
 
@@ -2153,11 +2081,14 @@ if st.session_state.sel_code:
                 quant_grade = "관망/중립 (Hold)"
                 grade_color = "#7f8c8d"
                 
-            # Gemini AI 코멘터리 요청 (자산 배분 비율 연동)
+            # Gemini AI 코멘터리 요청 (자산 배분 비율 연동 및 캐싱 방지)
             market_cond = q_row.iloc[0].get('Market_Condition', 'N/A')
-            ai_comment = get_gemini_commentary(
-                code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key
-            )
+            try:
+                ai_comment = get_gemini_commentary(
+                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key
+                )
+            except Exception as e:
+                ai_comment = str(e)
             
             opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
 <h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
@@ -2256,15 +2187,43 @@ with col2:
         st.cache_data.clear()
         st.rerun()
 
-# 60초 주기 자동 새로고침 (외부 라이브러리 미설치 방식)
-st.components.v1.html(
-    """
+# 60초 주기 자동 새로고침 및 스크롤 실시간 복원 연동 (HTML 컴포넌트)
+html_script = """
     <script>
-    setTimeout(function() {
-        window.parent.postMessage({type: 'streamlit:rerun'}, '*');
-    }, 60000);
+    (function() {
+        var parentWin = window.parent || window;
+        
+        // 1. 60초 자동 새로고침
+        setTimeout(function() {
+            parentWin.postMessage({type: 'streamlit:rerun'}, '*');
+        }, 60000);
+        
+        // 2. 실시간 스크롤 위치 기록 리스너
+        try {
+            parentWin.addEventListener('scroll', function() {
+                try {
+                    localStorage.setItem('st_dashboard_scroll', parentWin.scrollY);
+                } catch (scrollErr) {}
+            });
+        } catch (e) {
+            console.error("Scroll event listener binding failed:", e);
+        }
+        
+        // 3. 페이지 로드 완료 시 스크롤 위치 복원
+        try {
+            var scrollPos = localStorage.getItem('st_dashboard_scroll');
+            if (scrollPos) {
+                parentWin.scrollTo(0, parseInt(scrollPos));
+            }
+        } catch (e) {
+            console.error("Scroll restore failed:", e);
+        }
+    })();
     </script>
-    """,
+"""
+
+st.components.v1.html(
+    html_script,
     height=0,
     width=0
 )
