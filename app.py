@@ -1072,7 +1072,7 @@ if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_w
 kis_key = st.secrets.get("KIS_APP_KEY", st.secrets.get("KIS_KEY", os.environ.get("KIS_APP_KEY", os.environ.get("KIS_KEY", ""))))
 kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.environ.get("KIS_APP_SECRET", os.environ.get("KIS_SECRET", ""))))
 
-# 1-2. 실시간 퀀트 데이터 즉시 갱신 버튼
+if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
     with st.sidebar.spinner("🎯 퀀트 연산 및 데이터 수집 중 (약 30~50초 소요)..."):
         try:
             import subprocess
