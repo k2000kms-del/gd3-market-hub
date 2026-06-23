@@ -66,8 +66,10 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         "systemInstruction": {"parts": [{"text": system_instruction}]}
     }
     
-    # 최상위 Pro 및 추론(Thinking) 모델들을 우선 시도하되, 무료 키의 엄격한 한도(Pro는 RPM이 매우 낮음)를 고려하여 순차 폴백
+    # 최상위 3.x 세대 모델 및 고성능 Pro/Thinking 모델들을 우선 시도하고 순차 폴백
     models_to_try = [
+        "gemini-3.1-pro-preview",
+        "gemini-3.5-flash",
         "gemini-2.5-pro",
         "gemini-2.0-pro-exp-02-05",
         "gemini-2.0-flash-thinking-exp-01-21",
