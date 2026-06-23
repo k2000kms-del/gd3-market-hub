@@ -2067,11 +2067,50 @@ if st.session_state.sel_code:
             adjusted_high = np.where(is_pinbar & is_vol_spike, df_candle['Close'], df_candle['High'])
             df_candle['Adj_Highest_High'] = pd.Series(adjusted_high, index=df_candle.index).rolling(20).max()
             
-            # 7. 최종 손절선 계산
-            df_candle['Stop_Loss'] = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
+            # 7. 최종 손절선 계산 (일방향 Trailing Stop 및 포지션 리셋 로직 적용으로 널뛰기 방지)
+            raw_stop_loss = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
             
-            # 8. 손절 이탈 신호 판정 (종가가 손절선을 하향 돌파하는 첫 번째 시점)
-            df_candle['Exit_Signal'] = (df_candle['Close'] < df_candle['Stop_Loss']) & (df_candle['Close'].shift(1) >= df_candle['Stop_Loss'].shift(1))
+            stop_loss_series = []
+            exit_signals = []
+            in_position = True
+            
+            for i in range(len(df_candle)):
+                close_val = df_candle['Close'].iloc[i]
+                raw_sl = raw_stop_loss.iloc[i]
+                
+                if i == 0:
+                    curr_sl = raw_sl
+                    stop_loss_series.append(curr_sl)
+                    exit_signals.append(False)
+                    if close_val < curr_sl:
+                        in_position = False
+                else:
+                    prev_sl = stop_loss_series[-1]
+                    
+                    if in_position:
+                        # 포지션 보유 중: 손절선은 위로만 이동 (하락 널뛰기 방지)
+                        # 피뢰침 리스크 가속화가 발동하여 raw_sl이 급격히 치솟는 경우 타이트하게 끌어올림
+                        curr_sl = max(prev_sl, raw_sl)
+                        stop_loss_series.append(curr_sl)
+                        
+                        # 당일 종가가 손절선을 이탈하는 순간 매도 신호 확정 및 포지션 이탈
+                        if close_val < curr_sl:
+                            exit_signals.append(True)
+                            in_position = False
+                        else:
+                            exit_signals.append(False)
+                    else:
+                        # 포지션 이탈(매도) 상태: 손절선이 높은 곳에서 굳지 않고 주가 하락세에 연동하여 아래로 부드럽게 리셋
+                        curr_sl = raw_sl
+                        stop_loss_series.append(curr_sl)
+                        exit_signals.append(False)
+                        
+                        # 주가가 다시 손절선을 종가 기준으로 탈환하면 재진입(포지션 활성화)
+                        if close_val >= curr_sl:
+                            in_position = True
+                            
+            df_candle['Stop_Loss'] = stop_loss_series
+            df_candle['Exit_Signal'] = exit_signals
         except Exception as atr_err:
             st.error(f"ATR 계산 오류: {atr_err}")
 
