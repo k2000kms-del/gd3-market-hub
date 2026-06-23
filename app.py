@@ -68,10 +68,10 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     
     # 최신 3.x 세대를 우선 시도하되, 트래픽 폭주/한도 초과 시 안정적인 2.0/1.5 세대로 자동 순차 폴백
     models_to_try = [
-        "gemini-3.5-flash",
-        "gemini-3.1-pro-preview",
-        "gemini-2.5-flash",
         "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-2.0-flash-lite-preview",
         "gemini-flash-latest"
     ]
     
@@ -110,6 +110,28 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
             friendly_err = "입력하신 Gemini API Key가 올바르지 않습니다. 사이드바 설정을 다시 확인해 주세요."
             
     raise RuntimeWarning(f"⚠️ {friendly_err}")
+
+
+def get_local_fallback_commentary(name, t_score_adj, s_score, market_cond):
+    """Gemini API 호출 제한 시 동작하는 퀀트 룰 기반 로컬 대체 리서치 조언"""
+    if t_score_adj >= 85.0:
+        buy_signal = "매수 보정 점수가 최상위권으로 단기 기술적 상승 추세가 강력하게 지지되고 있습니다."
+    elif t_score_adj >= 65.0:
+        buy_signal = "매수세가 하방 경직성을 확보하며 점진적으로 유입되는 긍정적 국면입니다."
+    elif t_score_adj >= 45.0:
+        buy_signal = "매수 강도가 평이한 수준이며, 추가 거래량 실린 돌파 흐름을 확인해야 합니다."
+    else:
+        buy_signal = "매수 모멘텀이 상대적으로 정체되어 있어 공격적인 진입보다는 관망이 유리합니다."
+
+    if s_score >= 70.0:
+        sell_signal = "다만 매도 리스크가 매우 높아 비중 조절 및 분할 차익실현 등의 리스크 관리가 긴요합니다."
+    elif s_score >= 50.0:
+        sell_signal = "매도 리스크가 다소 상존하고 있으므로 직전 지지선의 이탈 여부를 주의 깊게 관찰해야 합니다."
+    else:
+        sell_signal = "매도 압력이 현저히 낮아 현재의 견조한 추세를 안정적으로 지속할 가능성이 큽니다."
+
+    return f"{name}은(는) 현재 {market_cond} 국면 속에서 {buy_signal} {sell_signal} *(※ Gemini API 호출 한도로 인해 로컬 퀀트 룰 엔진 조언이 임시 제공됩니다.)*"
+
 
 
 @st.cache_data(ttl=30)  # 30초 캐시 (실시간이지만 너무 잦은 호출 방지)
@@ -2057,7 +2079,11 @@ if st.session_state.sel_code:
                     code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key
                 )
             except Exception as e:
-                ai_comment = str(e)
+                err_str = str(e)
+                if "Key가 설정되지 않아" in err_str:
+                    ai_comment = err_str
+                else:
+                    ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
             
             opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
 <h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
