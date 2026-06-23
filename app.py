@@ -2000,6 +2000,9 @@ if st.session_state.sel_code:
             
             # 7. 최종 손절선 계산
             df_candle['Stop_Loss'] = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
+            
+            # 8. 손절 이탈 신호 판정 (종가가 손절선을 하향 돌파하는 첫 번째 시점)
+            df_candle['Exit_Signal'] = (df_candle['Close'] < df_candle['Stop_Loss']) & (df_candle['Close'].shift(1) >= df_candle['Stop_Loss'].shift(1))
         except Exception as atr_err:
             st.error(f"ATR 계산 오류: {atr_err}")
 
@@ -2176,6 +2179,24 @@ if st.session_state.sel_code:
                 name='ATR 손절선', mode='lines',
                 line=dict(color='#e74c3c', width=1.5, dash='dash')
             ), row=1, col=1)
+            
+            # 손절 신호 (이탈 시 파란색 아래쪽 삼각형 화살표 표시)
+            if 'Exit_Signal' in df_candle.columns:
+                exit_signals = df_candle[df_candle['Exit_Signal'] == True]
+                if not exit_signals.empty:
+                    fig_c.add_trace(go.Scatter(
+                        x=exit_signals.index,
+                        y=exit_signals['High'] * 1.02, # 캔들 고가 살짝 위에 배치
+                        mode='markers',
+                        name='손절 신호',
+                        marker=dict(
+                            symbol='triangle-down',
+                            size=12,
+                            color='#4e9ff5', # 테마의 하락 컬러 블루 적용
+                            line=dict(width=1, color='#ffffff')
+                        ),
+                        showlegend=True
+                    ), row=1, col=1)
 
         # 거래량 막대 (색상: 상승일=빨강, 하락일=파랑)
         vol_colors = [
