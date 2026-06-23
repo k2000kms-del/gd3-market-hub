@@ -2180,24 +2180,24 @@ if st.session_state.sel_code:
                 line=dict(color='#e74c3c', width=1.5, dash='dash')
             ), row=1, col=1)
             
-            # 손절 신호 (이탈 시 매우 선명한 네온 아쿠아 컬러 화살표 및 텍스트 띄움)
+            # 매도 신호 (이탈 시 최적화된 크기의 네온 아쿠아 컬러 화살표 및 매도 텍스트 띄움)
             if 'Exit_Signal' in df_candle.columns:
                 exit_signals = df_candle[df_candle['Exit_Signal'] == True]
                 if not exit_signals.empty:
                     fig_c.add_trace(go.Scatter(
                         x=exit_signals.index,
-                        y=exit_signals['High'] * 1.03, # 캔들 고가 대비 마진 확보하여 겹침 방지
+                        y=exit_signals['High'] * 1.02, # 캔들 고가 살짝 위에 배치
                         mode='markers+text',
-                        name='손절 신호',
+                        name='매도 신호',
                         marker=dict(
                             symbol='triangle-down',
-                            size=20, # 크기를 12에서 20으로 대폭 확대
+                            size=14, # 20에서 14로 최적화하여 화면 비율과 어울리게 조정
                             color='#00e5ff', # 고대비 네온 아쿠아/블루 적용
-                            line=dict(width=2, color='#ffffff') # 흰색 테두리 두껍게 처리
+                            line=dict(width=1.5, color='#ffffff') # 흰색 테두리
                         ),
-                        text=['⚠️ 손절' for _ in range(len(exit_signals))], # 캔들 바로 위에 경고 텍스트 추가
+                        text=['⚠️ 매도' for _ in range(len(exit_signals))], # 평단가를 모르므로 '손절' 대신 '매도' 표기
                         textposition='top center',
-                        textfont=dict(color='#00e5ff', size=12, family='malgun gothic'),
+                        textfont=dict(color='#00e5ff', size=10, family='malgun gothic'),
                         showlegend=True
                     ), row=1, col=1)
 
