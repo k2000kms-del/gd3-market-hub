@@ -114,6 +114,75 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
             friendly_err = "입력하신 Gemini API Key가 올바르지 않습니다. 사이드바 설정을 다시 확인해 주세요."
             
     raise RuntimeWarning(f"⚠️ {friendly_err}")
+            
+
+def clean_market_condition_korean(market_cond_str):
+    """'하락위기 (1d:-9.0% 3d:-10.2% 5d:-9.2%) | ⚡ 극단변동성(σ=4.1%) | 장중충격(범위 10.7%)'와 같이 
+    복잡하고 난해한 퀀트 수치 데이터를 자연스럽고 직관적인 한국어 해설 문장으로 정제합니다.
+    """
+    import re
+    if not market_cond_str or market_cond_str == 'N/A' or market_cond_str == 'None':
+        return "시장 지표 데이터가 누락된 일반"
+        
+    # 특수 수치 패턴(1d, σ, 범위)이 전혀 존재하지 않는 일반적인 국면 텍스트인 경우 그대로 반환
+    if "1d" not in market_cond_str and "σ" not in market_cond_str and "범위" not in market_cond_str:
+        return market_cond_str.strip()
+        
+    descriptions = []
+    
+    # 1. 하락위기 파싱
+    down_match = re.search(r"하락위기\s*\((.*?)\)", market_cond_str)
+    if down_match:
+        items = down_match.group(1).split()
+        rates = {}
+        for item in items:
+            parts = item.split(':')
+            if len(parts) == 2:
+                val_str = re.sub(r"[^\d.-]", "", parts[1])
+                try:
+                    rates[parts[0]] = abs(float(val_str))
+                except ValueError:
+                    pass
+        if rates:
+            max_period = max(rates, key=rates.get)
+            max_val = rates[max_period]
+            period_num = re.sub(r"[^\d]", "", max_period)
+            if max_val >= 3.0:
+                descriptions.append(f"최근 {period_num}일간 최대 {max_val:.1f}% 수준의 단기 급락이 누적되고")
+            else:
+                descriptions.append(f"최근 {period_num}일간 약 {max_val:.1f}% 수준의 완만한 단기 조정이 진행되고")
+        else:
+            descriptions.append("단기 가격 조정 압력이 관찰되고")
+    else:
+        if "하락위기" in market_cond_str:
+            descriptions.append("단기 하락 리스크가 다소 잔존하고")
+
+    # 2. 극단변동성 파싱
+    vol_match = re.search(r"극단변동성\s*\(σ\s*=\s*([\d.]+)%\)", market_cond_str)
+    if vol_match:
+        sig_val = float(vol_match.group(1))
+        if sig_val >= 3.0:
+            descriptions.append(f"일간 표준편차가 {sig_val:.1f}%로 치솟아 극단적인 변동성이 나타나며")
+        else:
+            descriptions.append(f"일간 변동성(표준편차 {sig_val:.1f}%)이 비교적 차분하게 관리되며")
+    elif "극단변동성" in market_cond_str:
+        descriptions.append("일시적인 가격 변동성이 감지되며")
+
+    # 3. 장중충격 파싱
+    shock_match = re.search(r"장중충격\s*\(범위\s*([\d.]+)%\)", market_cond_str)
+    if shock_match:
+        range_val = float(shock_match.group(1))
+        if range_val >= 8.0:
+            descriptions.append(f"장중 가격 등락 범위가 {range_val:.1f}%에 달해 심한 요동을 치는")
+        else:
+            descriptions.append(f"장중 등락 범위가 {range_val:.1f}% 수준으로 제한적인 주가 흔들림을 보이는")
+    elif "장중충격" in market_cond_str:
+        descriptions.append("일부 장중 충격 압력이 남아있는")
+        
+    if not descriptions:
+        return market_cond_str.replace(" | ", ", ").strip()
+        
+    return ", ".join(descriptions)
 
 
 def get_local_fallback_commentary(name, t_score_adj, s_score, market_cond):
@@ -2108,7 +2177,8 @@ if st.session_state.sel_code:
                 grade_color = "#7f8c8d"
                 
             # Gemini AI 코멘터리 요청 (자산 배분 비율 연동 및 캐싱 방지)
-            market_cond = q_row.iloc[0].get('Market_Condition', 'N/A')
+            raw_market_cond = q_row.iloc[0].get('Market_Condition', 'N/A')
+            market_cond = clean_market_condition_korean(raw_market_cond)
             try:
                 ai_comment = get_gemini_commentary(
                     code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key
