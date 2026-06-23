@@ -134,7 +134,7 @@ def get_local_fallback_commentary(name, t_score_adj, s_score, market_cond):
     else:
         sell_signal = "매도 압력이 현저히 낮아 현재의 견조한 추세를 안정적으로 지속할 가능성이 큽니다."
 
-    return f"{name}은(는) 현재 {market_cond} 국면 속에서 {buy_signal} {sell_signal} *(※ Gemini API 호출 한도로 인해 로컬 퀀트 룰 엔진 조언이 임시 제공됩니다.)*"
+    return f"{name}은(는) 현재 {market_cond} 국면 속에서 {buy_signal} {sell_signal}"
 
 
 
