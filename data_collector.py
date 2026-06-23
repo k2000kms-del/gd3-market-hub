@@ -1506,16 +1506,19 @@ def main():
     print('=' * 50)
 
     if not APP_KEY or not APP_SECRET:
-        print('❌ KIS_APP_KEY / KIS_APP_SECRET 환경변수가 설정되지 않았습니다.')
-        sys.exit(1)
+        print('⚠️ KIS_APP_KEY / KIS_APP_SECRET 환경변수가 설정되지 않았습니다. (일부 수급 데이터가 누락됩니다.)')
+        # sys.exit(1) 대신 KIS 토큰 없이 실행을 계속함
 
     # KIS 토큰 발급
     print('\n🔑 KIS API 토큰 발급 중...')
-    token = get_access_token()
-    if not token:
+    token = get_access_token() if APP_KEY and APP_SECRET else None
+    if not token and (APP_KEY and APP_SECRET):
         print('❌ 토큰 발급 실패')
         return
-    print('  ✅ 토큰 발급 완료')
+    elif not token:
+        print('  ⚠️ KIS 토큰 발급 건너뜀 (인증키 없음)')
+    else:
+        print('  ✅ 토큰 발급 완료')
 
     print('데이터 수집 시작...')
     # GitHub Actions는 UTC 환경 → KST(UTC+9)로 변환하여 시장 시간 판단

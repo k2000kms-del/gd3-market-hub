@@ -1073,22 +1073,6 @@ kis_key = st.secrets.get("KIS_APP_KEY", st.secrets.get("KIS_KEY", os.environ.get
 kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.environ.get("KIS_APP_SECRET", os.environ.get("KIS_SECRET", ""))))
 
 # 1-2. 실시간 퀀트 데이터 즉시 갱신 버튼
-if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
-    if not kis_key or not kis_sec:
-        st.sidebar.error(
-            "❌ **갱신 불가 (인증키 누락)**\n\n"
-            "로컬 환경에 **한국투자증권 API 인증키가 설정되지 않았습니다.**\n\n"
-            "**해결 방법:**\n"
-            "1. 프로젝트 폴더 내 `.streamlit/secrets.toml` 파일을 엽니다.\n"
-            "2. 아래 형식을 채워 저장해 주세요:\n"
-            "```toml\n"
-            "KIS_APP_KEY = \"발급받은_APP_KEY\"\n"
-            "KIS_APP_SECRET = \"발급받은_APP_SECRET\"\n"
-            "```\n"
-            "3. 또는 하단의 **'원격 수집기 재가동'** 도구를 가동하여 원격 Actions 서버에서 갱신하세요."
-        )
-        st.stop()
-        
     with st.sidebar.spinner("🎯 퀀트 연산 및 데이터 수집 중 (약 30~50초 소요)..."):
         try:
             import subprocess
@@ -1111,37 +1095,22 @@ if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_contai
             base_dir = os.path.dirname(os.path.abspath(__file__))
             script_path = os.path.join(base_dir, 'data_collector.py')
             
-            # 가상환경 파이썬 사용
-            python_exe = os.path.join(base_dir, '.venv', 'Scripts', 'python.exe')
-            if not os.path.exists(python_exe):
-                python_exe = 'python'
+            import sys
+            python_exe = sys.executable
                 
             res = subprocess.run([python_exe, script_path], env=env, capture_output=True, encoding='utf-8')
             if res.returncode == 0:
-                st.sidebar.success("✅ 퀀트 데이터 실시간 갱신 성공!")
+                if not kis_key or not kis_sec:
+                    st.sidebar.warning("✅ 갱신 완료 (KIS 인증키가 없어 일부 데이터는 제외됨)")
+                else:
+                    st.sidebar.success("✅ 퀀트 데이터 실시간 갱신 성공!")
                 st.cache_data.clear()
                 st.rerun()
             else:
                 err_msg = res.stderr if res.stderr else res.stdout
                 if not err_msg:
                     err_msg = "알 수 없는 오류가 발생했습니다."
-                
-                # 인증 키 누락 조건 또는 프로세스 에러 내용 파악
-                if "KIS_APP_KEY" in err_msg or "환경변수" in err_msg or not kis_key or not kis_sec:
-                    st.sidebar.error(
-                        "❌ **갱신 실패 (인증키 누락)**\n\n"
-                        "로컬 환경에 **한국투자증권 API 인증키가 설정되지 않았습니다.**\n\n"
-                        "**해결 방법:**\n"
-                        "1. 프로젝트 폴더 내 `.streamlit/secrets.toml` 파일을 엽니다.\n"
-                        "2. 아래 형식을 채워 저장해 주세요:\n"
-                        "```toml\n"
-                        "KIS_APP_KEY = \"발급받은_APP_KEY\"\n"
-                        "KIS_APP_SECRET = \"발급받은_APP_SECRET\"\n"
-                        "```\n"
-                        "3. 또는 하단의 **'원격 수집기 재가동'** 도구를 가동하여 원격 Actions 서버에서 자동으로 데이터 수집 커밋을 하도록 실행할 수 있습니다."
-                    )
-                else:
-                    st.sidebar.error(f"❌ 갱신 실패 (코드 {res.returncode}): {err_msg[:200]}")
+                st.sidebar.error(f"❌ 갱신 실패 (코드 {res.returncode}): {err_msg[:200]}")
         except Exception as e:
             st.sidebar.error(f"❌ 퀀트 연산 중 오류 발생: {e}")
 
