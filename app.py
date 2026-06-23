@@ -2180,21 +2180,24 @@ if st.session_state.sel_code:
                 line=dict(color='#e74c3c', width=1.5, dash='dash')
             ), row=1, col=1)
             
-            # 손절 신호 (이탈 시 파란색 아래쪽 삼각형 화살표 표시)
+            # 손절 신호 (이탈 시 매우 선명한 네온 아쿠아 컬러 화살표 및 텍스트 띄움)
             if 'Exit_Signal' in df_candle.columns:
                 exit_signals = df_candle[df_candle['Exit_Signal'] == True]
                 if not exit_signals.empty:
                     fig_c.add_trace(go.Scatter(
                         x=exit_signals.index,
-                        y=exit_signals['High'] * 1.02, # 캔들 고가 살짝 위에 배치
-                        mode='markers',
+                        y=exit_signals['High'] * 1.03, # 캔들 고가 대비 마진 확보하여 겹침 방지
+                        mode='markers+text',
                         name='손절 신호',
                         marker=dict(
                             symbol='triangle-down',
-                            size=12,
-                            color='#4e9ff5', # 테마의 하락 컬러 블루 적용
-                            line=dict(width=1, color='#ffffff')
+                            size=20, # 크기를 12에서 20으로 대폭 확대
+                            color='#00e5ff', # 고대비 네온 아쿠아/블루 적용
+                            line=dict(width=2, color='#ffffff') # 흰색 테두리 두껍게 처리
                         ),
+                        text=['⚠️ 손절' for _ in range(len(exit_signals))], # 캔들 바로 위에 경고 텍스트 추가
+                        textposition='top center',
+                        textfont=dict(color='#00e5ff', size=12, family='malgun gothic'),
                         showlegend=True
                     ), row=1, col=1)
 
