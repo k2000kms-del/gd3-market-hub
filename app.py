@@ -2240,9 +2240,12 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
 
+        # 주말 및 휴장일로 인한 캔들 끊어짐 방지를 위해 x축 데이터를 문자열 카테고리 리스트로 변환
+        date_str_list = df_candle.index.strftime('%Y-%m-%d').tolist()
+
         # 캔들스틱 (한국식: 상승=빨강, 하락=파랑)
         fig_c.add_trace(go.Candlestick(
-            x=df_candle.index,
+            x=date_str_list,
             open=df_candle['Open'], high=df_candle['High'],
             low=df_candle['Low'],   close=df_candle['Close'],
             increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
@@ -2252,14 +2255,14 @@ if st.session_state.sel_code:
 
         # MA5
         fig_c.add_trace(go.Scatter(
-            x=df_candle.index, y=df_candle['MA5'],
+            x=date_str_list, y=df_candle['MA5'],
             name='MA5', mode='lines',
             line=dict(color='#ffd43b', width=1.5)
         ), row=1, col=1)
 
         # MA20
         fig_c.add_trace(go.Scatter(
-            x=df_candle.index, y=df_candle['MA20'],
+            x=date_str_list, y=df_candle['MA20'],
             name='MA20', mode='lines',
             line=dict(color='#ff922b', width=1.5)
         ), row=1, col=1)
@@ -2267,7 +2270,7 @@ if st.session_state.sel_code:
         # ATR 손절 가이드선 (2.5 ATR)
         if 'Stop_Loss' in df_candle.columns:
             fig_c.add_trace(go.Scatter(
-                x=df_candle.index, y=df_candle['Stop_Loss'],
+                x=date_str_list, y=df_candle['Stop_Loss'],
                 name='ATR 손절선', mode='lines',
                 line=dict(color='#e74c3c', width=1.5, dash='dash')
             ), row=1, col=1)
@@ -2289,8 +2292,9 @@ if st.session_state.sel_code:
                     for idx, row_sig in exit_signals.iterrows():
                         close_val = row_sig['Close']
                         price_str = f"{int(close_val):,}원" if close_val >= 100 else f"{close_val:,.2f}"
+                        idx_str = idx.strftime('%Y-%m-%d')
                         fig_c.add_annotation(
-                            x=idx,
+                            x=idx_str,
                             y=row_sig['High'],
                             text=f"<b>⚠️ 매도</b><br>{price_str}",
                             showarrow=True,
@@ -2314,7 +2318,7 @@ if st.session_state.sel_code:
             for c, o in zip(df_candle['Close'], df_candle['Open'])
         ]
         fig_c.add_trace(go.Bar(
-            x=df_candle.index, y=df_candle['Volume'],
+            x=date_str_list, y=df_candle['Volume'],
             name='거래량', marker_color=vol_colors,
             showlegend=False, opacity=0.8
         ), row=2, col=1)
@@ -2329,10 +2333,28 @@ if st.session_state.sel_code:
             plot_bgcolor='#0d1b2a',
             paper_bgcolor='#0d1b2a',
         )
+        # x축 카테고리 틱 라벨의 과도한 밀집 방지를 위해 약 8개 틱만 고르게 추출하여 표시
+        tick_indices = np.linspace(0, len(date_str_list) - 1, 8, dtype=int) if len(date_str_list) > 0 else []
+        tick_vals = [date_str_list[i] for i in tick_indices]
+        tick_texts = [date_str_list[i] for i in tick_indices]
+
         fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=1, col=1)
         fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
-        fig_c.update_xaxes(gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
-        fig_c.update_xaxes(gridcolor='rgba(255,255,255,0.04)', tickangle=-30, row=2, col=1)
+        fig_c.update_xaxes(
+            type='category',
+            gridcolor='rgba(255,255,255,0.04)',
+            showticklabels=False,
+            row=1, col=1
+        )
+        fig_c.update_xaxes(
+            type='category',
+            gridcolor='rgba(255,255,255,0.04)',
+            tickangle=-30,
+            tickmode='array',
+            tickvals=tick_vals,
+            ticktext=tick_texts,
+            row=2, col=1
+        )
 
         st.plotly_chart(fig_c, use_container_width=True)
 
