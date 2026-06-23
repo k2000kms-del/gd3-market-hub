@@ -2263,19 +2263,21 @@ if st.session_state.sel_code:
                         showlegend=True
                     ), row=1, col=1)
                     
-                    # 각 신호 시점에 겹침 방지 말풍선 추가
+                    # 각 신호 시점에 겹침 방지 말풍선 추가 (⚠️ 매도 + 금액 표시)
                     for idx, row_sig in exit_signals.iterrows():
+                        close_val = row_sig['Close']
+                        price_str = f"{int(close_val):,}원" if close_val >= 100 else f"{close_val:,.2f}"
                         fig_c.add_annotation(
                             x=idx,
                             y=row_sig['High'],
-                            text="<b>⚠️ 매도</b>",
+                            text=f"<b>⚠️ 매도</b><br>{price_str}",
                             showarrow=True,
                             arrowhead=2,
                             arrowsize=1.0,
                             arrowwidth=2,
                             arrowcolor="#00e5ff",
                             ax=0,
-                            ay=-35,  # 캔들 고가로부터 위쪽으로 35픽셀 고정 오프셋 (주가 수준과 상관없이 일정 간격 유지)
+                            ay=-45,  # 텍스트가 두 줄이 되었으므로 고정 오프셋을 -35에서 -45로 늘려 가독성 확보
                             font=dict(color="#00e5ff", size=10, family="malgun gothic"),
                             bgcolor="#0d1b2a",  # 차트 배경색(#0d1b2a)으로 글자 배경을 채워 뒤로 지나는 MA선과 캔들 꼬리를 완벽하게 마스킹함
                             bordercolor="#00e5ff",
