@@ -226,7 +226,8 @@ DATA_FILES = [
 def get_stock_history(code: str):
     """종목 일봉 데이터 조회 (90일)"""
     try:
-        start = (pd.Timestamp.now() - pd.Timedelta(days=120)).strftime('%Y-%m-%d')
+        # 20일 샹들리에 출구(Chandelier Exit) 계산에 충분한 데이터를 패딩하기 위해 180일 전부터 가져옴 (영업일 기준 약 120일)
+        start = (pd.Timestamp.now() - pd.Timedelta(days=180)).strftime('%Y-%m-%d')
         df = fdr.DataReader(code, start)
         return df if not df.empty else pd.DataFrame()
     except Exception:
@@ -1971,7 +1972,12 @@ if st.session_state.sel_code:
             tr = np.insert(tr, 0, high[0] - low[0])
             atr = pd.Series(tr).rolling(14).mean().values
             df_candle['ATR'] = atr
-            df_candle['Stop_Loss'] = df_candle['Close'] - 2.5 * df_candle['ATR']
+            
+            # 샹들리에 출구(Chandelier Exit) 방식의 트레일링 손절선 적용: 
+            # 20일간의 최고가(Highest High) 대비 2.5 * ATR을 차감하여 계산합니다.
+            # 주가가 떨어져도 20일 동안은 손절선이 밑으로 같이 쓸려내려가지 않고 수평 지지선을 형성하므로 
+            # 주가가 손절선을 이탈하는 시점을 직관적으로 파악할 수 있는 유의미한 손절 기준선이 됩니다.
+            df_candle['Stop_Loss'] = df_candle['High'].rolling(20).max() - 2.5 * df_candle['ATR']
         except Exception as atr_err:
             st.error(f"ATR 계산 오류: {atr_err}")
 
