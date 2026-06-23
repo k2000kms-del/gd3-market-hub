@@ -2180,26 +2180,39 @@ if st.session_state.sel_code:
                 line=dict(color='#e74c3c', width=1.5, dash='dash')
             ), row=1, col=1)
             
-            # 매도 신호 (이탈 시 최적화된 크기의 네온 아쿠아 컬러 화살표 및 매도 텍스트 띄움)
+            # 매도 신호 (이탈 시 Plotly Annotation으로 선 가림 마스킹 처리를 포함한 말풍선 화살표 띄움)
             if 'Exit_Signal' in df_candle.columns:
                 exit_signals = df_candle[df_candle['Exit_Signal'] == True]
                 if not exit_signals.empty:
+                    # 범례(Legend) 표시용 더미 트레이스 (차트에는 나타나지 않음)
                     fig_c.add_trace(go.Scatter(
-                        x=exit_signals.index,
-                        y=exit_signals['High'] * 1.02, # 캔들 고가 살짝 위에 배치
-                        mode='markers+text',
+                        x=[None], y=[None],
+                        mode='markers',
                         name='매도 신호',
-                        marker=dict(
-                            symbol='triangle-down',
-                            size=14, # 20에서 14로 최적화하여 화면 비율과 어울리게 조정
-                            color='#00e5ff', # 고대비 네온 아쿠아/블루 적용
-                            line=dict(width=1.5, color='#ffffff') # 흰색 테두리
-                        ),
-                        text=['⚠️ 매도' for _ in range(len(exit_signals))], # 평단가를 모르므로 '손절' 대신 '매도' 표기
-                        textposition='top center',
-                        textfont=dict(color='#00e5ff', size=10, family='malgun gothic'),
+                        marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
                         showlegend=True
                     ), row=1, col=1)
+                    
+                    # 각 신호 시점에 겹침 방지 말풍선 추가
+                    for idx, row_sig in exit_signals.iterrows():
+                        fig_c.add_annotation(
+                            x=idx,
+                            y=row_sig['High'],
+                            text="<b>⚠️ 매도</b>",
+                            showarrow=True,
+                            arrowhead=2,
+                            arrowsize=1.0,
+                            arrowwidth=2,
+                            arrowcolor="#00e5ff",
+                            ax=0,
+                            ay=-35,  # 캔들 고가로부터 위쪽으로 35픽셀 고정 오프셋 (주가 수준과 상관없이 일정 간격 유지)
+                            font=dict(color="#00e5ff", size=10, family="malgun gothic"),
+                            bgcolor="#0d1b2a",  # 차트 배경색(#0d1b2a)으로 글자 배경을 채워 뒤로 지나는 MA선과 캔들 꼬리를 완벽하게 마스킹함
+                            bordercolor="#00e5ff",
+                            borderwidth=1.5,
+                            borderpad=4,
+                            row=1, col=1
+                        )
 
         # 거래량 막대 (색상: 상승일=빨강, 하락일=파랑)
         vol_colors = [
