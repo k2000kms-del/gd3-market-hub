@@ -1972,12 +1972,34 @@ if st.session_state.sel_code:
             tr = np.insert(tr, 0, high[0] - low[0])
             atr = pd.Series(tr).rolling(14).mean().values
             df_candle['ATR'] = atr
+            # 샹들리에 출구(Chandelier Exit) 방식의 트레일링 손절선 적용하되,
+            # 대량 거래량을 동반한 피뢰침(위꼬리) 음봉이나 장대 음봉 발생 시 손절선을 즉각적으로 타이트하게 끌어올리는 
+            # [거래량 & 피뢰침 리스크 가속화 보정(Volume & Pinbar Risk Acceleration)] 로직 적용
             
-            # 샹들리에 출구(Chandelier Exit) 방식의 트레일링 손절선 적용: 
-            # 20일간의 최고가(Highest High) 대비 2.5 * ATR을 차감하여 계산합니다.
-            # 주가가 떨어져도 20일 동안은 손절선이 밑으로 같이 쓸려내려가지 않고 수평 지지선을 형성하므로 
-            # 주가가 손절선을 이탈하는 시점을 직관적으로 파악할 수 있는 유의미한 손절 기준선이 됩니다.
-            df_candle['Stop_Loss'] = df_candle['High'].rolling(20).max() - 2.5 * df_candle['ATR']
+            # 1. 20일 평균 거래량 계산
+            df_candle['Vol_MA20'] = df_candle['Volume'].rolling(20).mean()
+            
+            # 2. 피뢰침(위꼬리) 조건 정의: 위꼬리 비율이 전체 봉 길이(High-Low)의 40% 이상이고 음봉인 경우
+            candle_range = df_candle['High'] - df_candle['Low']
+            candle_range_safe = np.where(candle_range == 0, 1.0, candle_range)
+            upper_wick = df_candle['High'] - np.maximum(df_candle['Open'], df_candle['Close'])
+            is_pinbar = ((upper_wick / candle_range_safe) > 0.4) & (df_candle['Close'] <= df_candle['Open'])
+            
+            # 3. 거래량 폭발 조건: 거래량이 최근 20일 평균 거래량의 1.5배 이상
+            is_vol_spike = df_candle['Volume'] > (df_candle['Vol_MA20'].fillna(df_candle['Volume']) * 1.5)
+            
+            # 4. 리스크 가속 조건 (대량거래량 피뢰침 또는 대량거래량 음봉)
+            risk_accelerate = is_vol_spike & (is_pinbar | (df_candle['Close'] < df_candle['Open']))
+            
+            # 5. 동적 ATR 승수 적용 (대량거래량 음봉/피뢰침 발생 시 위험 관리 극대화를 위해 승수를 2.5 -> 1.0으로 축소하여 손절선 격차 좁힘)
+            atr_multiplier = np.where(risk_accelerate, 1.0, 2.5)
+            
+            # 6. 최고가 계산 시 고가 왜곡 방지 (대량거래 피뢰침 날은 High 대신 Close를 적용하여 손절선이 허수로 솟구치는 현상 방지)
+            adjusted_high = np.where(is_pinbar & is_vol_spike, df_candle['Close'], df_candle['High'])
+            df_candle['Adj_Highest_High'] = pd.Series(adjusted_high, index=df_candle.index).rolling(20).max()
+            
+            # 7. 최종 손절선 계산
+            df_candle['Stop_Loss'] = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
         except Exception as atr_err:
             st.error(f"ATR 계산 오류: {atr_err}")
 
