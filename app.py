@@ -2067,33 +2067,57 @@ if st.session_state.sel_code:
             adjusted_high = np.where(is_pinbar & is_vol_spike, df_candle['Close'], df_candle['High'])
             df_candle['Adj_Highest_High'] = pd.Series(adjusted_high, index=df_candle.index).rolling(20).max()
             
-            # 7. 최종 손절선 계산 (시각용 pure 2.5 ATR 트레일링 스톱선 계산 - 널뛰기 방지)
+            # 7. 최종 손절선 계산 (시각용 pure 2.5 ATR 트레일링 스톱선 - 오직 상승만 허용하여 널뛰기 방지)
             pure_raw_sl = df_candle['Adj_Highest_High'] - 2.5 * df_candle['ATR']
-            
+
             stop_loss_series = []
             for i in range(len(df_candle)):
+                curr_raw = pure_raw_sl.iloc[i]
+                if pd.isna(curr_raw):
+                    stop_loss_series.append(curr_raw)
+                    continue
                 if i == 0:
-                    stop_loss_series.append(pure_raw_sl.iloc[i])
+                    stop_loss_series.append(curr_raw)
                 else:
                     prev_sl = stop_loss_series[-1]
-                    curr_raw = pure_raw_sl.iloc[i]
                     close_val = df_candle['Close'].iloc[i]
-                    
-                    # 보유 중일 때(종가가 이전 손절선보다 높을 때)는 수평 또는 상승 트레일링
-                    if close_val > prev_sl:
+                    if pd.isna(prev_sl):
+                        stop_loss_series.append(curr_raw)
+                    elif close_val > prev_sl:
+                        # 보유 중: 손절선은 오직 위로만 이동 (내려가지 않음)
                         stop_loss_series.append(max(prev_sl, curr_raw))
                     else:
-                        # 이탈 시에는 주가를 유연하게 아래로 추종
+                        # 손절선 이탈 후: 원시값으로 하락 추종 허용 (재진입 준비)
                         stop_loss_series.append(curr_raw)
-                        
+
             df_candle['Stop_Loss'] = stop_loss_series
-            
-            # 8. 리스크 가속화가 반영된 동적 판정선 계산 (당일 이탈 조건 판정용)
+
+            # 8. 매도 신호 판정 - 상태 머신 방식 (중복 신호 방지)
+            # 동적 판정선: 리스크 가속화 ATR 승수 적용
             dynamic_trigger_sl = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
-            
-            # 9. 최종 이탈 매도 신호 판정
-            # 어제는 정상 보유 중이었으나, 오늘 종가가 동적 판정선(피뢰침 날은 1.0 ATR로 밀착)을 하향 돌파한 날
-            df_candle['Exit_Signal'] = (df_candle['Close'] < dynamic_trigger_sl) & (df_candle['Close'].shift(1) >= df_candle['Stop_Loss'].shift(1))
+            exit_signal_list = []
+            in_position = True  # 처음은 보유 중 상태로 시작
+            for i in range(len(df_candle)):
+                close_val = df_candle['Close'].iloc[i]
+                trigger_sl = dynamic_trigger_sl.iloc[i]
+                if pd.isna(trigger_sl):
+                    exit_signal_list.append(False)
+                    continue
+                if in_position:
+                    if close_val < trigger_sl:
+                        # 손절선 이탈 → 매도 신호 발생 + 포지션 청산
+                        exit_signal_list.append(True)
+                        in_position = False
+                    else:
+                        exit_signal_list.append(False)
+                else:
+                    # 미보유 상태: MA5 상향 돌파 시 재진입
+                    ma5_val = df_candle['MA5'].iloc[i]
+                    if pd.notna(ma5_val) and close_val > ma5_val:
+                        in_position = True
+                    exit_signal_list.append(False)
+            df_candle['Exit_Signal'] = exit_signal_list
+
         except Exception as atr_err:
             st.error(f"ATR 계산 오류: {atr_err}")
 
