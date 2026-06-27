@@ -1174,7 +1174,6 @@ if _search_q:
                 st.rerun()
 
 portfolio_sidebar_container = st.sidebar.container()
-st.sidebar.markdown('---')
 
 
 # ── 사이드바 맨 아래: Gemini AI 헬프 센터 ───────────────────
