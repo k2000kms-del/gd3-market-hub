@@ -2578,22 +2578,7 @@ if st.session_state.sel_code:
                 
                 # 포트폴리오 목록 및 바로가기
                 if portfolio:
-                    portfolio_sidebar_container.markdown("---")
-                    
-                    # 보유 종목 바로가기
-                    go_codes = list(portfolio.keys())
-                    go_names = [f"{portfolio[c]['name']} ({c})" for c in go_codes]
-                    
-                    if 'port_go_select' not in st.session_state:
-                        st.session_state.port_go_select = "선택 안 함"
-                    
-                    portfolio_sidebar_container.selectbox(
-                        "🎯 보유 종목 바로가기",
-                        ["선택 안 함"] + go_names,
-                        key="port_go_select",
-                        on_change=on_portfolio_go
-                    )
-                        
+
                     # 포트폴리오 테이블 렌더링
                     port_rows = []
                     for p_code, p_data in portfolio.items():
@@ -2611,8 +2596,10 @@ if st.session_state.sel_code:
                         rt_color = "#ff6b6b" if p_return > 0 else "#4e9ff5" if p_return < 0 else "#888888"
                         rt_sign = "+" if p_return > 0 else ""
                         
+                        import urllib.parse
+                        encoded_name = urllib.parse.quote(p_data["name"])
                         port_rows.append({
-                            "종목명": p_data["name"],
+                            "종목명": f"<a href='/?sel_code={p_code}&sel_name={encoded_name}' target='_self' style='color: #ffffff; text-decoration: none; cursor: pointer;' onmouseover='this.style.color=\"#00e5ff\";' onmouseout='this.style.color=\"#ffffff\";'>{p_data['name']}</a>",
                             "매수가": f"{int(p_data['entry_price']):,}",
                             "수량": f"{int(p_data['qty']):,}",
                             "수익률": f"<span style='color:{rt_color}; font-weight:bold;'>{rt_sign}{p_return:.2f}%</span>",
