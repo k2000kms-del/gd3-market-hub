@@ -2950,8 +2950,9 @@ if st.session_state.sel_code:
             row=1, col=1
         )
 
-        # 현재가 우측 Y축 라벨 박스 투사 (상승 시 빨강, 하락 시 파랑 HTS 형태)
+        # 현재가 우측 Y축 라벨 박스 및 보조선 투사 (HTS 형태)
         price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
+        fig_c.add_hline(y=last_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
         fig_c.add_annotation(
             xref='paper', yref='y',
             x=1.002, y=last_close,
@@ -3076,6 +3077,7 @@ if st.session_state.sel_code:
                 )
             )
             price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
+            fig_5m.add_hline(y=last_5m_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
             fig_5m.add_annotation(
                 xref='paper', yref='y',
                 x=1.002, y=last_5m_close,
@@ -3176,6 +3178,7 @@ if st.session_state.sel_code:
                 )
             )
             price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
+            fig_1m.add_hline(y=last_1m_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
             fig_1m.add_annotation(
                 xref='paper', yref='y',
                 x=1.002, y=last_1m_close,
