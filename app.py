@@ -1814,6 +1814,7 @@ with row1_col1:
                 color=bar_colors,
                 line=dict(color='rgba(255,255,255,0.08)', width=1)
             ),
+            cliponaxis=False,
             text=text_labels_sorted,
             textposition='outside',
             customdata=custom_data_values,
@@ -1845,8 +1846,8 @@ with row1_col1:
             yaxis=dict(fixedrange=True)
         )
         fig_p1.update_yaxes(automargin=True)
-        # x축을 중앙 0 기준 대칭으로 설정 (순매도는 왼쪽, 순매수는 오른쪽)
-        fig_p1.update_xaxes(range=[-abs_max * 1.35, abs_max * 1.35])
+        # x축 중앙 0 선 대칭 고정 및 텍스트 짤림 방지를 위한 여유 공간 확대 (1.35 -> 1.70)
+        fig_p1.update_xaxes(range=[-abs_max * 1.70, abs_max * 1.70])
         
         ev_p1 = st.plotly_chart(
             fig_p1,
