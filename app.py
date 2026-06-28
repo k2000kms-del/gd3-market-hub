@@ -90,7 +90,7 @@ def draw_quant_radar_chart(q_row):
 
 
 @st.cache_data(ttl=1200)
-def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None, current_price=None, stop_loss_price=None, recent_high_price=None):
+def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None, current_price=None, stop_loss_price=None, recent_high_price=None, rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
         raise RuntimeWarning("🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요.")
@@ -98,27 +98,14 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     headers = {"Content-Type": "application/json"}
     
     system_instruction = (
-        "너는 주식 분석 대시보드의 전문 퀀트 애널리스트야. "
-        "주어진 종목의 퀀트 매수 점수, 매도 점수, 그리고 현재 시장 판단 국면(매크로 환경)을 종합적으로 분석하여, "
-        "해당 종목에 대한 투자 리스크 및 매매 방향성을 팩트 위주로 조언해줘. "
-        "자산배분 비중 수치를 불필요하게 앵무새처럼 나열하지 말고, 매수/매도 강도와 시장 상황이 종목에 미치는 핵심적인 영향에 집중해. "
-        "주의: 제공되는 '최근 20일 종가 추이' 수치 배열을 논리적으로 분석해. 억지로 패턴을 끼워 맞추거나 지어내지 마. 수치 흐름이 아래 패턴 중 하나와 명확히 일치할 때만 그 신뢰도와 액션을 조언에 포함하고, 애매하거나 불확실하면 차트 패턴에 대한 언급은 과감히 생략해:\n"
-        "[매수 패턴]\n"
-        "- 상승 깃발형(신뢰도 100%): 폭등에 대비하라\n"
-        "- 상승 페넌트, 이중/삼중 바닥(신뢰도 80%): 빨리 사라\n"
-        "- 저항선 돌파 후 지지(신뢰도 75%): 돌파 확인 후 매수\n"
-        "- 역헤드앤숄더(신뢰도 65%): 서서히 오를 것이다\n"
-        "[매도 패턴]\n"
-        "- 이중 천장(신뢰도 100%): 폭락에 대비하라\n"
-        "- 헤드앤숄더(신뢰도 85%): 서둘러 팔아라\n"
-        "- 하락 삼각형, 하락 깃발형(신뢰도 70~80%): 서둘러 팔아라 (급매)\n"
-        "- 역 V자 반전(신뢰도 75%): 즉시 매도 검토\n"
-        "- 하락 다이아몬드(신뢰도 65%): 천천히 내려갈 것이다\n"
-        "[중립 패턴]\n"
-        "- 박스권(신뢰도 50%): 방향 불명확, 건드리지 마(위험)\n"
-        "만약 매도를 권장하는 신호(하락 패턴 등)가 포착된다면, 제공된 '기술적 기준선(ATR 손절선)' 데이터를 바탕으로 '기준선인 OOOO원을 이탈할 경우 매도하라'와 같이 구체적인 가격을 명시해.\n"
-        "반대로 매수를 권장하는 신호(상승 패턴 등)가 포착된다면, 제공된 '단기 저항선(최근 고점)' 데이터를 바탕으로 '저항선인 OOOO원 돌파 시 강한 상승이 기대된다' 또는 '1차 목표가를 OOOO원으로 설정하라'와 같이 구체적인 상승 목표/돌파 가격을 명시해.\n"
-        "출력은 3~4문장 이내의 짧고 굵은 존댓말(해요체)로 제한하고, 지나치게 장황한 수식어는 배제해."
+        "너는 주식 분석 대시보드의 전문 퀀트 애널리스트이자 기술적 분석가야. "
+        "제공된 종목 정보, 퀀트 점수, 시장 환경(매크로), 그리고 기술적 지표(RSI, MACD, 볼린저 밴드, ATR 손절선)들을 종합적으로 분석하여 매매 대응 전략을 구체적인 가격 수치와 함께 작성해줘.\n\n"
+        "반드시 아래의 형식을 준수하여 HTML 태그를 사용해 작성해줘 (markdown 형식인 **, *, # 등은 절대 사용하지 마):\n"
+        "1. <strong>현재 상황 요약</strong>: 현재 흐름과 보유 평단가 대비 수익 상황(보유 중인 경우)을 1문장으로 요약합니다.<br>\n"
+        "2. <strong>기술적 차트 분석</strong>: RSI(과매도/과매열 판단), MACD(골든크로스/데드크로스, 모멘텀), 볼린저 밴드 및 ATR 손절선 대비 현재가의 지지/저항 수준을 구체적인 수치와 함께 설명합니다.<br>\n"
+        "3. <strong>매매 대응 전략</strong>: 매수/매도/홀딩 방향성과 구체적인 익절/손절가 또는 돌파 매수 목표 가격을 명시해줍니다.<br>\n\n"
+        "주의: 제공되는 '최근 20일 종가 추이' 수치 배열 및 기술적 지표들을 논리적으로 분석하되, 억지로 패턴을 지어내거나 환각(Hallucination)을 일으키면 안 돼. 확실한 근거가 있는 경우에만 차트 패턴을 언급해.\n"
+        "출력은 HTML 태그(<br>, <strong>, <ul>, <li> 등)로만 문단을 구분하고 꾸며줘. 문맥상 불필요한 장황한 수식어는 배제하고 요점 위주로 깔끔하게 작성해줘."
     )
     
     prompt = (
@@ -136,12 +123,18 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
             prompt += f"기술적 기준선(ATR 손절선): {stop_loss_price:,.0f}원\n"
         if recent_high_price is not None:
             prompt += f"단기 저항선(최근 20일 고점): {recent_high_price:,.0f}원\n"
+    if rsi is not None:
+        prompt += f"RSI (14): {rsi:.1f}\n"
+    if macd is not None and macd_signal is not None:
+        prompt += f"MACD: {macd:.1f}, Signal: {macd_signal:.1f}\n"
+    if bb_upper is not None and bb_lower is not None:
+        prompt += f"볼린저 밴드 상한선: {bb_upper:,.0f}원, 하한선: {bb_lower:,.0f}원 (중심선: {bb_middle:,.0f}원)\n"
 
     if avg_price is not None and avg_price > 0:
         prompt += f"보유 평단가: {avg_price:,.0f}원\n"
-        prompt += "상기 데이터를 바탕으로 차트 패턴, 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하되, 보유 평단가를 반영한 추가 매수/매도/홀딩 의견을 포함하여 요약 코멘터리를 작성해줘."
+        prompt += "상기 기술적 지표 및 보유 평단가를 반영하여, 홀딩/추가매수/익절/손절에 대한 구체적인 대응 시나리오를 작성해줘."
     else:
-        prompt += "상기 데이터를 바탕으로 차트 패턴, 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하여 요약 코멘터리를 작성해줘."
+        prompt += "상기 기술적 지표들을 반영하여 신규 진입 매수 시나리오 혹은 관망 전략을 구체적인 목표가/손절가와 함께 작성해줘."
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -2385,6 +2378,25 @@ if st.session_state.sel_code:
         df_candle['MA5']  = df_candle['Close'].rolling(5).mean()
         df_candle['MA20'] = df_candle['Close'].rolling(20).mean()
 
+        # RSI 계산
+        delta = df_candle['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df_candle['RSI'] = 100 - (100 / (1 + rs))
+
+        # MACD 계산
+        exp1 = df_candle['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = df_candle['Close'].ewm(span=26, adjust=False).mean()
+        df_candle['MACD'] = exp1 - exp2
+        df_candle['MACD_Signal'] = df_candle['MACD'].ewm(span=9, adjust=False).mean()
+
+        # Bollinger Bands 계산
+        df_candle['BB_Middle'] = df_candle['Close'].rolling(window=20).mean()
+        df_candle['BB_Std'] = df_candle['Close'].rolling(window=20).std()
+        df_candle['BB_Upper'] = df_candle['BB_Middle'] + (df_candle['BB_Std'] * 2)
+        df_candle['BB_Lower'] = df_candle['BB_Middle'] - (df_candle['BB_Std'] * 2)
+
         # ── [고도화 1단계] ATR 계산 및 ATR 14일 계산 ───────────────
         try:
             high = df_candle['High'].values
@@ -2609,6 +2621,12 @@ if st.session_state.sel_code:
             stop_loss_for_gemini = None
             recent_high_for_gemini = None
             buy_signal_today = False
+            rsi_for_gemini = None
+            macd_for_gemini = None
+            macd_sig_for_gemini = None
+            bb_upper_for_gemini = None
+            bb_middle_for_gemini = None
+            bb_lower_for_gemini = None
             
             if 'df_candle' in locals() and not df_candle.empty:
                 recent_closes = df_candle['Close'].tail(20).tolist()
@@ -2619,6 +2637,15 @@ if st.session_state.sel_code:
                     stop_loss_for_gemini = df_candle['Stop_Loss'].iloc[-1]
                 if 'Buy_Signal' in df_candle.columns:
                     buy_signal_today = df_candle['Buy_Signal'].iloc[-1]
+                if 'RSI' in df_candle.columns:
+                    rsi_for_gemini = df_candle['RSI'].iloc[-1]
+                if 'MACD' in df_candle.columns:
+                    macd_for_gemini = df_candle['MACD'].iloc[-1]
+                    macd_sig_for_gemini = df_candle['MACD_Signal'].iloc[-1]
+                if 'BB_Upper' in df_candle.columns:
+                    bb_upper_for_gemini = df_candle['BB_Upper'].iloc[-1]
+                    bb_middle_for_gemini = df_candle['BB_Middle'].iloc[-1]
+                    bb_lower_for_gemini = df_candle['BB_Lower'].iloc[-1]
 
             # 종합 등급 판정 (보정 매수 점수 t_score_adj 및 기술적 지표 기준)
             if stop_loss_for_gemini and current_price_for_gemini and current_price_for_gemini < stop_loss_for_gemini:
@@ -2656,7 +2683,7 @@ if st.session_state.sel_code:
                 
             try:
                 ai_comment = get_gemini_commentary(
-                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini
+                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini
                 )
             except Exception as e:
                 err_str = str(e)
