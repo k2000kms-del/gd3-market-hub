@@ -147,7 +147,10 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         "gemini-3.5-flash",           # ★ Stable GA — 최우선 (최신 안정 모델)
         "gemini-2.5-flash",           # Stable — 이전 세대 가성비 폴백
         "gemini-2.5-pro",             # Stable — 복잡 추론 고성능 폴백
-        "gemini-2.5-flash-lite",      # Stable — 초경량 고속 폴백
+        "gemini-2.0-flash",           # Stable — 최신 2.0 세대 폴백
+        "gemini-2.0-flash-lite",      # Stable — 최신 2.0 세대 라이트 폴백
+        "gemini-flash-lite-latest",   # Stable — 초경량 고속 폴백 (가장 넉넉한 쿼터)
+        "gemini-2.5-flash-lite",      # Stable — 2.5 라이트 폴백
         "gemini-flash-latest",        # latest alias — 최후 안전망
     ]
     
@@ -2685,12 +2688,10 @@ if st.session_state.sel_code:
                 ai_comment = get_gemini_commentary(
                     code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini
                 )
+            except RuntimeWarning as e:
+                ai_comment = str(e)
             except Exception as e:
-                err_str = str(e)
-                if "Key가 설정되지 않아" in err_str:
-                    ai_comment = err_str
-                else:
-                    ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
+                ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
             
             opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
 <h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
