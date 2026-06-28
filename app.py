@@ -90,7 +90,7 @@ def draw_quant_radar_chart(q_row):
 
 
 @st.cache_data(ttl=1200)
-def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None):
+def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None, current_price=None, stop_loss_price=None):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
         raise RuntimeWarning("🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요.")
@@ -116,6 +116,7 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         "- 하락 다이아몬드(신뢰도 65%): 천천히 내려갈 것이다\n"
         "[중립 패턴]\n"
         "- 박스권(신뢰도 50%): 방향 불명확, 건드리지 마(위험)\n"
+        "만약 매도를 권장하는 신호(하락 패턴 등)가 포착된다면, 제공된 '기술적 기준선(ATR 손절선)' 데이터를 바탕으로 '기준선인 OOOO원을 이탈할 경우 매도하라'와 같이 구체적인 가격을 명시해.\n"
         "출력은 3~4문장 이내의 짧고 굵은 존댓말(해요체)로 제한하고, 지나치게 장황한 수식어는 배제해."
     )
     
@@ -128,6 +129,9 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     )
     if recent_prices_str:
         prompt += f"최근 20일 종가 추이: {recent_prices_str}\n"
+    if current_price is not None and stop_loss_price is not None:
+        prompt += f"현재가: {current_price:,.0f}원\n"
+        prompt += f"기술적 기준선(ATR 손절선): {stop_loss_price:,.0f}원\n"
 
     if avg_price is not None and avg_price > 0:
         prompt += f"보유 평단가: {avg_price:,.0f}원\n"
@@ -2622,15 +2626,21 @@ if st.session_state.sel_code:
             avg_price_for_gemini = None
             if code_disp in current_portfolio:
                 avg_price_for_gemini = current_portfolio[code_disp].get('price')
-            # 최근 20거래일 종가 추이 추출 (차트 패턴 분석용)
+            # 최근 20거래일 종가 추이 및 현재가, 손절선 추출
             recent_prices_str = ""
+            current_price_for_gemini = None
+            stop_loss_for_gemini = None
+            
             if 'df_candle' in locals() and not df_candle.empty:
                 recent_closes = df_candle['Close'].tail(20).tolist()
                 recent_prices_str = ", ".join([str(int(p)) for p in recent_closes])
+                current_price_for_gemini = df_candle['Close'].iloc[-1]
+                if 'Stop_Loss' in df_candle.columns:
+                    stop_loss_for_gemini = df_candle['Stop_Loss'].iloc[-1]
                 
             try:
                 ai_comment = get_gemini_commentary(
-                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str
+                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini
                 )
             except Exception as e:
                 err_str = str(e)
