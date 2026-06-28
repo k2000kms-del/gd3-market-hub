@@ -1740,7 +1740,9 @@ with row1_col1:
             
         df_hd_clean = df_hd_clean[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
         
-        df1 = df_hd_clean.sort_values('Total_Combined_Net', ascending=False).head(10).copy()
+        # 순매수/순매도 상관없이 수급 쏠림이 가장 큰(절대값 기준) TOP 10 종목 추출
+        df_hd_clean['Abs_Net_Sort'] = df_hd_clean['Total_Combined_Net'].abs()
+        df1 = df_hd_clean.sort_values('Abs_Net_Sort', ascending=False).head(10).copy()
         df1['Code'] = df1['Code'].astype(str).str.zfill(6)
         
         # 실시간 외국인/기관 수급 조회
