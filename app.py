@@ -90,7 +90,7 @@ def draw_quant_radar_chart(q_row):
 
 
 @st.cache_data(ttl=1200)
-def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None):
+def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
         raise RuntimeWarning("🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요.")
@@ -102,7 +102,21 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         "주어진 종목의 퀀트 매수 점수, 매도 점수, 그리고 현재 시장 판단 국면(매크로 환경)을 종합적으로 분석하여, "
         "해당 종목에 대한 투자 리스크 및 매매 방향성을 팩트 위주로 조언해줘. "
         "자산배분 비중 수치를 불필요하게 앵무새처럼 나열하지 말고, 매수/매도 강도와 시장 상황이 종목에 미치는 핵심적인 영향에 집중해. "
-        "출력은 2~3문장 이내의 짧고 굵은 존댓말(해요체)로 제한하고, 지나치게 장황한 수식어는 배제해."
+        "또한, 제공되는 '최근 20일 종가 추이'를 분석하여 다음의 클래식 차트 패턴 중 흐름이 일치한다면 그에 맞는 신뢰도(확률)와 액션을 조언에 반드시 포함해:\n"
+        "[매수 패턴]\n"
+        "- 상승 깃발형(신뢰도 100%): 폭등에 대비하라\n"
+        "- 상승 페넌트, 이중/삼중 바닥(신뢰도 80%): 빨리 사라\n"
+        "- 저항선 돌파 후 지지(신뢰도 75%): 돌파 확인 후 매수\n"
+        "- 역헤드앤숄더(신뢰도 65%): 서서히 오를 것이다\n"
+        "[매도 패턴]\n"
+        "- 이중 천장(신뢰도 100%): 폭락에 대비하라\n"
+        "- 헤드앤숄더(신뢰도 85%): 서둘러 팔아라\n"
+        "- 하락 삼각형, 하락 깃발형(신뢰도 70~80%): 서둘러 팔아라 (급매)\n"
+        "- 역 V자 반전(신뢰도 75%): 즉시 매도 검토\n"
+        "- 하락 다이아몬드(신뢰도 65%): 천천히 내려갈 것이다\n"
+        "[중립 패턴]\n"
+        "- 박스권(신뢰도 50%): 방향 불명확, 건드리지 마(위험)\n"
+        "출력은 3~4문장 이내의 짧고 굵은 존댓말(해요체)로 제한하고, 지나치게 장황한 수식어는 배제해."
     )
     
     prompt = (
@@ -112,11 +126,14 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         f"매도 퀀트 점수: {s_score}점\n"
         f"현재 시장 판단 국면: {market_cond}\n"
     )
+    if recent_prices_str:
+        prompt += f"최근 20일 종가 추이: {recent_prices_str}\n"
+
     if avg_price is not None and avg_price > 0:
         prompt += f"보유 평단가: {avg_price:,.0f}원\n"
-        prompt += "상기 데이터를 바탕으로 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하되, 보유 평단가를 반영한 추가 매수/매도/홀딩 의견을 포함하여 2~3문장 내외의 요약 코멘터리를 작성해줘."
+        prompt += "상기 데이터를 바탕으로 차트 패턴, 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하되, 보유 평단가를 반영한 추가 매수/매도/홀딩 의견을 포함하여 요약 코멘터리를 작성해줘."
     else:
-        prompt += "상기 데이터를 바탕으로 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하여 2문장 내외의 요약 코멘터리를 작성해줘."
+        prompt += "상기 데이터를 바탕으로 차트 패턴, 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하여 요약 코멘터리를 작성해줘."
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -2605,10 +2622,15 @@ if st.session_state.sel_code:
             avg_price_for_gemini = None
             if code_disp in current_portfolio:
                 avg_price_for_gemini = current_portfolio[code_disp].get('price')
+            # 최근 20거래일 종가 추이 추출 (차트 패턴 분석용)
+            recent_prices_str = ""
+            if 'df_candle' in locals() and not df_candle.empty:
+                recent_closes = df_candle['Close'].tail(20).tolist()
+                recent_prices_str = ", ".join([str(int(p)) for p in recent_closes])
                 
             try:
                 ai_comment = get_gemini_commentary(
-                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini
+                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str
                 )
             except Exception as e:
                 err_str = str(e)
