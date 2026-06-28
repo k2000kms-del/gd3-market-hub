@@ -2599,8 +2599,23 @@ if st.session_state.sel_code:
                 regime_desc = "지수 수집 실패로 기본 자산배분 비중(현금 30% / 주식 70%)을 권장합니다."
                 regime_color = "#7f8c8d"
 
-            # 종합 등급 판정 (보정 매수 점수 t_score_adj 기준)
-            if t_score_adj >= 80.0:
+            # 최근 20거래일 종가 추이 및 현재가, 손절선 추출
+            recent_prices_str = ""
+            current_price_for_gemini = None
+            stop_loss_for_gemini = None
+            
+            if 'df_candle' in locals() and not df_candle.empty:
+                recent_closes = df_candle['Close'].tail(20).tolist()
+                recent_prices_str = ", ".join([str(int(p)) for p in recent_closes])
+                current_price_for_gemini = df_candle['Close'].iloc[-1]
+                if 'Stop_Loss' in df_candle.columns:
+                    stop_loss_for_gemini = df_candle['Stop_Loss'].iloc[-1]
+
+            # 종합 등급 판정 (보정 매수 점수 t_score_adj 및 기술적 지표 기준)
+            if stop_loss_for_gemini and current_price_for_gemini and current_price_for_gemini < stop_loss_for_gemini:
+                quant_grade = "적극 매도 (손절가 이탈)"
+                grade_color = "#e74c3c"
+            elif t_score_adj >= 80.0:
                 quant_grade = "적극 매수 (Strong Buy)"
                 grade_color = "#2ecc71"
             elif t_score_adj >= 60.0:
@@ -2626,17 +2641,6 @@ if st.session_state.sel_code:
             avg_price_for_gemini = None
             if code_disp in current_portfolio:
                 avg_price_for_gemini = current_portfolio[code_disp].get('price')
-            # 최근 20거래일 종가 추이 및 현재가, 손절선 추출
-            recent_prices_str = ""
-            current_price_for_gemini = None
-            stop_loss_for_gemini = None
-            
-            if 'df_candle' in locals() and not df_candle.empty:
-                recent_closes = df_candle['Close'].tail(20).tolist()
-                recent_prices_str = ", ".join([str(int(p)) for p in recent_closes])
-                current_price_for_gemini = df_candle['Close'].iloc[-1]
-                if 'Stop_Loss' in df_candle.columns:
-                    stop_loss_for_gemini = df_candle['Stop_Loss'].iloc[-1]
                 
             try:
                 ai_comment = get_gemini_commentary(
