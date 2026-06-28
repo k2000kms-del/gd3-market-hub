@@ -90,7 +90,7 @@ def draw_quant_radar_chart(q_row):
 
 
 @st.cache_data(ttl=1200)
-def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key):
+def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
         raise RuntimeWarning("🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요.")
@@ -111,8 +111,12 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         f"매수 퀀트 점수: {t_score_adj}점 (원점수: {t_score}점)\n"
         f"매도 퀀트 점수: {s_score}점\n"
         f"현재 시장 판단 국면: {market_cond}\n"
-        "상기 데이터를 바탕으로 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하여 2문장 내외의 요약 코멘터리를 작성해줘."
     )
+    if avg_price is not None and avg_price > 0:
+        prompt += f"보유 평단가: {avg_price:,.0f}원\n"
+        prompt += "상기 데이터를 바탕으로 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하되, 보유 평단가를 반영한 추가 매수/매도/홀딩 의견을 포함하여 2~3문장 내외의 요약 코멘터리를 작성해줘."
+    else:
+        prompt += "상기 데이터를 바탕으로 매수/매도 퀀트 점수와 매크로 시장 환경을 중점적으로 고려하여 2문장 내외의 요약 코멘터리를 작성해줘."
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -433,6 +437,14 @@ st.set_page_config(
     layout='wide',
     initial_sidebar_state='collapsed'
 )
+
+# Plotly 차트 마우스 커서 강제 고정 (손가락, 십자선 -> 기본 화살표)
+st.markdown("""
+<style>
+.js-plotly-plot .plotly .cursor-crosshair { cursor: default !important; }
+.js-plotly-plot .plotly .cursor-pointer { cursor: default !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # ── GitHub 레포지토리 raw URL (data/ 폴더) ────────────────────────
 GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/k2000kms-del/gd3-market-hub/main/data'
@@ -2240,10 +2252,12 @@ with row2_col2:
             ],
             tickformat='%H:%M',
             dtick=1800000,  # 30분 단위
-            showgrid=True
-        )
+            showgrid=True,
+            fixedrange=True
+        ),
+        yaxis=dict(fixedrange=True)
     )
-    st.plotly_chart(fig_p5, use_container_width=True)
+    st.plotly_chart(fig_p5, use_container_width=True, config={'displayModeBar': False})
 
 # ── [Panel 6] 상승률 리더 (Horizontal Bar) ───────────────────
 with row2_col3:
@@ -2332,18 +2346,7 @@ if st.session_state.sel_code:
             
     name_disp = st.session_state.sel_name or code_disp
 
-    col_title, col_close = st.columns([12, 1.5])
-    with col_title:
-        st.markdown(f"### 📈 {name_disp} ({code_disp}) 일봉 차트")
-    with col_close:
-        if st.button('✕ 초기화', key='close_chart'):
-            st.session_state.sel_code = "005930"
-            st.session_state.sel_name = "삼성전자"
-            st.query_params['sel_code'] = "005930"
-            st.query_params['sel_name'] = "삼성전자"
-            # 차트의 selection 상태를 완전히 리셋하기 위해 key 값 증가
-            st.session_state.chart_key_index += 1
-            st.rerun()
+    st.markdown(f"### 📈 {name_disp} ({code_disp}) 일봉 차트")
 
     with st.spinner(f'📡 {name_disp} 주가 데이터 조회 중...'):
         df_candle = get_stock_history(code_disp)
@@ -2391,32 +2394,6 @@ if st.session_state.sel_code:
             # 6. 최고가 계산 시 고가 왜곡 방지 (대량거래 피뢰침 날은 High 대신 Close를 적용하여 손절선이 허수로 솟구치는 현상 방지)
             adjusted_high = np.where(is_pinbar & is_vol_spike, df_candle['Close'], df_candle['High'])
             df_candle['Adj_Highest_High'] = pd.Series(adjusted_high, index=df_candle.index).rolling(20).max()
-            
-            # 7. 최종 손절선 계산 (시각용 pure 2.5 ATR 트레일링 스톱선 - 오직 상승만 허용하여 널뛰기 방지)
-            pure_raw_sl = df_candle['Adj_Highest_High'] - 2.5 * df_candle['ATR']
-
-            stop_loss_series = []
-            for i in range(len(df_candle)):
-                curr_raw = pure_raw_sl.iloc[i]
-                if pd.isna(curr_raw):
-                    stop_loss_series.append(curr_raw)
-                    continue
-                if i == 0:
-                    stop_loss_series.append(curr_raw)
-                else:
-                    prev_sl = stop_loss_series[-1]
-                    close_val = df_candle['Close'].iloc[i]
-                    if pd.isna(prev_sl):
-                        stop_loss_series.append(curr_raw)
-                    elif close_val > prev_sl:
-                        # 보유 중: 손절선은 오직 위로만 이동 (내려가지 않음)
-                        stop_loss_series.append(max(prev_sl, curr_raw))
-                    else:
-                        # 손절선 이탈 후: 원시값으로 하락 추종 허용 (재진입 준비)
-                        stop_loss_series.append(curr_raw)
-
-            df_candle['Stop_Loss'] = stop_loss_series
-
             # 퀀트 보정 점수 조회 (진입 필터용) 및 대형주 완화 기준 적용
             t_score_adj = 60.0  # 기본값
             is_large_cap = False
@@ -2438,69 +2415,81 @@ if st.session_state.sel_code:
             # 대형주는 허들을 60점에서 45점으로 완화 적용 (그 외 중소형주는 60점 기준선 엄격 유지)
             buy_threshold = 45.0 if is_large_cap else 60.0
 
-            # 8. 매수/매도 신호 판정 - 상태 머신 방식 (본전 보호 + 퀀트 필터 + 시가 갭손절 + 시간청산 결합)
-            # 동적 판정선: 리스크 가속화 ATR 승수 적용
-            dynamic_trigger_sl = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
+            # 7. 매수/매도 신호 판정 및 동기화된 손절선 계산 (상태 머신)
+            # 동적 ATR 손절폭 기준선 (대량거래 발생 시 타이트하게 보정됨)
+            dynamic_raw_sl = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
+            
+            stop_loss_series = []
             exit_signal_list = []
             buy_signal_list = []
-            in_position = True  # 처음은 보유 중 상태로 시작
-            entry_price = df_candle['Close'].iloc[0] if len(df_candle) > 0 else 0.0
-            max_price_since_entry = entry_price
-            days_in_position = 0
-
+            
+            in_position = False  # 항상 미보유 상태로 시뮬레이션 시작
+            entry_price = 0.0
+            max_price_since_entry = 0.0
+            current_sl = np.nan
+            
             for i in range(len(df_candle)):
                 close_val = df_candle['Close'].iloc[i]
                 open_val = df_candle['Open'].iloc[i] if 'Open' in df_candle.columns else close_val
-                trigger_sl = dynamic_trigger_sl.iloc[i]
                 ma5_val = df_candle['MA5'].iloc[i]
+                ma20_val = df_candle['MA20'].iloc[i] if 'MA20' in df_candle.columns else close_val
+                raw_sl = dynamic_raw_sl.iloc[i]
                 
-                # 전일 기준 손절선 (시가 갭하락 판정용)
-                prev_sl = dynamic_trigger_sl.iloc[i-1] if i > 0 else trigger_sl
-                
-                if pd.isna(trigger_sl) or pd.isna(ma5_val):
+                if pd.isna(raw_sl) or pd.isna(ma5_val) or pd.isna(ma20_val):
+                    stop_loss_series.append(np.nan)
                     exit_signal_list.append(False)
                     buy_signal_list.append(False)
                     continue
                     
                 if in_position:
                     buy_signal_list.append(False)
-                    days_in_position += 1
-                    
-                    # 최고가 추적
                     max_price_since_entry = max(max_price_since_entry, close_val)
-                    # 본전 보호 룰: 진입 후 최고가 고점이 진입가 대비 10% 이상 도달했다면, 
-                    # 이후 손절선은 절대로 진입가 + 1% 마진선 이하로 떨어지지 않도록 철저히 잠금(익절 확보)
+                    
+                    # 손절선 래칫 (위로만 이동)
+                    if pd.isna(current_sl):
+                        current_sl = raw_sl
+                    else:
+                        current_sl = max(current_sl, raw_sl)
+                        
+                    # 본전 보호 룰 (10% 이상 수익 시 본전+1% 잠금)
                     if max_price_since_entry >= entry_price * 1.10:
-                        trigger_sl = max(trigger_sl, entry_price * 1.01)
-
-                    # 1) 시가 갭하락 손절: 시가가 전일 기준 손절선을 하회하여 급락 출발 시, 즉시 청산 (블랙스완 방지)
+                        current_sl = max(current_sl, entry_price * 1.01)
+                        
+                    stop_loss_series.append(current_sl)
+                    
+                    # 전일 기준 손절선 파악 (시가 갭하락 판정용)
+                    prev_sl = stop_loss_series[-2] if len(stop_loss_series) > 1 and not pd.isna(stop_loss_series[-2]) else current_sl
+                    
+                    # 매도 판단
                     if open_val < prev_sl:
+                        # 1) 시가 갭하락 손절: 시가가 전일 기준 손절선을 하회하여 급락 출발 시 청산
                         exit_signal_list.append(True)
                         in_position = False
-                        days_in_position = 0
-                    # 2) 시간 청산: 5거래일 경과 후 수익률이 본전 대비 ±2% 내외로 정체 시 기회비용 확보를 위해 즉시 청산
-                    elif days_in_position >= 5 and abs((close_val - entry_price) / entry_price) <= 0.02:
+                        current_sl = np.nan
+                    elif close_val < current_sl:
+                        # 2) 일반 종가 이탈 손절
                         exit_signal_list.append(True)
                         in_position = False
-                        days_in_position = 0
-                    # 3) 일반 종가 손절선 이탈
-                    elif close_val < trigger_sl:
-                        exit_signal_list.append(True)
-                        in_position = False
-                        days_in_position = 0
+                        current_sl = np.nan
                     else:
                         exit_signal_list.append(False)
+                        
                 else:
                     exit_signal_list.append(False)
-                    # 미보유 상태: MA5 상향 돌파 + 종목의 퀀트 보정 점수가 완화 기준(buy_threshold) 이상일 때만 매수 진입 (가짜 돌파 필터링)
-                    if close_val > ma5_val and (t_score_adj >= buy_threshold):
+                    # 미보유 상태: 차트 시각화를 위해 raw_sl 표시 (래칫 없이 위아래 변동)
+                    stop_loss_series.append(raw_sl)
+                    
+                    # 매수 판단: 과거 백테스트 시각화를 위해 상승 추세(MA5 및 MA20 상회) 진입 시 매수
+                    if close_val > ma5_val and close_val > ma20_val:
                         buy_signal_list.append(True)
                         in_position = True
                         entry_price = close_val
                         max_price_since_entry = close_val
-                        days_in_position = 0
+                        current_sl = raw_sl  # 진입 시 손절선 초기화
                     else:
                         buy_signal_list.append(False)
+
+            df_candle['Stop_Loss'] = stop_loss_series
             df_candle['Exit_Signal'] = exit_signal_list
             df_candle['Buy_Signal'] = buy_signal_list
 
@@ -2610,9 +2599,16 @@ if st.session_state.sel_code:
             # Gemini AI 코멘터리 요청 (자산 배분 비율 연동 및 캐싱 방지)
             raw_market_cond = q_row.iloc[0].get('Market_Condition', 'N/A')
             market_cond = clean_market_condition_korean(raw_market_cond)
+            
+            # 포트폴리오(대기보드) 등록 종목인 경우 평단가 파악
+            current_portfolio = load_portfolio()
+            avg_price_for_gemini = None
+            if code_disp in current_portfolio:
+                avg_price_for_gemini = current_portfolio[code_disp].get('price')
+                
             try:
                 ai_comment = get_gemini_commentary(
-                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key
+                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini
                 )
             except Exception as e:
                 err_str = str(e)
@@ -2793,11 +2789,15 @@ if st.session_state.sel_code:
                 line=dict(color='#e74c3c', width=1.5, dash='dash')
             ), row=1, col=1)
             
-            # 매도 신호 (이탈 시 Plotly Annotation으로 선 가림 마스킹 처리를 포함한 말풍선 화살표 띄움)
+            # 매도 신호 (Plotly Marker + Hover Tooltip)
             if 'Exit_Signal' in df_candle.columns:
                 exit_signals = df_candle[df_candle['Exit_Signal'] == True]
                 if not exit_signals.empty:
-                    # 범례(Legend) 표시용 더미 트레이스 (차트에는 나타나지 않음)
+                    exit_dates = exit_signals.index.strftime('%Y-%m-%d').tolist()
+                    exit_prices = exit_signals['Close'].tolist()
+                    hover_texts = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices]
+                    
+                    # 범례(Legend) 표시용 더미 트레이스 (수직 정렬을 위해 사각형 사용)
                     fig_c.add_trace(go.Scatter(
                         x=[None], y=[None],
                         mode='markers',
@@ -2806,35 +2806,26 @@ if st.session_state.sel_code:
                         showlegend=True
                     ), row=1, col=1)
                     
-                    # 각 신호 시점에 겹침 방지 말풍선 추가 (⚠️ 매도 + 금액 표시)
-                    for idx, row_sig in exit_signals.iterrows():
-                        close_val = row_sig['Close']
-                        price_str = f"{int(close_val):,}원" if close_val >= 100 else f"{close_val:,.2f}"
-                        idx_str = idx.strftime('%Y-%m-%d')
-                        fig_c.add_annotation(
-                            x=idx_str,
-                            y=row_sig['High'],
-                            text=f"<b>⚠️ 매도</b><br>{price_str}",
-                            showarrow=True,
-                            arrowhead=2,
-                            arrowsize=1.0,
-                            arrowwidth=2,
-                            arrowcolor="#00e5ff",
-                            ax=0,
-                            ay=-45,  # 텍스트가 두 줄이 되었으므로 고정 오프셋을 -35에서 -45로 늘려 가독성 확보
-                            font=dict(color="#00e5ff", size=10, family="malgun gothic"),
-                            bgcolor="#0d1b2a",  # 차트 배경색(#0d1b2a)으로 글자 배경을 채워 뒤로 지나는 MA선과 캔들 꼬리를 완벽하게 마스킹함
-                            bordercolor="#00e5ff",
-                            borderwidth=1.5,
-                            borderpad=4,
-                            row=1, col=1
-                        )
+                    fig_c.add_trace(go.Scatter(
+                        x=exit_dates,
+                        y=exit_signals['High'] * 1.015, # 캔들 고점 위쪽에 살짝 띄워서 마커 표시
+                        mode='markers',
+                        name='매도 신호',
+                        marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
+                        text=hover_texts,
+                        hovertemplate="%{text}<extra></extra>",
+                        showlegend=False
+                    ), row=1, col=1)
             
-            # 매수 신호 (MA5 상향 돌파 시 Plotly Annotation으로 금액 표시를 포함한 화살표 띄움)
+            # 매수 신호 (Plotly Marker + Hover Tooltip)
             if 'Buy_Signal' in df_candle.columns:
                 buy_signals = df_candle[df_candle['Buy_Signal'] == True]
                 if not buy_signals.empty:
-                    # 범례(Legend) 표시용 더미 트레이스 (차트에는 나타나지 않음)
+                    buy_dates = buy_signals.index.strftime('%Y-%m-%d').tolist()
+                    buy_prices = buy_signals['Close'].tolist()
+                    hover_texts = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices]
+                    
+                    # 범례(Legend) 표시용 더미 트레이스 (수직 정렬을 위해 사각형 사용)
                     fig_c.add_trace(go.Scatter(
                         x=[None], y=[None],
                         mode='markers',
@@ -2843,29 +2834,16 @@ if st.session_state.sel_code:
                         showlegend=True
                     ), row=1, col=1)
                     
-                    # 각 신호 시점에 말풍선 추가 (🟢 매수 + 금액 표시)
-                    for idx, row_sig in buy_signals.iterrows():
-                        close_val = row_sig['Close']
-                        price_str = f"{int(close_val):,}원" if close_val >= 100 else f"{close_val:,.2f}"
-                        idx_str = idx.strftime('%Y-%m-%d')
-                        fig_c.add_annotation(
-                            x=idx_str,
-                            y=row_sig['Low'],
-                            text=f"<b>🟢 매수</b><br>{price_str}",
-                            showarrow=True,
-                            arrowhead=2,
-                            arrowsize=1.0,
-                            arrowwidth=2,
-                            arrowcolor="#2ecc71",
-                            ax=0,
-                            ay=45,  # 캔들 하단에 위치하도록 양수 값 설정
-                            font=dict(color="#2ecc71", size=10, family="malgun gothic"),
-                            bgcolor="#0d1b2a",  # 차트 배경색으로 마스킹
-                            bordercolor="#2ecc71",
-                            borderwidth=1.5,
-                            borderpad=4,
-                            row=1, col=1
-                        )
+                    fig_c.add_trace(go.Scatter(
+                        x=buy_dates,
+                        y=buy_signals['Low'] * 0.985, # 캔들 저점 아래쪽에 살짝 띄워서 마커 표시
+                        mode='markers',
+                        name='매수 신호',
+                        marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
+                        text=hover_texts,
+                        hovertemplate="%{text}<extra></extra>",
+                        showlegend=False
+                    ), row=1, col=1)
 
         # 나의 매수 단가선 (포트폴리오 등록 시 황금색 점선으로 표시)
         portfolio = load_portfolio()
@@ -2889,8 +2867,9 @@ if st.session_state.sel_code:
             if my_entry_price > 0:
                 min_val = min(min_val, my_entry_price)
                 max_val = max(max_val, my_entry_price)
-            margin = (max_val - min_val) * 0.05 if max_val > min_val else 1000
-            y_range = [min_val - margin, max_val + margin]
+            margin_bottom = (max_val - min_val) * 0.05 if max_val > min_val else 1000
+            margin_top = (max_val - min_val) * 0.25 if max_val > min_val else 2000
+            y_range = [min_val - margin_bottom, max_val + margin_top]
         except Exception:
             y_range = None
 
@@ -2919,12 +2898,14 @@ if st.session_state.sel_code:
         fig_c.update_layout(
             template='plotly_dark',
             height=480,
-            margin=dict(t=20, l=10, r=55, b=10), # 우측 가격 눈금을 위한 여백
+            margin=dict(t=50, l=10, r=55, b=10), # 우측 가격 눈금을 위한 여백 및 상단 라벨 잘림 방지
             xaxis_rangeslider_visible=False,
             legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
             plot_bgcolor='#0d1b2a',
             paper_bgcolor='#0d1b2a',
+            dragmode=False, # 돋보기/십자선(Zoom) 커서 대신 기본 화살표 커서 사용
+            hovermode='closest', # 마우스 커서 위치에 가장 가까운 데이터를 하이라이트
             # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
             yaxis3=dict(
                 overlaying='y',
@@ -2935,7 +2916,8 @@ if st.session_state.sel_code:
                 tickformat=',d',
                 showticklabels=True,
                 range=y_range,
-                nticks=18 # 눈금을 더 촘촘히 표시
+                nticks=18, # 눈금을 더 촘촘히 표시
+                fixedrange=True # 우측 눈금에도 확대/축소 잠금을 걸어야 화살표 커서 유지
             )
         )
         # 좌측 Y축 눈금 정의 및 촘촘함 적용 (yaxis = row1의 주가 축)
@@ -2947,6 +2929,12 @@ if st.session_state.sel_code:
             tickfont=dict(size=10, color='#888'),
             range=y_range,
             nticks=18,             # 눈금을 더 촘촘히 표시
+            fixedrange=True,       # Y축 확대/축소(Zoom/Pan) 비활성화
+            showspikes=True, spikemode='across', spikesnap='cursor', spikedash='dot', spikecolor='#999999', spikethickness=1, # 마우스 십자선
+            row=1, col=1
+        )
+        fig_c.update_xaxes(
+            fixedrange=True, # X축 확대/축소 비활성화
             row=1, col=1
         )
 
@@ -2971,7 +2959,7 @@ if st.session_state.sel_code:
         tick_vals = [date_str_list[i] for i in tick_indices]
         tick_texts = [date_str_list[i] for i in tick_indices]
 
-        fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
+        fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', fixedrange=True, row=2, col=1)
         fig_c.update_xaxes(
             type='category',
             gridcolor='rgba(255,255,255,0.04)',
@@ -2985,6 +2973,7 @@ if st.session_state.sel_code:
             tickmode='array',
             tickvals=tick_vals,
             ticktext=tick_texts,
+            fixedrange=True,
             row=2, col=1
         )
 
@@ -3208,15 +3197,15 @@ if st.session_state.sel_code:
         # ── 탭 레이아웃 렌더링 ─────────────────────────────
         tab_day, tab_5m, tab_1m = st.tabs(["📅 일봉 차트", "⏱️ 5분봉 (캔들)", "⚡ 1분봉 (라인)"])
         with tab_day:
-            st.plotly_chart(fig_c, use_container_width=True)
+            st.plotly_chart(fig_c, use_container_width=True, config={'displayModeBar': False})
         with tab_5m:
             if not df_5min.empty:
-                st.plotly_chart(fig_5m, use_container_width=True)
+                st.plotly_chart(fig_5m, use_container_width=True, config={'displayModeBar': False})
             else:
                 st.info("⚠️ 5분봉 데이터를 불러올 수 없거나 휴장일입니다.")
         with tab_1m:
             if not df_1min.empty:
-                st.plotly_chart(fig_1m, use_container_width=True)
+                st.plotly_chart(fig_1m, use_container_width=True, config={'displayModeBar': False})
             else:
                 st.info("⚠️ 1분봉 데이터를 불러올 수 없거나 휴장일입니다.")
 
