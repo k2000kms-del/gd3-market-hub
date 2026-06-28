@@ -327,20 +327,51 @@ def fetch_naver_realtime_supply():
 
 import json
 
+@st.cache_data(ttl=60)
+def fetch_remote_portfolio():
+    gh_token = st.secrets.get("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))
+    if gh_token:
+        import base64
+        import requests
+        url = "https://api.github.com/repos/k2000kms-del/gd3-market-hub/contents/data/my_portfolio.json"
+        headers = {"Authorization": f"token {gh_token}", "Accept": "application/vnd.github.v3+json"}
+        try:
+            res = requests.get(url, headers=headers, timeout=3)
+            if res.status_code == 200:
+                content_b64 = res.json().get('content', '')
+                if content_b64:
+                    content_str = base64.b64decode(content_b64).decode('utf-8')
+                    return json.loads(content_str)
+        except Exception as e:
+            print(f"DEBUG: fetch_remote_portfolio failed: {e}")
+    return None
+
 def load_portfolio():
-    """로컬 my_portfolio.json 파일에서 보유 종목 데이터 로드"""
+    """클라우드(GitHub)와 로컬 my_portfolio.json을 동기화하여 로드"""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
+    
+    remote_data = fetch_remote_portfolio()
+    if remote_data is not None:
+        try:
+            os.makedirs(os.path.dirname(port_path), exist_ok=True)
+            with open(port_path, 'w', encoding='utf-8') as f:
+                json.dump(remote_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        return remote_data
+        
     if os.path.exists(port_path):
         try:
             with open(port_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"DEBUG: load_portfolio failed: {e}")
+            print(f"DEBUG: load_portfolio fallback failed: {e}")
     return {}
 
 def save_portfolio(portfolio):
-    """로컬 my_portfolio.json 파일에 보유 종목 데이터 저장"""
+    """로컬 저장 및 클라우드(GitHub) 동기화 저장"""
+    import requests
     base_dir = os.path.dirname(os.path.abspath(__file__))
     port_dir = os.path.join(base_dir, 'data')
     os.makedirs(port_dir, exist_ok=True)
@@ -349,7 +380,34 @@ def save_portfolio(portfolio):
         with open(port_path, 'w', encoding='utf-8') as f:
             json.dump(portfolio, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"DEBUG: save_portfolio failed: {e}")
+        print(f"DEBUG: save_portfolio local failed: {e}")
+
+    gh_token = st.secrets.get("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))
+    if gh_token:
+        import base64
+        url = "https://api.github.com/repos/k2000kms-del/gd3-market-hub/contents/data/my_portfolio.json"
+        headers = {"Authorization": f"token {gh_token}", "Accept": "application/vnd.github.v3+json"}
+        sha = None
+        try:
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                sha = res.json().get('sha')
+        except Exception:
+            pass
+            
+        content_str = json.dumps(portfolio, ensure_ascii=False, indent=2)
+        encoded_content = base64.b64encode(content_str.encode('utf-8')).decode('utf-8')
+        payload = {
+            "message": "Update portfolio via Dashboard",
+            "content": encoded_content
+        }
+        if sha:
+            payload["sha"] = sha
+        try:
+            requests.put(url, headers=headers, json=payload, timeout=5)
+            fetch_remote_portfolio.clear()
+        except Exception as e:
+            print(f"DEBUG: save_portfolio remote failed: {e}")
 
 def on_portfolio_go():
     """보유 종목 바로가기 선택 시 무한 Rerun 루프를 방지하면서 종목 이동 처리"""
