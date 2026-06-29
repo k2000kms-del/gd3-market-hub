@@ -3391,7 +3391,14 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
         if not df_5min.empty:
-            df_5min_tail = df_5min.copy()
+            # 5분봉: 최근 4거래일 데이터만 유지
+            unique_dates_5m = df_5min['DateTime'].dt.date.unique()
+            if len(unique_dates_5m) > 4:
+                allowed_dates_5m = unique_dates_5m[-4:]
+                df_5min_tail = df_5min[df_5min['DateTime'].dt.date.isin(allowed_dates_5m)].copy()
+            else:
+                df_5min_tail = df_5min.copy()
+            
             time_str_list_5m = df_5min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
             
             fig_5m.add_trace(go.Candlestick(
@@ -3585,7 +3592,14 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
         if not df_1min.empty:
-            df_1min_tail = df_1min.copy()
+            # 1분봉: 최근 2거래일 데이터만 유지
+            unique_dates_1m = df_1min['DateTime'].dt.date.unique()
+            if len(unique_dates_1m) > 2:
+                allowed_dates_1m = unique_dates_1m[-2:]
+                df_1min_tail = df_1min[df_1min['DateTime'].dt.date.isin(allowed_dates_1m)].copy()
+            else:
+                df_1min_tail = df_1min.copy()
+            
             time_str_list_1m = df_1min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
             
             fig_1m.add_trace(go.Candlestick(
