@@ -570,12 +570,13 @@ def get_stock_history(code: str):
 
 
 @st.cache_data(ttl=60)
-def get_minute_history(code: str, count: int = 300):
+def get_minute_history(code: str, count: int = 800):
     """네이버 실시간 1분봉 데이터 조회"""
     try:
-        url = f"https://api.finance.naver.com/siseJson.naver?symbol={code}&requestType=1&timeframe=minute&count={count}"
+        url = f"https://api.finance.naver.com/siseJson.naver?symbol={code}&requestType=0&timeframe=minute&count={count}"
         res = requests.get(url, timeout=5)
         if res.status_code == 200:
+            res.encoding = 'utf-8'
             text = res.text.strip()
             # JSON 호환을 위해 포맷 치환
             text = text.replace("'", '"').replace("null", "None").replace("NaN", "None")
@@ -587,16 +588,25 @@ def get_minute_history(code: str, count: int = 300):
                 rows = raw_data[1:]
                 
                 df = pd.DataFrame(rows, columns=columns)
-                df.rename(columns={'날짜': 'Time', '종가': 'Close', '거래량': 'Volume'}, inplace=True)
+                df.rename(columns={'날짜': 'Time', '시가': 'Open', '고가': 'High', '저가': 'Low', '종가': 'Close', '거래량': 'Volume'}, inplace=True)
                 
                 df = df.dropna(subset=['Time', 'Close'])
-                df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-                df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
+                for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                df['Volume'] = df['Volume'].fillna(0)
+                
+                # Naver API returns null for Open, High, Low in 1-min data for past days, but real values for today.
+                # Synthesize them using previous Close so Candlestick chart can render.
+                df['Open'] = df['Open'].fillna(df['Close'].shift(1).fillna(df['Close']))
+                df['High'] = df['High'].fillna(df[['Open', 'Close']].max(axis=1))
+                df['Low'] = df['Low'].fillna(df[['Open', 'Close']].min(axis=1))
                 
                 # '202606261530' -> datetime 변환
                 df['DateTime'] = pd.to_datetime(df['Time'], format='%Y%m%d%H%M', errors='coerce')
                 df = df.dropna(subset=['DateTime'])
                 df = df.sort_values('DateTime').reset_index(drop=True)
+                
                 return df
     except Exception as e:
         print(f"DEBUG: Failed to get minute history: {e}")
@@ -631,6 +641,130 @@ def resample_to_5min(df_1min):
     except Exception as e:
         print(f"DEBUG: Resampling failed: {e}")
     return pd.DataFrame()
+
+
+def calculate_intraday_signals(df):
+    """분봉 데이터에 대해 MA5, MA20, ATR 손절선, 매수/매도 신호 계산"""
+    if df.empty or len(df) < 20:
+        # 지표 계산에 최소 20개 이상의 데이터 필요
+        df['MA5'] = df['Close'] if not df.empty else np.nan
+        df['MA20'] = df['Close'] if not df.empty else np.nan
+        df['Stop_Loss'] = np.nan
+        df['Exit_Signal'] = False
+        df['Buy_Signal'] = False
+        return df
+    
+    try:
+        # MA 계산
+        df['MA5'] = df['Close'].rolling(5).mean()
+        df['MA20'] = df['Close'].rolling(20).mean()
+        
+        # ATR 계산
+        high = df['High'].values
+        low = df['Low'].values
+        close = df['Close'].values
+        tr = np.maximum(high[1:] - low[1:], np.maximum(abs(high[1:] - close[:-1]), abs(low[1:] - close[:-1])))
+        tr = np.insert(tr, 0, high[0] - low[0])
+        atr = pd.Series(tr).rolling(14).mean().values
+        df['ATR'] = atr
+        
+        # 거래량 보정용 변수
+        df['Vol_MA20'] = df['Volume'].rolling(20).mean()
+        
+        # 피뢰침(위꼬리) 조건: 위꼬리 비율이 전체 봉 길이의 40% 이상이고 음봉인 경우
+        candle_range = df['High'] - df['Low']
+        candle_range_safe = np.where(candle_range == 0, 1.0, candle_range)
+        upper_wick = df['High'] - np.maximum(df['Open'], df['Close'])
+        is_pinbar = ((upper_wick / candle_range_safe) > 0.4) & (df['Close'] <= df['Open'])
+        
+        # 거래량 폭발 조건: 거래량이 최근 20봉 평균 거래량의 1.5배 이상
+        is_vol_spike = df['Volume'] > (df['Vol_MA20'].fillna(df['Volume']) * 1.5)
+        
+        # 리스크 가속 조건
+        risk_accelerate = is_vol_spike & (is_pinbar | (df['Close'] < df['Open']))
+        
+        # dynamic ATR 승수
+        atr_multiplier = np.where(risk_accelerate, 1.0, 2.5)
+        
+        # 최고가 계산 시 고가 왜곡 방지
+        adjusted_high = np.where(is_pinbar & is_vol_spike, df['Close'], df['High'])
+        df['Adj_Highest_High'] = pd.Series(adjusted_high, index=df.index).rolling(20).max()
+        
+        dynamic_raw_sl = df['Adj_Highest_High'] - atr_multiplier * df['ATR']
+        
+        stop_loss_series = []
+        exit_signal_list = []
+        buy_signal_list = []
+        
+        in_position = False
+        entry_price = 0.0
+        max_price_since_entry = 0.0
+        current_sl = np.nan
+        
+        for i in range(len(df)):
+            close_val = df['Close'].iloc[i]
+            open_val = df['Open'].iloc[i]
+            ma5_val = df['MA5'].iloc[i]
+            ma20_val = df['MA20'].iloc[i]
+            raw_sl = dynamic_raw_sl.iloc[i]
+            
+            if pd.isna(raw_sl) or pd.isna(ma5_val) or pd.isna(ma20_val):
+                stop_loss_series.append(np.nan)
+                exit_signal_list.append(False)
+                buy_signal_list.append(False)
+                continue
+                
+            if in_position:
+                buy_signal_list.append(False)
+                max_price_since_entry = max(max_price_since_entry, close_val)
+                
+                # 손절선 래칫
+                if pd.isna(current_sl):
+                    current_sl = raw_sl
+                else:
+                    current_sl = max(current_sl, raw_sl)
+                    
+                # 본전 보호 룰 (10% 이상 수익 시 본전+1% 잠금)
+                if max_price_since_entry >= entry_price * 1.10:
+                    current_sl = max(current_sl, entry_price * 1.01)
+                    
+                stop_loss_series.append(current_sl)
+                
+                prev_sl = stop_loss_series[-2] if len(stop_loss_series) > 1 and not pd.isna(stop_loss_series[-2]) else current_sl
+                
+                if open_val < prev_sl:
+                    exit_signal_list.append(True)
+                    in_position = False
+                    current_sl = np.nan
+                elif close_val < current_sl:
+                    exit_signal_list.append(True)
+                    in_position = False
+                    current_sl = np.nan
+                else:
+                    exit_signal_list.append(False)
+            else:
+                exit_signal_list.append(False)
+                stop_loss_series.append(raw_sl)
+                
+                if close_val > ma5_val and close_val > ma20_val:
+                    buy_signal_list.append(True)
+                    in_position = True
+                    entry_price = close_val
+                    max_price_since_entry = close_val
+                    current_sl = raw_sl
+                else:
+                    buy_signal_list.append(False)
+                    
+        df['Stop_Loss'] = stop_loss_series
+        df['Exit_Signal'] = exit_signal_list
+        df['Buy_Signal'] = buy_signal_list
+    except Exception as e:
+        print(f"DEBUG: calculate_intraday_signals error: {e}")
+        df['Stop_Loss'] = np.nan
+        df['Exit_Signal'] = False
+        df['Buy_Signal'] = False
+        
+    return df
 
 
 
@@ -1372,7 +1506,7 @@ with col_p1:
         min_value=0.0, 
         value=float(held_info["entry_price"]) if is_held else float(_port_last_close), 
         step=100.0,
-        key="port_input_price"
+        key=f"port_input_price_{_port_code_disp}"
     )
 with col_p2:
     input_qty = portfolio_sidebar_container.number_input(
@@ -1380,7 +1514,7 @@ with col_p2:
         min_value=0.0, 
         value=float(held_info["qty"]) if is_held else 0.0, 
         step=1.0,
-        key="port_input_qty"
+        key=f"port_input_qty_{_port_code_disp}"
     )
 
 # 등록/수정/삭제 버튼
@@ -2451,8 +2585,10 @@ if st.session_state.sel_code:
 
     with st.spinner(f'📡 {name_disp} 주가 데이터 조회 중...'):
         df_candle = get_stock_history(code_disp)
-        df_1min = get_minute_history(code_disp, count=300)
+        df_1min = get_minute_history(code_disp, count=800)
         df_5min = resample_to_5min(df_1min)
+        df_1min = calculate_intraday_signals(df_1min)
+        df_5min = calculate_intraday_signals(df_5min)
 
     if df_candle.empty:
         st.warning('⚠️ 차트 데이터를 불러올 수 없습니다.')
@@ -2671,11 +2807,23 @@ if st.session_state.sel_code:
         
         # ── 💡 퀀트 종합 매매 의견 카드 추가 ──────────────────────────────────
         q_row = df_q[df_q['Code'] == code_disp]
+        
+        t_score = 0.0
+        t_score_adj = 0.0
+        s_score = 0.0
         if not q_row.empty:
             t_score = q_row.iloc[0].get('Total_Score', 0.0)
             t_score_adj = q_row.iloc[0].get('Total_Score_Adj', t_score)
             s_score = q_row.iloc[0].get('Sell_Score', 0.0)
+            t_score_str = f"{t_score_adj:.1f}점"
+            t_score_raw_str = f"(원점수: {t_score:.1f}점)"
+            s_score_str = f"{s_score:.1f}점"
+        else:
+            t_score_str = "평가 대상 아님 (N/A)"
+            t_score_raw_str = ""
+            s_score_str = "평가 대상 아님 (N/A)"
             
+        if True:
             # KOSPI 20일선 기반 실시간 자산배분 판단
             kospi_close, kospi_ma20, success = get_kospi_ma20()
             if success:
@@ -2755,7 +2903,7 @@ if st.session_state.sel_code:
                 grade_color = "#7f8c8d"
                 
             # Gemini AI 코멘터리 요청 (자산 배분 비율 연동 및 캐싱 방지)
-            raw_market_cond = q_row.iloc[0].get('Market_Condition', 'N/A')
+            raw_market_cond = q_row.iloc[0].get('Market_Condition', 'N/A') if not q_row.empty else 'N/A'
             market_cond = clean_market_condition_korean(raw_market_cond)
             
             # 실시간 수급 추이 및 최근 뉴스 조회
@@ -2853,7 +3001,7 @@ if st.session_state.sel_code:
             current_portfolio = load_portfolio()
             avg_price_for_gemini = None
             if code_disp in current_portfolio:
-                avg_price_for_gemini = current_portfolio[code_disp].get('price')
+                avg_price_for_gemini = current_portfolio[code_disp].get('entry_price')
                 
             try:
                 ai_comment = get_gemini_commentary(
@@ -2872,8 +3020,8 @@ if st.session_state.sel_code:
         <strong style="font-size: 18px; color: {grade_color}; margin-left: 8px; font-family: 'malgun gothic', sans-serif;">{quant_grade}</strong>
     </div>
     <div style="text-align: right; min-width: 140px;">
-        <span style="font-size: 13px; color: #2ecc71; font-family: 'malgun gothic', sans-serif;">매수 보정 점수: <strong>{t_score_adj:.1f}점</strong> <span style="font-size: 11px; color: #888;">(원점수: {t_score:.1f}점)</span></span><br/>
-        <span style="font-size: 13px; color: #e74c3c; font-family: 'malgun gothic', sans-serif;">매도 퀀트 점수: <strong>{s_score:.1f}점</strong></span>
+        <span style="font-size: 13px; color: #2ecc71; font-family: 'malgun gothic', sans-serif;">매수 보정 점수: <strong>{t_score_str}</strong> <span style="font-size: 11px; color: #888;">{t_score_raw_str}</span></span><br/>
+        <span style="font-size: 13px; color: #e74c3c; font-family: 'malgun gothic', sans-serif;">매도 퀀트 점수: <strong>{s_score_str}</strong></span>
     </div>
 </div>
 
@@ -3137,7 +3285,7 @@ if st.session_state.sel_code:
             for c, o in zip(df_candle['Close'], df_candle['Open'])
         ]
         fig_c.add_trace(go.Bar(
-            x=date_str_list, y=df_candle['Volume'],
+            x=date_str_list, y=df_candle['Volume'] // 1000,
             name='거래량', marker_color=vol_colors,
             showlegend=False, opacity=0.8
         ), row=2, col=1)
@@ -3217,7 +3365,7 @@ if st.session_state.sel_code:
         tick_vals = [date_str_list[i] for i in tick_indices]
         tick_texts = [date_str_list[i] for i in tick_indices]
 
-        fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', fixedrange=True, row=2, col=1)
+        fig_c.update_yaxes(tickformat=',d', ticksuffix='K', gridcolor='rgba(255,255,255,0.06)', fixedrange=True, row=2, col=1)
         fig_c.update_xaxes(
             type='category',
             gridcolor='rgba(255,255,255,0.04)',
@@ -3243,8 +3391,8 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
         if not df_5min.empty:
-            df_5min_tail = df_5min.tail(60).copy()
-            time_str_list_5m = df_5min_tail['DateTime'].dt.strftime('%H:%M').tolist()
+            df_5min_tail = df_5min.copy()
+            time_str_list_5m = df_5min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
             
             fig_5m.add_trace(go.Candlestick(
                 x=time_str_list_5m,
@@ -3255,9 +3403,7 @@ if st.session_state.sel_code:
                 name='5분봉 캔들', showlegend=False
             ), row=1, col=1)
             
-            df_5min_tail['MA5'] = df_5min_tail['Close'].rolling(5).mean()
-            df_5min_tail['MA20'] = df_5min_tail['Close'].rolling(20).mean()
-            
+            # MA5, MA20 그리기
             fig_5m.add_trace(go.Scatter(
                 x=time_str_list_5m, y=df_5min_tail['MA5'],
                 name='MA5', mode='lines',
@@ -3270,12 +3416,85 @@ if st.session_state.sel_code:
                 line=dict(color='#ff922b', width=1.5)
             ), row=1, col=1)
             
+            # ATR 손절선 그리기
+            if 'Stop_Loss' in df_5min_tail.columns:
+                fig_5m.add_trace(go.Scatter(
+                    x=time_str_list_5m, y=df_5min_tail['Stop_Loss'],
+                    name='ATR 손절선', mode='lines',
+                    line=dict(color='#e74c3c', width=1.5, dash='dash')
+                ), row=1, col=1)
+                
+            # 매도 신호 그리기
+            if 'Exit_Signal' in df_5min_tail.columns:
+                exit_signals_5m = df_5min_tail[df_5min_tail['Exit_Signal'] == True]
+                if not exit_signals_5m.empty:
+                    exit_times_5m = exit_signals_5m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
+                    exit_prices_5m = exit_signals_5m['Close'].tolist()
+                    hover_texts_5m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_5m]
+                    
+                    fig_5m.add_trace(go.Scatter(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='매도 신호',
+                        marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
+                        showlegend=True
+                    ), row=1, col=1)
+                    
+                    fig_5m.add_trace(go.Scatter(
+                        x=exit_times_5m,
+                        y=exit_signals_5m['High'] * 1.002,
+                        mode='markers',
+                        name='매도 신호',
+                        marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
+                        text=hover_texts_5m,
+                        hovertemplate="%{text}<extra></extra>",
+                        showlegend=False
+                    ), row=1, col=1)
+                    
+            # 매수 신호 그리기
+            if 'Buy_Signal' in df_5min_tail.columns:
+                buy_signals_5m = df_5min_tail[df_5min_tail['Buy_Signal'] == True]
+                if not buy_signals_5m.empty:
+                    buy_times_5m = buy_signals_5m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
+                    buy_prices_5m = buy_signals_5m['Close'].tolist()
+                    hover_texts_5m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_5m]
+                    
+                    fig_5m.add_trace(go.Scatter(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='매수 신호',
+                        marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
+                        showlegend=True
+                    ), row=1, col=1)
+                    
+                    fig_5m.add_trace(go.Scatter(
+                        x=buy_times_5m,
+                        y=buy_signals_5m['Low'] * 0.998,
+                        mode='markers',
+                        name='매수 신호',
+                        marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
+                        text=hover_texts_5m,
+                        hovertemplate="%{text}<extra></extra>",
+                        showlegend=False
+                    ), row=1, col=1)
+                    
+            # 나의 매수단가선 그리기
+            portfolio = load_portfolio()
+            my_entry_price = 0
+            if code_disp in portfolio:
+                my_entry_price = portfolio[code_disp]["entry_price"]
+                fig_5m.add_trace(go.Scatter(
+                    x=time_str_list_5m, y=[my_entry_price] * len(time_str_list_5m),
+                    name='나의 매수단가', mode='lines',
+                    line=dict(color='#ffd700', width=2.0, dash='dashdot')
+                ), row=1, col=1)
+                
             vol_colors_5m = [
                 '#ff6b6b' if c >= o else '#4e9ff5'
                 for c, o in zip(df_5min_tail['Close'], df_5min_tail['Open'])
             ]
             fig_5m.add_trace(go.Bar(
-                x=time_str_list_5m, y=df_5min_tail['Volume'],
+                x=time_str_list_5m, y=df_5min_tail['Volume'] // 1000,
                 name='거래량', marker_color=vol_colors_5m,
                 showlegend=False, opacity=0.8
             ), row=2, col=1)
@@ -3284,6 +3503,13 @@ if st.session_state.sel_code:
             try:
                 min_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].min().min()
                 max_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].max().max()
+                for col in ['MA5', 'MA20', 'Stop_Loss']:
+                    if col in df_5min_tail.columns:
+                        min_val_5m = min(min_val_5m, df_5min_tail[col].min(skipna=True))
+                        max_val_5m = max(max_val_5m, df_5min_tail[col].max(skipna=True))
+                if my_entry_price > 0:
+                    min_val_5m = min(min_val_5m, my_entry_price)
+                    max_val_5m = max(max_val_5m, my_entry_price)
                 margin_5m = (max_val_5m - min_val_5m) * 0.05 if max_val_5m > min_val_5m else 100
                 y_range_5m = [min_val_5m - margin_5m, max_val_5m + margin_5m]
             except Exception:
@@ -3347,9 +3573,9 @@ if st.session_state.sel_code:
                 nticks=18,             # 눈금을 더 촘촘히 표시
                 row=1, col=1
             )
-            fig_5m.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
+            fig_5m.update_yaxes(tickformat=',d', ticksuffix='K', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
             fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
-            fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, row=2, col=1)
+            fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, nticks=15, row=2, col=1)
 
         # ── 1분봉 차트 생성 ─────────────────────────────
         fig_1m = make_subplots(
@@ -3359,16 +3585,106 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
         if not df_1min.empty:
-            df_1min_tail = df_1min.tail(90).copy()
-            time_str_list_1m = df_1min_tail['DateTime'].dt.strftime('%H:%M').tolist()
+            df_1min_tail = df_1min.copy()
+            time_str_list_1m = df_1min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
             
-            fig_1m.add_trace(go.Scatter(
-                x=time_str_list_1m, y=df_1min_tail['Close'],
-                mode='lines', name='1분봉 종가',
-                line=dict(color='#00e5ff', width=2),
-                fill='toself', fillcolor='rgba(0, 229, 255, 0.05)'
+            fig_1m.add_trace(go.Candlestick(
+                x=time_str_list_1m,
+                open=df_1min_tail['Open'],
+                high=df_1min_tail['High'],
+                low=df_1min_tail['Low'],
+                close=df_1min_tail['Close'],
+                increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
+                decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
+                name='1분봉 캔들', showlegend=False
             ), row=1, col=1)
             
+            # MA5, MA20 그리기
+            fig_1m.add_trace(go.Scatter(
+                x=time_str_list_1m, y=df_1min_tail['MA5'],
+                name='MA5', mode='lines',
+                line=dict(color='#ffd43b', width=1.5)
+            ), row=1, col=1)
+            
+            fig_1m.add_trace(go.Scatter(
+                x=time_str_list_1m, y=df_1min_tail['MA20'],
+                name='MA20', mode='lines',
+                line=dict(color='#ff922b', width=1.5)
+            ), row=1, col=1)
+            
+            # ATR 손절선 그리기
+            if 'Stop_Loss' in df_1min_tail.columns:
+                fig_1m.add_trace(go.Scatter(
+                    x=time_str_list_1m, y=df_1min_tail['Stop_Loss'],
+                    name='ATR 손절선', mode='lines',
+                    line=dict(color='#e74c3c', width=1.5, dash='dash')
+                ), row=1, col=1)
+                
+            # 매도 신호 그리기
+            if 'Exit_Signal' in df_1min_tail.columns:
+                exit_signals_1m = df_1min_tail[df_1min_tail['Exit_Signal'] == True]
+                if not exit_signals_1m.empty:
+                    exit_times_1m = exit_signals_1m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
+                    exit_prices_1m = exit_signals_1m['Close'].tolist()
+                    hover_texts_1m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_1m]
+                    
+                    fig_1m.add_trace(go.Scatter(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='매도 신호',
+                        marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
+                        showlegend=True
+                    ), row=1, col=1)
+                    
+                    fig_1m.add_trace(go.Scatter(
+                        x=exit_times_1m,
+                        y=exit_signals_1m['High'] * 1.002,
+                        mode='markers',
+                        name='매도 신호',
+                        marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
+                        text=hover_texts_1m,
+                        hovertemplate="%{text}<extra></extra>",
+                        showlegend=False
+                    ), row=1, col=1)
+                    
+            # 매수 신호 그리기
+            if 'Buy_Signal' in df_1min_tail.columns:
+                buy_signals_1m = df_1min_tail[df_1min_tail['Buy_Signal'] == True]
+                if not buy_signals_1m.empty:
+                    buy_times_1m = buy_signals_1m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
+                    buy_prices_1m = buy_signals_1m['Close'].tolist()
+                    hover_texts_1m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_1m]
+                    
+                    fig_1m.add_trace(go.Scatter(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='매수 신호',
+                        marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
+                        showlegend=True
+                    ), row=1, col=1)
+                    
+                    fig_1m.add_trace(go.Scatter(
+                        x=buy_times_1m,
+                        y=buy_signals_1m['Low'] * 0.998,
+                        mode='markers',
+                        name='매수 신호',
+                        marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
+                        text=hover_texts_1m,
+                        hovertemplate="%{text}<extra></extra>",
+                        showlegend=False
+                    ), row=1, col=1)
+                    
+            # 나의 매수단가선 그리기
+            portfolio = load_portfolio()
+            my_entry_price = 0
+            if code_disp in portfolio:
+                my_entry_price = portfolio[code_disp]["entry_price"]
+                fig_1m.add_trace(go.Scatter(
+                    x=time_str_list_1m, y=[my_entry_price] * len(time_str_list_1m),
+                    name='나의 매수단가', mode='lines',
+                    line=dict(color='#ffd700', width=2.0, dash='dashdot')
+                ), row=1, col=1)
+                
             vol_colors_1m = []
             for i in range(len(df_1min_tail)):
                 if i == 0:
@@ -3376,15 +3692,22 @@ if st.session_state.sel_code:
                 else:
                     vol_colors_1m.append('#ff6b6b' if df_1min_tail['Close'].iloc[i] >= df_1min_tail['Close'].iloc[i-1] else '#4e9ff5')
             fig_1m.add_trace(go.Bar(
-                x=time_str_list_1m, y=df_1min_tail['Volume'],
+                x=time_str_list_1m, y=df_1min_tail['Volume'] // 1000,
                 name='거래량', marker_color=vol_colors_1m,
                 showlegend=False, opacity=0.8
             ), row=2, col=1)
 
             # 1분봉 가격 범위(y_range) 수동 계산
             try:
-                min_val_1m = df_1min_tail['Close'].min()
-                max_val_1m = df_1min_tail['Close'].max()
+                min_val_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].min().min()
+                max_val_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].max().max()
+                for col in ['MA5', 'MA20', 'Stop_Loss']:
+                    if col in df_1min_tail.columns:
+                        min_val_1m = min(min_val_1m, df_1min_tail[col].min(skipna=True))
+                        max_val_1m = max(max_val_1m, df_1min_tail[col].max(skipna=True))
+                if my_entry_price > 0:
+                    min_val_1m = min(min_val_1m, my_entry_price)
+                    max_val_1m = max(max_val_1m, my_entry_price)
                 margin_1m = (max_val_1m - min_val_1m) * 0.05 if max_val_1m > min_val_1m else 100
                 y_range_1m = [min_val_1m - margin_1m, max_val_1m + margin_1m]
             except Exception:
@@ -3448,12 +3771,12 @@ if st.session_state.sel_code:
                 nticks=18,             # 눈금을 더 촘촘히 표시
                 row=1, col=1
             )
-            fig_1m.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
+            fig_1m.update_yaxes(tickformat=',d', ticksuffix='K', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
             fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
-            fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, row=2, col=1)
+            fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, nticks=15, row=2, col=1)
 
         # ── 탭 레이아웃 렌더링 ─────────────────────────────
-        tab_day, tab_5m, tab_1m = st.tabs(["📅 일봉 차트", "⏱️ 5분봉 (캔들)", "⚡ 1분봉 (라인)"])
+        tab_day, tab_5m, tab_1m = st.tabs(["📅 일봉 차트", "⏱️ 5분봉 (캔들)", "⚡ 1분봉 (캔들)"])
         with tab_day:
             st.plotly_chart(fig_c, use_container_width=True, config={'displayModeBar': False})
         with tab_5m:
