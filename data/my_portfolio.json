@@ -28,5 +28,10 @@
     "name": "티엠씨",
     "entry_price": 32195.0,
     "qty": 282.0
+  },
+  "035420": {
+    "name": "NAVER",
+    "entry_price": 280500.0,
+    "qty": 1.0
   }
 }
