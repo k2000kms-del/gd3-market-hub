@@ -3400,8 +3400,8 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
         if not df_5min.empty:
-            # 5분봉: 최근 2.5일(약 195봉) 데이터만 유지
-            df_5min_tail = df_5min.tail(195).copy()
+            # 5분봉: 최근 1.5일(약 120봉) 데이터만 유지하여 캔들 가시성 확보
+            df_5min_tail = df_5min.tail(120).copy()
             
             time_str_list_5m = df_5min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
             
@@ -3596,8 +3596,8 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
         if not df_1min.empty:
-            # 1분봉: 최근 1.5일(약 585봉) 데이터만 유지
-            df_1min_tail = df_1min.tail(585).copy()
+            # 1분봉: 최근 3시간(약 180봉) 데이터만 유지하여 캔들 가시성 확보
+            df_1min_tail = df_1min.tail(180).copy()
             
             time_str_list_1m = df_1min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
             
