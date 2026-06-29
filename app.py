@@ -90,7 +90,7 @@ def draw_quant_radar_chart(q_row):
 
 
 @st.cache_data(ttl=1200)
-def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None, current_price=None, stop_loss_price=None, recent_high_price=None, rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None):
+def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None, current_price=None, stop_loss_price=None, recent_high_price=None, rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None, supply_trend=None, recent_news=None):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
         raise RuntimeWarning("🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요.")
@@ -99,9 +99,10 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     
     system_instruction = (
         "너는 주식 분석 대시보드의 전문 퀀트 애널리스트이자 기술적 분석가야. "
-        "제공된 종목 정보, 퀀트 점수, 시장 환경(매크로), 그리고 기술적 지표(RSI, MACD, 볼린저 밴드, ATR 손절선)들을 종합적으로 분석하여 매매 대응 전략을 구체적인 가격 수치와 함께 작성해줘.\n\n"
+        "제공된 종목 정보, 퀀트 점수, 시장 환경(매크로), 기술적 지표(RSI, MACD, 볼린저 밴드, ATR 손절선), "
+        "그리고 최근 외국인/기관 수급 동향 및 관련 뉴스 헤드라인들을 종합적으로 분석하여 매매 대응 전략을 구체적인 가격 수치와 함께 작성해줘.\n\n"
         "반드시 아래의 형식을 준수하여 HTML 태그를 사용해 작성해줘 (markdown 형식인 **, *, # 등은 절대 사용하지 마):\n"
-        "1. <strong>현재 상황 요약</strong>: 현재 흐름과 보유 평단가 대비 수익 상황(보유 중인 경우)을 1문장으로 요약합니다.<br>\n"
+        "1. <strong>현재 상황 요약</strong>: 현재 흐름, 최근 수급 특징 및 주요 뉴스 모멘텀, 그리고 보유 평단가 대비 수익 상황(보유 중인 경우)을 1문장으로 요약합니다.<br>\n"
         "2. <strong>기술적 차트 분석</strong>: RSI(과매도/과매열 판단), MACD(골든크로스/데드크로스, 모멘텀), 볼린저 밴드 및 ATR 손절선 대비 현재가의 지지/저항 수준을 구체적인 수치와 함께 설명합니다.<br>\n"
         "3. <strong>매매 대응 전략</strong>: 매수/매도/홀딩 방향성과 구체적인 익절/손절가 또는 돌파 매수 목표 가격을 명시해줍니다.<br>\n\n"
         "주의: 제공되는 '최근 20일 종가 추이' 수치 배열 및 기술적 지표들을 논리적으로 분석하되, 억지로 패턴을 지어내거나 환각(Hallucination)을 일으키면 안 돼. 확실한 근거가 있는 경우에만 차트 패턴을 언급해.\n"
@@ -129,6 +130,10 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         prompt += f"MACD: {macd:.1f}, Signal: {macd_signal:.1f}\n"
     if bb_upper is not None and bb_lower is not None:
         prompt += f"볼린저 밴드 상한선: {bb_upper:,.0f}원, 하한선: {bb_lower:,.0f}원 (중심선: {bb_middle:,.0f}원)\n"
+    if supply_trend:
+        prompt += f"최근 외국인/기관 수급 동향: {supply_trend}\n"
+    if recent_news:
+        prompt += f"최근 주요 뉴스 헤드라인: {recent_news}\n"
 
     if avg_price is not None and avg_price > 0:
         prompt += f"보유 평단가: {avg_price:,.0f}원\n"
@@ -328,6 +333,69 @@ def fetch_stock_realtime_investors(code_list):
         except Exception as e:
             print(f"DEBUG: fetch_stock_realtime_investors {code} failed: {e}")
     return res
+
+
+@st.cache_data(ttl=60)
+def fetch_stock_supply_trend(code: str, days: int = 10):
+    """네이버 금융 API로 최근 N영업일간 외국인/기관/개인 누적 수급 추이 조회 및 요약"""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        url = f"https://m.stock.naver.com/api/stock/{code}/trend?pageSize={days}"
+        r = requests.get(url, headers=headers, timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0:
+                fgn_sum = 0
+                org_sum = 0
+                ind_sum = 0
+                details = []
+                for item in data[:days]:
+                    fgn_str = str(item.get("foreignerPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    org_str = str(item.get("organPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    ind_str = str(item.get("individualPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    
+                    fgn = int(fgn_str) if fgn_str.replace('-', '').isdigit() else 0
+                    org = int(org_str) if org_str.replace('-', '').isdigit() else 0
+                    ind = int(ind_str) if ind_str.replace('-', '').isdigit() else 0
+                    
+                    fgn_sum += fgn
+                    org_sum += org
+                    ind_sum += ind
+                    
+                    # 최근 5영업일 디테일 추가
+                    date_str = item.get("bizdate", "")[-4:] # MMDD
+                    details.append(f"{date_str}(외인:{fgn:+,}주, 기관:{org:+,}주)")
+                
+                summary_str = f"최근 {len(data[:days])}일 누적 수급 - 외국인: {fgn_sum:+,}주, 기관: {org_sum:+,}주, 개인: {ind_sum:+,}주"
+                detail_str = " | ".join(details[:5]) # 최근 5일 디테일
+                return f"{summary_str} (일별 추이: {detail_str})"
+    except Exception as e:
+        print(f"DEBUG: fetch_stock_supply_trend {code} failed: {e}")
+    return "수급 데이터 조회 실패"
+
+
+@st.cache_data(ttl=120)
+def fetch_stock_recent_news(code: str, count: int = 5):
+    """네이버 금융 API로 종목의 최근 뉴스 헤드라인 조회"""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        url = f"https://m.stock.naver.com/api/news/stock/{code}?pageSize={count}"
+        r = requests.get(url, headers=headers, timeout=3)
+        if r.status_code == 200:
+            res = r.json()
+            titles = []
+            if isinstance(res, list):
+                for group in res:
+                    items = group.get("items", [])
+                    if items:
+                        title = items[0].get("title", "").strip()
+                        if title:
+                            titles.append(title)
+            if titles:
+                return " | ".join(titles[:count])
+    except Exception as e:
+        print(f"DEBUG: fetch_stock_recent_news {code} failed: {e}")
+    return "최근 뉴스 없음"
 
 
 @st.cache_data(ttl=30)  # 30초 캐시
@@ -2678,6 +2746,20 @@ if st.session_state.sel_code:
             raw_market_cond = q_row.iloc[0].get('Market_Condition', 'N/A')
             market_cond = clean_market_condition_korean(raw_market_cond)
             
+            # 실시간 수급 추이 및 최근 뉴스 조회
+            supply_trend = fetch_stock_supply_trend(code_disp, days=10)
+            recent_news = fetch_stock_recent_news(code_disp, count=5)
+            
+            recent_news_html = ""
+            if recent_news and recent_news != "최근 뉴스 없음":
+                news_list = recent_news.split(" | ")
+                recent_news_html = "<ul style='margin: 4px 0 0 16px; padding: 0;'>"
+                for news_title in news_list:
+                    recent_news_html += f"<li style='margin-bottom: 3px;'>{news_title}</li>"
+                recent_news_html += "</ul>"
+            else:
+                recent_news_html = "<span style='color: #888;'>최근 관련 뉴스가 존재하지 않습니다.</span>"
+
             # 포트폴리오(대기보드) 등록 종목인 경우 평단가 파악
             current_portfolio = load_portfolio()
             avg_price_for_gemini = None
@@ -2686,7 +2768,7 @@ if st.session_state.sel_code:
                 
             try:
                 ai_comment = get_gemini_commentary(
-                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini
+                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini, supply_trend, recent_news
                 )
             except RuntimeWarning as e:
                 ai_comment = str(e)
@@ -2706,9 +2788,19 @@ if st.session_state.sel_code:
     </div>
 </div>
 
-<div style="background-color: rgba(255, 255, 255, 0.03); padding: 10px; border-radius: 6px; border-left: 4px solid #ff922b; font-size: 13px; line-height: 1.5; color: #eee; font-family: 'malgun gothic', sans-serif;">
+<div style="background-color: rgba(255, 255, 255, 0.03); padding: 10px; border-radius: 6px; border-left: 4px solid #ff922b; font-size: 13px; line-height: 1.5; color: #eee; font-family: 'malgun gothic', sans-serif; margin-bottom: 12px;">
     <strong>🤖 AI 퀀트 리스크 조언:</strong><br/>
     {ai_comment}
+</div>
+
+<div style="background-color: rgba(255, 255, 255, 0.02); padding: 10px; border-radius: 6px; border-left: 4px solid #00e5ff; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif; margin-bottom: 8px;">
+    <strong>📊 최근 10일 수급 동향 (Naver):</strong><br/>
+    <span style="color: #eee;">{supply_trend}</span>
+</div>
+
+<div style="background-color: rgba(255, 255, 255, 0.02); padding: 10px; border-radius: 6px; border-left: 4px solid #9c27b0; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif;">
+    <strong>📰 최근 주요 뉴스 헤드라인:</strong><br/>
+    {recent_news_html}
 </div>
 </div>"""
             col_op, col_rd = st.columns([7, 3.5])
