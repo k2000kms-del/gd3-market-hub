@@ -337,7 +337,7 @@ def fetch_stock_realtime_investors(code_list):
 
 @st.cache_data(ttl=60)
 def fetch_stock_supply_trend(code: str, days: int = 10):
-    """네이버 금융 API로 최근 N영업일간 외국인/기관/개인 누적 수급 추이 조회 및 요약"""
+    """네이버 금융 API로 최근 N영업일간 외국인/기관/개인 누적 수급 추이 및 일별 상세 데이터 조회"""
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         url = f"https://m.stock.naver.com/api/stock/{code}/trend?pageSize={days}"
@@ -348,7 +348,7 @@ def fetch_stock_supply_trend(code: str, days: int = 10):
                 fgn_sum = 0
                 org_sum = 0
                 ind_sum = 0
-                details = []
+                daily_list = []
                 for item in data[:days]:
                     fgn_str = str(item.get("foreignerPureBuyQuant", "0")).replace(',', '').replace('+', '')
                     org_str = str(item.get("organPureBuyQuant", "0")).replace(',', '').replace('+', '')
@@ -362,40 +362,52 @@ def fetch_stock_supply_trend(code: str, days: int = 10):
                     org_sum += org
                     ind_sum += ind
                     
-                    # 최근 5영업일 디테일 추가
                     date_str = item.get("bizdate", "")[-4:] # MMDD
-                    details.append(f"{date_str}(외인:{fgn:+,}주, 기관:{org:+,}주)")
+                    if len(date_str) == 4:
+                        date_str = f"{date_str[:2]}/{date_str[2:]}"
+                    daily_list.append({
+                        'date': date_str,
+                        'foreigner': fgn,
+                        'organ': org,
+                        'individual': ind
+                    })
                 
-                summary_str = f"최근 {len(data[:days])}일 누적 수급 - 외국인: {fgn_sum:+,}주, 기관: {org_sum:+,}주, 개인: {ind_sum:+,}주"
-                detail_str = " | ".join(details[:5]) # 최근 5일 디테일
-                return f"{summary_str} (일별 추이: {detail_str})"
+                return {
+                    'success': True,
+                    'cumulative': {
+                        'foreigner': fgn_sum,
+                        'organ': org_sum,
+                        'individual': ind_sum
+                    },
+                    'daily': daily_list[:5]
+                }
     except Exception as e:
         print(f"DEBUG: fetch_stock_supply_trend {code} failed: {e}")
-    return "수급 데이터 조회 실패"
+    return {'success': False, 'cumulative': {'foreigner': 0, 'organ': 0, 'individual': 0}, 'daily': []}
 
 
 @st.cache_data(ttl=120)
 def fetch_stock_recent_news(code: str, count: int = 5):
-    """네이버 금융 API로 종목의 최근 뉴스 헤드라인 조회"""
+    """네이버 금융 API로 종목의 최근 뉴스 헤드라인 및 링크 조회"""
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         url = f"https://m.stock.naver.com/api/news/stock/{code}?pageSize={count}"
         r = requests.get(url, headers=headers, timeout=3)
         if r.status_code == 200:
             res = r.json()
-            titles = []
+            news_items = []
             if isinstance(res, list):
                 for group in res:
                     items = group.get("items", [])
                     if items:
                         title = items[0].get("title", "").strip()
+                        news_url = items[0].get("mobileNewsUrl", "")
                         if title:
-                            titles.append(title)
-            if titles:
-                return " | ".join(titles[:count])
+                            news_items.append({"title": title, "url": news_url})
+            return news_items[:count]
     except Exception as e:
         print(f"DEBUG: fetch_stock_recent_news {code} failed: {e}")
-    return "최근 뉴스 없음"
+    return []
 
 
 @st.cache_data(ttl=30)  # 30초 캐시
@@ -2747,15 +2759,92 @@ if st.session_state.sel_code:
             market_cond = clean_market_condition_korean(raw_market_cond)
             
             # 실시간 수급 추이 및 최근 뉴스 조회
-            supply_trend = fetch_stock_supply_trend(code_disp, days=10)
-            recent_news = fetch_stock_recent_news(code_disp, count=5)
+            supply_trend_data = fetch_stock_supply_trend(code_disp, days=10)
+            recent_news_data = fetch_stock_recent_news(code_disp, count=5)
+            
+            # 수급 데이터를 프롬프트 및 HTML에 표시하기 위해 가공
+            supply_trend_prompt = ""
+            supply_table_html = ""
+            
+            def fmt_shares_korean(shares):
+                sign = "+" if shares > 0 else ""
+                if abs(shares) >= 10000:
+                    return f"{sign}{shares/10000:.1f}만 주"
+                return f"{sign}{shares:,}주"
+            
+            if supply_trend_data.get('success'):
+                cum = supply_trend_data['cumulative']
+                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(cum['foreigner'])}, 기관: {fmt_shares_korean(cum['organ'])}, 개인: {fmt_shares_korean(cum['individual'])}"
+                
+                daily_details = []
+                for d in supply_trend_data['daily']:
+                    daily_details.append(f"{d['date']}(외인:{fmt_shares_korean(d['foreigner'])}, 기관:{fmt_shares_korean(d['organ'])})")
+                supply_trend_prompt += " | 일별 추이: " + ", ".join(daily_details)
+                
+                # HTML 표 포맷팅
+                def fmt_shares_html(shares):
+                    sign = "+" if shares > 0 else ""
+                    val_str = f"{shares/10000:.1f}만" if abs(shares) >= 10000 else f"{shares:,}"
+                    color = "#ff6b6b" if shares > 0 else "#4e9ff5" if shares < 0 else "#888888"
+                    return f"<span style='color: {color}; font-weight: bold;'>{sign}{val_str}</span>"
+                
+                daily_rows = ""
+                for d in supply_trend_data['daily']:
+                    daily_rows += f"""
+                    <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
+                        <td style='padding: 5px; text-align: left; color: #aaa;'>{d['date']}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d['foreigner'])}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d['organ'])}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d['individual'])}</td>
+                    </tr>
+                    """
+                
+                supply_table_html = f"""
+                <div style="background-color: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: 6px; border-left: 4px solid #00e5ff; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif; margin-bottom: 8px;">
+                    <strong style="font-size: 13px;">📊 최근 수급 동향 (Naver):</strong>
+                    <table style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; text-align: center;">
+                        <thead>
+                            <tr style="background-color: rgba(255, 255, 255, 0.05); border-bottom: 1px solid rgba(255, 255, 255, 0.1); color: #eee;">
+                                <th style="padding: 5px; text-align: left; font-weight: 500;">일자</th>
+                                <th style="padding: 5px; color: #ff6b6b; font-weight: 500;">외국인</th>
+                                <th style="padding: 5px; color: #3498db; font-weight: 500;">기관</th>
+                                <th style="padding: 5px; color: #ffeb3b; font-weight: 500;">개인</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 2px solid rgba(0, 229, 255, 0.3); background-color: rgba(0, 229, 255, 0.05); font-weight: bold;">
+                                <td style="padding: 5px; text-align: left; color: #00e5ff;">10일 누적</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum['foreigner'])}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum['organ'])}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum['individual'])}</td>
+                            </tr>
+                            {daily_rows}
+                        </tbody>
+                    </table>
+                </div>
+                """
+            else:
+                supply_trend_prompt = "최근 수급 정보 없음"
+                supply_table_html = f"""
+                <div style="background-color: rgba(255, 255, 255, 0.02); padding: 10px; border-radius: 6px; border-left: 4px solid #00e5ff; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif; margin-bottom: 8px;">
+                    <strong style="font-size: 13px;">📊 최근 수급 동향 (Naver):</strong><br/>
+                    <span style="color: #888;">수급 데이터를 불러올 수 없습니다.</span>
+                </div>
+                """
+            
+            # 뉴스 데이터 가공
+            recent_news_prompt = " | ".join([item['title'] for item in recent_news_data]) if recent_news_data else "최근 뉴스 없음"
             
             recent_news_html = ""
-            if recent_news and recent_news != "최근 뉴스 없음":
-                news_list = recent_news.split(" | ")
+            if recent_news_data:
                 recent_news_html = "<ul style='margin: 4px 0 0 16px; padding: 0;'>"
-                for news_title in news_list:
-                    recent_news_html += f"<li style='margin-bottom: 3px;'>{news_title}</li>"
+                for item in recent_news_data:
+                    title = item['title']
+                    url = item['url']
+                    if url:
+                        recent_news_html += f"<li style='margin-bottom: 4.5px;'><a href='{url}' target='_blank' style='color: #b197fc; text-decoration: none; font-weight: 500;' onmouseover='this.style.textDecoration=\"underline\";' onmouseout='this.style.textDecoration=\"none\";'>{title}</a></li>"
+                    else:
+                        recent_news_html += f"<li style='margin-bottom: 4.5px; color: #eee;'>{title}</li>"
                 recent_news_html += "</ul>"
             else:
                 recent_news_html = "<span style='color: #888;'>최근 관련 뉴스가 존재하지 않습니다.</span>"
@@ -2768,7 +2857,7 @@ if st.session_state.sel_code:
                 
             try:
                 ai_comment = get_gemini_commentary(
-                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini, supply_trend, recent_news
+                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini, supply_trend_prompt, recent_news_prompt
                 )
             except RuntimeWarning as e:
                 ai_comment = str(e)
@@ -2793,13 +2882,10 @@ if st.session_state.sel_code:
     {ai_comment}
 </div>
 
-<div style="background-color: rgba(255, 255, 255, 0.02); padding: 10px; border-radius: 6px; border-left: 4px solid #00e5ff; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif; margin-bottom: 8px;">
-    <strong>📊 최근 10일 수급 동향 (Naver):</strong><br/>
-    <span style="color: #eee;">{supply_trend}</span>
-</div>
+{supply_table_html}
 
-<div style="background-color: rgba(255, 255, 255, 0.02); padding: 10px; border-radius: 6px; border-left: 4px solid #9c27b0; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif;">
-    <strong>📰 최근 주요 뉴스 헤드라인:</strong><br/>
+<div style="background-color: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: 6px; border-left: 4px solid #9c27b0; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif;">
+    <strong style="font-size: 13px;">📰 최근 주요 뉴스 헤드라인:</strong><br/>
     {recent_news_html}
 </div>
 </div>"""
