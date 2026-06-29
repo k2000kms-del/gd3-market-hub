@@ -3019,7 +3019,8 @@ if st.session_state.sel_code:
             except Exception as e:
                 ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
             
-            ai_comment_escaped = html.escape(ai_comment).replace('\n', '<br/>')
+            # AI 코멘트 내부의 줄바꿈을 <br>로 변환하되, Gemini가 생성한 정상적인 HTML 태그(<strong>, <ul> 등)는 보존하기 위해 escape 하지 않음
+            ai_comment_escaped = ai_comment.replace('\n', '<br/>')
             
             opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
 <h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
