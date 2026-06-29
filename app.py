@@ -700,7 +700,7 @@ def calculate_intraday_signals(df, my_entry_price=0.0):
         # 보조지표 계산
         df = calculate_vwap(df)
         df = calculate_rsi(df, period=14)
-        df = detect_volume_surge(df, lookback=10, multiplier=2.5)
+        df = detect_volume_surge(df, lookback=10, multiplier=1.5)
         
         # 스캘핑용 반응성 높은 ATR (기간 7) 계산
         high = df['High'].values
@@ -717,7 +717,7 @@ def calculate_intraday_signals(df, my_entry_price=0.0):
         cond_ma = df['MA5'] > df['MA20']
         
         raw_buy_signal = cond_vwap & cond_rsi & cond_vol & cond_ma
-        df['Raw_Buy'] = raw_buy_signal.rolling(2).sum() == 2 # 2봉 연속 조건 만족 (휩소 방지)
+        df['Raw_Buy'] = raw_buy_signal # 1봉 단일 조건 (2봉 연속은 거래량 서지와 동시 만족이 거의 불가능함)
         
         # ATR 트레일링 기준 (승수 1.3)
         dynamic_raw_sl = df['Close'] - 1.3 * df['ATR_Scalp']
