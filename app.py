@@ -3487,20 +3487,19 @@ if st.session_state.sel_code:
                 
             # 매도 신호 그리기
             if 'Exit_Signal' in df_5min_tail.columns:
+                fig_5m.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    name='매도 신호',
+                    marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
+                    showlegend=True
+                ), row=1, col=1)
+                
                 exit_signals_5m = df_5min_tail[df_5min_tail['Exit_Signal'] == True]
                 if not exit_signals_5m.empty:
                     exit_times_5m = exit_signals_5m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
                     exit_prices_5m = exit_signals_5m['Close'].tolist()
                     hover_texts_5m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_5m]
-                    
-                    fig_5m.add_trace(go.Scatter(
-                        x=[None], y=[None],
-                        mode='markers',
-                        name='매도 신호',
-                        marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
-                        showlegend=True
-                    ), row=1, col=1)
-                    
                     fig_5m.add_trace(go.Scatter(
                         x=exit_times_5m,
                         y=exit_signals_5m['High'] * 1.002,
@@ -3514,20 +3513,19 @@ if st.session_state.sel_code:
                     
             # 매수 신호 그리기
             if 'Buy_Signal' in df_5min_tail.columns:
+                fig_5m.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    name='매수 신호',
+                    marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
+                    showlegend=True
+                ), row=1, col=1)
+                
                 buy_signals_5m = df_5min_tail[df_5min_tail['Buy_Signal'] == True]
                 if not buy_signals_5m.empty:
                     buy_times_5m = buy_signals_5m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
                     buy_prices_5m = buy_signals_5m['Close'].tolist()
                     hover_texts_5m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_5m]
-                    
-                    fig_5m.add_trace(go.Scatter(
-                        x=[None], y=[None],
-                        mode='markers',
-                        name='매수 신호',
-                        marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
-                        showlegend=True
-                    ), row=1, col=1)
-                    
                     fig_5m.add_trace(go.Scatter(
                         x=buy_times_5m,
                         y=buy_signals_5m['Low'] * 0.998,
@@ -3682,19 +3680,19 @@ if st.session_state.sel_code:
                 
             # 매도 신호 그리기
             if 'Exit_Signal' in df_1min_tail.columns:
+                fig_1m.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    name='매도 신호',
+                    marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
+                    showlegend=True
+                ), row=1, col=1)
+                
                 exit_signals_1m = df_1min_tail[df_1min_tail['Exit_Signal'] == True]
                 if not exit_signals_1m.empty:
-                    exit_times_1m = exit_signals_1m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
+                    exit_times_1m = exit_signals_1m['DateTime'].dt.strftime('%H:%M').tolist()
                     exit_prices_1m = exit_signals_1m['Close'].tolist()
                     hover_texts_1m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_1m]
-                    
-                    fig_1m.add_trace(go.Scatter(
-                        x=[None], y=[None],
-                        mode='markers',
-                        name='매도 신호',
-                        marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
-                        showlegend=True
-                    ), row=1, col=1)
                     
                     fig_1m.add_trace(go.Scatter(
                         x=exit_times_1m,
@@ -3709,19 +3707,19 @@ if st.session_state.sel_code:
                     
             # 매수 신호 그리기
             if 'Buy_Signal' in df_1min_tail.columns:
+                fig_1m.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    name='매수 신호',
+                    marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
+                    showlegend=True
+                ), row=1, col=1)
+                
                 buy_signals_1m = df_1min_tail[df_1min_tail['Buy_Signal'] == True]
                 if not buy_signals_1m.empty:
-                    buy_times_1m = buy_signals_1m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
+                    buy_times_1m = buy_signals_1m['DateTime'].dt.strftime('%H:%M').tolist()
                     buy_prices_1m = buy_signals_1m['Close'].tolist()
                     hover_texts_1m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_1m]
-                    
-                    fig_1m.add_trace(go.Scatter(
-                        x=[None], y=[None],
-                        mode='markers',
-                        name='매수 신호',
-                        marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
-                        showlegend=True
-                    ), row=1, col=1)
                     
                     fig_1m.add_trace(go.Scatter(
                         x=buy_times_1m,
