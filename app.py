@@ -649,10 +649,42 @@ def resample_to_5min(df_1min):
     return pd.DataFrame()
 
 
-def calculate_intraday_signals(df):
-    """분봉 데이터에 대해 MA5, MA20, ATR 손절선, 매수/매도 신호 계산"""
+def calculate_vwap(df: pd.DataFrame) -> pd.DataFrame:
+    if 'DateTime' in df.columns:
+        df['Date'] = df['DateTime'].dt.date
+    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+    df['_tp_vol'] = typical_price * df['Volume']
+    if 'Date' in df.columns:
+        df['VWAP'] = (
+            df.groupby('Date')['_tp_vol'].cumsum()
+            / df.groupby('Date')['Volume'].cumsum()
+        )
+        df.drop(columns=['Date'], inplace=True)
+    else:
+        df['VWAP'] = df['_tp_vol'].cumsum() / df['Volume'].cumsum()
+    df.drop(columns=['_tp_vol'], inplace=True)
+    return df
+
+def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    col = f'RSI_{period}'
+    df[col] = 100 - (100 / (1 + rs))
+    df[col] = df[col].fillna(50)
+    return df
+
+def detect_volume_surge(df: pd.DataFrame, lookback: int = 10, multiplier: float = 2.5) -> pd.DataFrame:
+    avg_vol = df['Volume'].rolling(lookback).mean().shift(1)
+    df['Vol_Surge'] = df['Volume'] > (avg_vol * multiplier)
+    return df
+
+def calculate_intraday_signals(df, my_entry_price=0.0):
+    """분봉 데이터에 대해 스캘핑 최적화 지표(VWAP, RSI, 서지, 트레일링 스탑) 및 매수/매도 신호 계산"""
     if df.empty or len(df) < 20:
-        # 지표 계산에 최소 20개 이상의 데이터 필요
         df['MA5'] = df['Close'] if not df.empty else np.nan
         df['MA20'] = df['Close'] if not df.empty else np.nan
         df['Stop_Loss'] = np.nan
@@ -665,38 +697,30 @@ def calculate_intraday_signals(df):
         df['MA5'] = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
         
-        # ATR 계산
+        # 보조지표 계산
+        df = calculate_vwap(df)
+        df = calculate_rsi(df, period=14)
+        df = detect_volume_surge(df, lookback=10, multiplier=2.5)
+        
+        # 스캘핑용 반응성 높은 ATR (기간 7) 계산
         high = df['High'].values
         low = df['Low'].values
         close = df['Close'].values
         tr = np.maximum(high[1:] - low[1:], np.maximum(abs(high[1:] - close[:-1]), abs(low[1:] - close[:-1])))
         tr = np.insert(tr, 0, high[0] - low[0])
-        atr = pd.Series(tr).rolling(14).mean().values
-        df['ATR'] = atr
+        df['ATR_Scalp'] = pd.Series(tr).rolling(7).mean()
         
-        # 거래량 보정용 변수
-        df['Vol_MA20'] = df['Volume'].rolling(20).mean()
+        # 매수 조건 (Raw)
+        cond_vwap = df['Close'] > df['VWAP']
+        cond_rsi = df['RSI_14'].between(30, 70)
+        cond_vol = df['Vol_Surge']
+        cond_ma = df['MA5'] > df['MA20']
         
-        # 피뢰침(위꼬리) 조건: 위꼬리 비율이 전체 봉 길이의 40% 이상이고 음봉인 경우
-        candle_range = df['High'] - df['Low']
-        candle_range_safe = np.where(candle_range == 0, 1.0, candle_range)
-        upper_wick = df['High'] - np.maximum(df['Open'], df['Close'])
-        is_pinbar = ((upper_wick / candle_range_safe) > 0.4) & (df['Close'] <= df['Open'])
+        raw_buy_signal = cond_vwap & cond_rsi & cond_vol & cond_ma
+        df['Raw_Buy'] = raw_buy_signal.rolling(2).sum() == 2 # 2봉 연속 조건 만족 (휩소 방지)
         
-        # 거래량 폭발 조건: 거래량이 최근 20봉 평균 거래량의 1.5배 이상
-        is_vol_spike = df['Volume'] > (df['Vol_MA20'].fillna(df['Volume']) * 1.5)
-        
-        # 리스크 가속 조건
-        risk_accelerate = is_vol_spike & (is_pinbar | (df['Close'] < df['Open']))
-        
-        # dynamic ATR 승수
-        atr_multiplier = np.where(risk_accelerate, 1.0, 2.5)
-        
-        # 최고가 계산 시 고가 왜곡 방지
-        adjusted_high = np.where(is_pinbar & is_vol_spike, df['Close'], df['High'])
-        df['Adj_Highest_High'] = pd.Series(adjusted_high, index=df.index).rolling(20).max()
-        
-        dynamic_raw_sl = df['Adj_Highest_High'] - atr_multiplier * df['ATR']
+        # ATR 트레일링 기준 (승수 1.3)
+        dynamic_raw_sl = df['Close'] - 1.3 * df['ATR_Scalp']
         
         stop_loss_series = []
         exit_signal_list = []
@@ -704,17 +728,22 @@ def calculate_intraday_signals(df):
         
         in_position = False
         entry_price = 0.0
-        max_price_since_entry = 0.0
+        entry_idx = 0
         current_sl = np.nan
         
+        # 사용자가 포트폴리오에 보유 중인 경우 초기 상태 연동
+        if my_entry_price > 0:
+            in_position = True
+            entry_price = my_entry_price
+            entry_idx = 0  # 시간 컷오프 방지를 위해 0으로 세팅하거나 무시
+            
         for i in range(len(df)):
             close_val = df['Close'].iloc[i]
             open_val = df['Open'].iloc[i]
-            ma5_val = df['MA5'].iloc[i]
-            ma20_val = df['MA20'].iloc[i]
+            raw_buy = df['Raw_Buy'].iloc[i]
             raw_sl = dynamic_raw_sl.iloc[i]
             
-            if pd.isna(raw_sl) or pd.isna(ma5_val) or pd.isna(ma20_val):
+            if pd.isna(raw_sl):
                 stop_loss_series.append(np.nan)
                 exit_signal_list.append(False)
                 buy_signal_list.append(False)
@@ -722,27 +751,26 @@ def calculate_intraday_signals(df):
                 
             if in_position:
                 buy_signal_list.append(False)
-                max_price_since_entry = max(max_price_since_entry, close_val)
                 
-                # 손절선 래칫
+                # 손절선 래칫 (한번 올라간 손절선은 내려오지 않음)
                 if pd.isna(current_sl):
                     current_sl = raw_sl
                 else:
                     current_sl = max(current_sl, raw_sl)
                     
-                # 본전 보호 룰 (10% 이상 수익 시 본전+1% 잠금)
-                if max_price_since_entry >= entry_price * 1.10:
-                    current_sl = max(current_sl, entry_price * 1.01)
-                    
                 stop_loss_series.append(current_sl)
                 
                 prev_sl = stop_loss_series[-2] if len(stop_loss_series) > 1 and not pd.isna(stop_loss_series[-2]) else current_sl
                 
-                if open_val < prev_sl:
-                    exit_signal_list.append(True)
-                    in_position = False
-                    current_sl = np.nan
-                elif close_val < current_sl:
+                # 매도 트리거 체크
+                # 1. 트레일링 스탑 이탈
+                hit_stop = (open_val < prev_sl) or (close_val < current_sl)
+                # 2. 부분청산 (익절 1.0%)
+                hit_tp = ((close_val - entry_price) / entry_price * 100) >= 1.0
+                # 3. 시간 컷오프 (20봉 경과) - 포트폴리오 진입(0)이 아닐 때만
+                hit_time = (i - entry_idx) >= 20 if entry_idx > 0 else False
+                
+                if hit_stop or hit_tp or hit_time:
                     exit_signal_list.append(True)
                     in_position = False
                     current_sl = np.nan
@@ -752,11 +780,11 @@ def calculate_intraday_signals(df):
                 exit_signal_list.append(False)
                 stop_loss_series.append(raw_sl)
                 
-                if close_val > ma5_val and close_val > ma20_val:
+                if raw_buy:
                     buy_signal_list.append(True)
                     in_position = True
                     entry_price = close_val
-                    max_price_since_entry = close_val
+                    entry_idx = i
                     current_sl = raw_sl
                 else:
                     buy_signal_list.append(False)
@@ -764,6 +792,8 @@ def calculate_intraday_signals(df):
         df['Stop_Loss'] = stop_loss_series
         df['Exit_Signal'] = exit_signal_list
         df['Buy_Signal'] = buy_signal_list
+        df.drop(columns=['ATR_Scalp', 'Raw_Buy'], inplace=True, errors='ignore')
+        
     except Exception as e:
         print(f"DEBUG: calculate_intraday_signals error: {e}")
         df['Stop_Loss'] = np.nan
@@ -2593,8 +2623,14 @@ if st.session_state.sel_code:
         df_candle = get_stock_history(code_disp)
         df_1min = get_minute_history(code_disp, count=800)
         df_5min = resample_to_5min(df_1min)
-        df_1min = calculate_intraday_signals(df_1min)
-        df_5min = calculate_intraday_signals(df_5min)
+        
+        my_entry_price = 0.0
+        portfolio = load_portfolio()
+        if code_disp in portfolio:
+            my_entry_price = portfolio[code_disp].get('entry_price', 0.0)
+            
+        df_1min = calculate_intraday_signals(df_1min, my_entry_price=my_entry_price)
+        df_5min = calculate_intraday_signals(df_5min, my_entry_price=my_entry_price)
 
     if df_candle.empty:
         st.warning('⚠️ 차트 데이터를 불러올 수 없습니다.')
