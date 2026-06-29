@@ -607,6 +607,12 @@ def get_minute_history(code: str, count: int = 800):
                 df = df.dropna(subset=['DateTime'])
                 df = df.sort_values('DateTime').reset_index(drop=True)
                 
+                # Naver API minute volume is cumulative per day. Convert to individual minute volume.
+                df['Date'] = df['DateTime'].dt.date
+                df['Volume'] = df.groupby('Date')['Volume'].diff().fillna(df['Volume'])
+                df['Volume'] = df['Volume'].clip(lower=0)
+                df.drop(columns=['Date'], inplace=True)
+                
                 return df
     except Exception as e:
         print(f"DEBUG: Failed to get minute history: {e}")
@@ -3391,13 +3397,8 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
         if not df_5min.empty:
-            # 5분봉: 최근 4거래일 데이터만 유지
-            unique_dates_5m = df_5min['DateTime'].dt.date.unique()
-            if len(unique_dates_5m) > 4:
-                allowed_dates_5m = unique_dates_5m[-4:]
-                df_5min_tail = df_5min[df_5min['DateTime'].dt.date.isin(allowed_dates_5m)].copy()
-            else:
-                df_5min_tail = df_5min.copy()
+            # 5분봉: 최근 2.5일(약 195봉) 데이터만 유지
+            df_5min_tail = df_5min.tail(195).copy()
             
             time_str_list_5m = df_5min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
             
@@ -3501,7 +3502,7 @@ if st.session_state.sel_code:
                 for c, o in zip(df_5min_tail['Close'], df_5min_tail['Open'])
             ]
             fig_5m.add_trace(go.Bar(
-                x=time_str_list_5m, y=df_5min_tail['Volume'] // 1000,
+                x=time_str_list_5m, y=df_5min_tail['Volume'],
                 name='거래량', marker_color=vol_colors_5m,
                 showlegend=False, opacity=0.8
             ), row=2, col=1)
@@ -3580,7 +3581,7 @@ if st.session_state.sel_code:
                 nticks=18,             # 눈금을 더 촘촘히 표시
                 row=1, col=1
             )
-            fig_5m.update_yaxes(tickformat=',d', ticksuffix='K', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
+            fig_5m.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
             fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
             fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, nticks=15, row=2, col=1)
 
@@ -3592,13 +3593,8 @@ if st.session_state.sel_code:
             shared_xaxes=True
         )
         if not df_1min.empty:
-            # 1분봉: 최근 2거래일 데이터만 유지
-            unique_dates_1m = df_1min['DateTime'].dt.date.unique()
-            if len(unique_dates_1m) > 2:
-                allowed_dates_1m = unique_dates_1m[-2:]
-                df_1min_tail = df_1min[df_1min['DateTime'].dt.date.isin(allowed_dates_1m)].copy()
-            else:
-                df_1min_tail = df_1min.copy()
+            # 1분봉: 최근 1.5일(약 585봉) 데이터만 유지
+            df_1min_tail = df_1min.tail(585).copy()
             
             time_str_list_1m = df_1min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
             
@@ -3706,7 +3702,7 @@ if st.session_state.sel_code:
                 else:
                     vol_colors_1m.append('#ff6b6b' if df_1min_tail['Close'].iloc[i] >= df_1min_tail['Close'].iloc[i-1] else '#4e9ff5')
             fig_1m.add_trace(go.Bar(
-                x=time_str_list_1m, y=df_1min_tail['Volume'] // 1000,
+                x=time_str_list_1m, y=df_1min_tail['Volume'],
                 name='거래량', marker_color=vol_colors_1m,
                 showlegend=False, opacity=0.8
             ), row=2, col=1)
@@ -3785,7 +3781,7 @@ if st.session_state.sel_code:
                 nticks=18,             # 눈금을 더 촘촘히 표시
                 row=1, col=1
             )
-            fig_1m.update_yaxes(tickformat=',d', ticksuffix='K', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
+            fig_1m.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
             fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
             fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, nticks=15, row=2, col=1)
 
