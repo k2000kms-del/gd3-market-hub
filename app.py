@@ -3518,9 +3518,6 @@ if st.session_state.sel_code:
                     if col in df_5min_tail.columns:
                         min_val_5m = min(min_val_5m, df_5min_tail[col].min(skipna=True))
                         max_val_5m = max(max_val_5m, df_5min_tail[col].max(skipna=True))
-                if my_entry_price > 0:
-                    min_val_5m = min(min_val_5m, my_entry_price)
-                    max_val_5m = max(max_val_5m, my_entry_price)
                 margin_5m = (max_val_5m - min_val_5m) * 0.05 if max_val_5m > min_val_5m else 100
                 y_range_5m = [min_val_5m - margin_5m, max_val_5m + margin_5m]
             except Exception:
@@ -3718,9 +3715,6 @@ if st.session_state.sel_code:
                     if col in df_1min_tail.columns:
                         min_val_1m = min(min_val_1m, df_1min_tail[col].min(skipna=True))
                         max_val_1m = max(max_val_1m, df_1min_tail[col].max(skipna=True))
-                if my_entry_price > 0:
-                    min_val_1m = min(min_val_1m, my_entry_price)
-                    max_val_1m = max(max_val_1m, my_entry_price)
                 margin_1m = (max_val_1m - min_val_1m) * 0.05 if max_val_1m > min_val_1m else 100
                 y_range_1m = [min_val_1m - margin_1m, max_val_1m + margin_1m]
             except Exception:
