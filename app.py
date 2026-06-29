@@ -2631,6 +2631,19 @@ if st.session_state.sel_code:
             
         df_1min = calculate_intraday_signals(df_1min, my_entry_price=my_entry_price)
         df_5min = calculate_intraday_signals(df_5min, my_entry_price=my_entry_price)
+        
+        # --- 라이브 신호 로거 연동 (최근 1분봉 캔들의 신호 감지) ---
+        if not df_1min.empty and len(df_1min) > 1:
+            last_row = df_1min.iloc[-1]
+            # 이미 지난 과거가 아닌 최근 1~2분 이내의 신호만 로깅 (실시간성 확보)
+            if 'DateTime' in df_1min.columns and pd.notna(last_row.get('DateTime')):
+                time_diff = (pd.Timestamp.now() - pd.to_datetime(last_row['DateTime'])).total_seconds()
+                if time_diff < 300:  # 5분 이내의 최신 신호만 로깅 허용
+                    if last_row.get('Buy_Signal') == True:
+                        live_logger.log_buy_signal(code_disp, float(last_row['Close']), last_row['DateTime'])
+                    elif last_row.get('Exit_Signal') == True:
+                        live_logger.log_exit_signal(code_disp, float(last_row['Close']), last_row['DateTime'])
+        # -------------------------------------------------------------
 
     if df_candle.empty:
         st.warning('⚠️ 차트 데이터를 불러올 수 없습니다.')
