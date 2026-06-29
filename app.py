@@ -2986,6 +2986,7 @@ if st.session_state.sel_code:
                 </div>
                 """
             
+            import html
             # 뉴스 데이터 가공
             recent_news_prompt = " | ".join([item['title'] for item in recent_news_data]) if recent_news_data else "최근 뉴스 없음"
             
@@ -2993,7 +2994,7 @@ if st.session_state.sel_code:
             if recent_news_data:
                 recent_news_html = "<ul style='margin: 4px 0 0 16px; padding: 0;'>"
                 for item in recent_news_data:
-                    title = item['title']
+                    title = html.escape(item['title'])
                     url = item['url']
                     if url:
                         recent_news_html += f"<li style='margin-bottom: 4.5px;'><a href='{url}' target='_blank' style='color: #b197fc; text-decoration: none; font-weight: 500;' onmouseover='this.style.textDecoration=\"underline\";' onmouseout='this.style.textDecoration=\"none\";'>{title}</a></li>"
@@ -3018,6 +3019,8 @@ if st.session_state.sel_code:
             except Exception as e:
                 ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
             
+            ai_comment_escaped = html.escape(ai_comment).replace('\n', '<br/>')
+            
             opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
 <h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
@@ -3033,7 +3036,7 @@ if st.session_state.sel_code:
 
 <div style="background-color: rgba(255, 255, 255, 0.03); padding: 10px; border-radius: 6px; border-left: 4px solid #ff922b; font-size: 13px; line-height: 1.5; color: #eee; font-family: 'malgun gothic', sans-serif; margin-bottom: 12px;">
     <strong>🤖 AI 퀀트 리스크 조언:</strong><br/>
-    {ai_comment}
+    {ai_comment_escaped}
 </div>
 
 {supply_table_html}
