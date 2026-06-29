@@ -2889,10 +2889,14 @@ if st.session_state.sel_code:
     {recent_news_html}
 </div>
 </div>"""
+            import re
+            stats_html_clean = re.sub(r'\s+', ' ', stats_html.replace('\n', ' ')).strip()
+            opinion_html_clean = re.sub(r'\s+', ' ', opinion_html.replace('\n', ' ')).strip()
+
             col_op, col_rd = st.columns([7, 3.5])
             with col_op:
-                st.markdown(stats_html, unsafe_allow_html=True)
-                st.markdown(opinion_html, unsafe_allow_html=True)
+                st.markdown(stats_html_clean, unsafe_allow_html=True)
+                st.markdown(opinion_html_clean, unsafe_allow_html=True)
             with col_rd:
                 # 💼 실시간 포트폴리오 관리 패널 구현
                 portfolio = load_portfolio()
