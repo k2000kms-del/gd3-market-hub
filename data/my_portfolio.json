@@ -33,5 +33,10 @@
     "name": "NAVER",
     "entry_price": 280500.0,
     "qty": 1.0
+  },
+  "005930": {
+    "name": "삼성전자",
+    "entry_price": 237194.0,
+    "qty": 17.0
   }
 }
