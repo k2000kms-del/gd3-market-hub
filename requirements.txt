@@ -6,3 +6,4 @@ finance-datareader>=0.9.50
 requests>=2.31.0
 lxml>=4.9.0
 supabase>=2.0.0
+streamlit-autorefresh

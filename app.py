@@ -9,6 +9,7 @@ import requests
 import time
 import os
 from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
 # ── Supabase 클라이언트 초기화 ────────────────────────────────
 supabase = None
@@ -567,6 +568,121 @@ def get_stock_history(code: str):
         return df if not df.empty else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600*20)
+def get_kis_access_token(app_key: str, app_secret: str) -> str:
+    try:
+        url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
+        headers = {"content-type": "application/json"}
+        body = {
+            "grant_type": "client_credentials",
+            "appkey": app_key,
+            "appsecret": app_secret
+        }
+        import json
+        res = requests.post(url, headers=headers, data=json.dumps(body), timeout=5)
+        if res.status_code == 200:
+            return res.json().get('access_token', '')
+    except Exception as e:
+        print(f"DEBUG: KIS token error: {e}")
+    return ""
+
+@st.cache_data(ttl=60)
+def get_kis_minute_history(app_key: str, app_secret: str, code: str):
+    """KIS API 당일 1분봉 데이터 조회 (OHLCV 완벽 지원, 페이징 처리로 약 390봉 수집)"""
+    try:
+        token = get_kis_access_token(app_key, app_secret)
+        if not token:
+            return pd.DataFrame()
+            
+        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+        headers = {
+            "content-type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {token}",
+            "appkey": app_key,
+            "appsecret": app_secret,
+            "tr_id": "FHKST03010200",
+            "custtype": "P"
+        }
+        
+        all_data = []
+        target_time = "153000"
+        
+        import time
+        # 최대 13페이지(약 390분 = 6시간 30분) 조회
+        for _ in range(13):
+            params = {
+                "FID_ETC_CLS_CODE": "",
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": code,
+                "FID_INPUT_HOUR_1": target_time,
+                "FID_PW_DATA_INCU_YN": "Y"
+            }
+            res = requests.get(url, headers=headers, params=params, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                output2 = data.get('output2', [])
+                if not output2:
+                    break
+                
+                all_data.extend(output2)
+                last_time = output2[-1]['stck_cntg_hour']
+                
+                if last_time < "090000":
+                    break
+                    
+                # 다음 페이지 조회를 위해 1초 차감
+                h = int(last_time[:2])
+                m = int(last_time[2:4])
+                s = int(last_time[4:])
+                if s > 0: s -= 1
+                else:
+                    s = 59
+                    if m > 0: m -= 1
+                    else:
+                        m = 59
+                        h -= 1
+                target_time = f"{h:02d}{m:02d}{s:02d}"
+                time.sleep(0.05)
+            else:
+                break
+                
+        if not all_data:
+            return pd.DataFrame()
+            
+        # KIS 데이터는 최신 시간부터 내림차순으로 오므로 시간순 정렬을 위해 뒤집음
+        all_data.reverse()
+        
+        df = pd.DataFrame(all_data)
+        # 중복 제거 (정확히 동일한 시간 틱 방지)
+        df = df.drop_duplicates(subset=['stck_bsop_date', 'stck_cntg_hour'], keep='first')
+        
+        # stck_bsop_date (영업일자), stck_cntg_hour (시간), stck_prpr (종가), stck_oprc (시가), stck_hgpr (고가), stck_lwpr (저가), cntg_vol (거래량)
+        df.rename(columns={
+            'stck_bsop_date': 'Date',
+            'stck_cntg_hour': 'TimeStr',
+            'stck_oprc': 'Open',
+            'stck_hgpr': 'High',
+            'stck_lwpr': 'Low',
+            'stck_prpr': 'Close',
+            'cntg_vol': 'Volume'
+        }, inplace=True)
+        
+        # 숫자형 변환
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+        # DateTime 생성 (예: 20260630 + 153000)
+        df['DateTimeStr'] = df['Date'] + df['TimeStr']
+        df['DateTime'] = pd.to_datetime(df['DateTimeStr'], format='%Y%m%d%H%M%S', errors='coerce')
+        
+        df = df.dropna(subset=['DateTime', 'Close'])
+        df = df.sort_values('DateTime').reset_index(drop=True)
+        return df
+    except Exception as e:
+        print(f"DEBUG: KIS minute history error: {e}")
+    return pd.DataFrame()
 
 
 @st.cache_data(ttl=60)
@@ -1475,6 +1591,12 @@ for code, name in unique_stocks:
 options_list = ["선택 안 함 (검색 사용)"]
 code_to_name_map = {}
 default_idx = 0
+
+st.sidebar.markdown('### ⚡ 실시간 스캘핑 모드')
+auto_refresh = st.sidebar.toggle('5초마다 실시간 차트 갱신', value=False, help="차트와 시그널을 자동으로 새로고침합니다.")
+if auto_refresh:
+    st_autorefresh(interval=5000, key="data_refresh")
+
 st.sidebar.markdown('---')
 st.sidebar.markdown('### 🔍 종목 검색')
 st.sidebar.caption('종목명 또는 코드로 검색하면 대시보드 아래에 일봉 차트가 표시됩니다.')
@@ -2480,8 +2602,13 @@ with row2_col2:
         
         df_line['Datetime'] = pd.to_datetime(today_date_str + ' ' + df_line['Time'], format='%Y%m%d %H:%M')
         
-        def to_num(s):
-            return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        # 누락된 시간(접속 안한 시간)의 왜곡된 직선 연결을 방지하기 위해 1분 단위 빈 시간 생성
+        for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net']:
+            if c in df_line.columns:
+                df_line[c] = pd.to_numeric(df_line[c].astype(str).str.replace(',', ''), errors='coerce')
+        
+        # 1분 단위 정규화 (빈 시간은 NaN이 되어 선이 끊어짐)
+        df_line = df_line.set_index('Datetime').resample('1min').asfreq().reset_index()
 
         col_cfg = [
             ('Foreign_Net',       '외국인', '#4e9ff5'),
@@ -2492,8 +2619,9 @@ with row2_col2:
         for col, name, color in col_cfg:
             if col in df_line.columns:
                 fig_p5.add_trace(go.Scatter(
-                    x=df_line['Datetime'], y=to_num(df_line[col]),
-                    name=name, mode='lines+markers',
+                    x=df_line['Datetime'], y=df_line[col],
+                    name=name, mode='lines',  # 점(마커) 제거하여 뭉개짐 방지
+                    connectgaps=False,        # 데이터 누락 구간은 선을 잇지 않고 끊어서 표시 (왜곡 방지)
                     line=dict(color=color, width=2),
                     hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
                 ))
@@ -2621,7 +2749,15 @@ if st.session_state.sel_code:
 
     with st.spinner(f'📡 {name_disp} 주가 데이터 조회 중...'):
         df_candle = get_stock_history(code_disp)
-        df_1min = get_minute_history(code_disp, count=800)
+        
+        # 1분봉 데이터 획득 (KIS 우선, 실패 시 네이버 폴백)
+        df_1min = pd.DataFrame()
+        if kis_key and kis_sec:
+            df_1min = get_kis_minute_history(kis_key, kis_sec, code_disp)
+            
+        if df_1min.empty:
+            df_1min = get_minute_history(code_disp, count=800)
+            
         df_5min = resample_to_5min(df_1min)
         
         my_entry_price = 0.0
@@ -3214,7 +3350,7 @@ if st.session_state.sel_code:
         # 캔들 차트 생성
         fig_c = make_subplots(
             rows=2, cols=1,
-            row_heights=[0.72, 0.28],
+            row_heights=[0.85, 0.15],
             vertical_spacing=0.03,
             shared_xaxes=True
         )
@@ -3362,7 +3498,7 @@ if st.session_state.sel_code:
 
         fig_c.update_layout(
             template='plotly_dark',
-            height=480,
+            height=650,
             margin=dict(t=50, l=10, r=55, b=10), # 우측 가격 눈금을 위한 여백 및 상단 라벨 잘림 방지
             xaxis_rangeslider_visible=False,
             legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
@@ -3445,18 +3581,24 @@ if st.session_state.sel_code:
         # ── 5분봉 차트 생성 ─────────────────────────────
         fig_5m = make_subplots(
             rows=2, cols=1,
-            row_heights=[0.72, 0.28],
+            row_heights=[0.85, 0.15],
             vertical_spacing=0.03,
             shared_xaxes=True
         )
         if not df_5min.empty:
             # 5분봉: 최근 1.5일(약 120봉) 데이터만 유지하여 캔들 가시성 확보
-            df_5min_tail = df_5min.tail(120).copy()
+            df_5min_tail = df_5min.tail(120).copy().reset_index(drop=True)
             
-            time_str_list_5m = df_5min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
+            tick_vals_5m = list(range(len(df_5min_tail)))
+            tick_texts_5m = df_5min_tail['DateTime'].dt.strftime('%H:%M').tolist()
+            
+            # 5분봉: 약 10개 내외의 라벨만 표시되도록 다운샘플링 (x축 텍스트 겹침 방지)
+            step_5m = max(1, len(tick_vals_5m) // 10)
+            display_tick_vals_5m = tick_vals_5m[::step_5m]
+            display_tick_texts_5m = tick_texts_5m[::step_5m]
             
             fig_5m.add_trace(go.Candlestick(
-                x=time_str_list_5m,
+                x=tick_vals_5m,
                 open=df_5min_tail['Open'], high=df_5min_tail['High'],
                 low=df_5min_tail['Low'], close=df_5min_tail['Close'],
                 increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
@@ -3466,13 +3608,13 @@ if st.session_state.sel_code:
             
             # MA5, MA20 그리기
             fig_5m.add_trace(go.Scatter(
-                x=time_str_list_5m, y=df_5min_tail['MA5'],
+                x=tick_vals_5m, y=df_5min_tail['MA5'],
                 name='MA5', mode='lines',
                 line=dict(color='#ffd43b', width=1.5)
             ), row=1, col=1)
             
             fig_5m.add_trace(go.Scatter(
-                x=time_str_list_5m, y=df_5min_tail['MA20'],
+                x=tick_vals_5m, y=df_5min_tail['MA20'],
                 name='MA20', mode='lines',
                 line=dict(color='#ff922b', width=1.5)
             ), row=1, col=1)
@@ -3480,7 +3622,7 @@ if st.session_state.sel_code:
             # ATR 손절선 그리기
             if 'Stop_Loss' in df_5min_tail.columns:
                 fig_5m.add_trace(go.Scatter(
-                    x=time_str_list_5m, y=df_5min_tail['Stop_Loss'],
+                    x=tick_vals_5m, y=df_5min_tail['Stop_Loss'],
                     name='ATR 손절선', mode='lines',
                     line=dict(color='#e74c3c', width=1.5, dash='dash')
                 ), row=1, col=1)
@@ -3495,14 +3637,14 @@ if st.session_state.sel_code:
                     showlegend=True
                 ), row=1, col=1)
                 
-                exit_signals_5m = df_5min_tail[df_5min_tail['Exit_Signal'] == True]
-                if not exit_signals_5m.empty:
-                    exit_times_5m = exit_signals_5m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
-                    exit_prices_5m = exit_signals_5m['Close'].tolist()
+                exit_indices_5m = [i for i, val in enumerate(df_5min_tail['Exit_Signal']) if val]
+                if exit_indices_5m:
+                    exit_prices_5m = df_5min_tail.loc[exit_indices_5m, 'Close'].tolist()
+                    exit_highs_5m = df_5min_tail.loc[exit_indices_5m, 'High'].tolist()
                     hover_texts_5m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_5m]
                     fig_5m.add_trace(go.Scatter(
-                        x=exit_times_5m,
-                        y=exit_signals_5m['High'] * 1.002,
+                        x=exit_indices_5m,
+                        y=[h * 1.002 for h in exit_highs_5m],
                         mode='markers',
                         name='매도 신호',
                         marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
@@ -3521,14 +3663,14 @@ if st.session_state.sel_code:
                     showlegend=True
                 ), row=1, col=1)
                 
-                buy_signals_5m = df_5min_tail[df_5min_tail['Buy_Signal'] == True]
-                if not buy_signals_5m.empty:
-                    buy_times_5m = buy_signals_5m['DateTime'].dt.strftime('%d일 %H:%M').tolist()
-                    buy_prices_5m = buy_signals_5m['Close'].tolist()
+                buy_indices_5m = [i for i, val in enumerate(df_5min_tail['Buy_Signal']) if val]
+                if buy_indices_5m:
+                    buy_prices_5m = df_5min_tail.loc[buy_indices_5m, 'Close'].tolist()
+                    buy_lows_5m = df_5min_tail.loc[buy_indices_5m, 'Low'].tolist()
                     hover_texts_5m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_5m]
                     fig_5m.add_trace(go.Scatter(
-                        x=buy_times_5m,
-                        y=buy_signals_5m['Low'] * 0.998,
+                        x=buy_indices_5m,
+                        y=[l * 0.998 for l in buy_lows_5m],
                         mode='markers',
                         name='매수 신호',
                         marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
@@ -3543,7 +3685,7 @@ if st.session_state.sel_code:
             if code_disp in portfolio:
                 my_entry_price = portfolio[code_disp]["entry_price"]
                 fig_5m.add_trace(go.Scatter(
-                    x=time_str_list_5m, y=[my_entry_price] * len(time_str_list_5m),
+                    x=tick_vals_5m, y=[my_entry_price] * len(tick_vals_5m),
                     name='나의 매수단가', mode='lines',
                     line=dict(color='#ffd700', width=2.0, dash='dashdot')
                 ), row=1, col=1)
@@ -3553,8 +3695,8 @@ if st.session_state.sel_code:
                 for c, o in zip(df_5min_tail['Close'], df_5min_tail['Open'])
             ]
             fig_5m.add_trace(go.Bar(
-                x=time_str_list_5m, y=df_5min_tail['Volume'],
-                name='거래량', marker_color=vol_colors_5m,
+                x=tick_vals_5m, y=df_5min_tail['Volume'] // 1000,
+                name='거래량(K)', marker_color=vol_colors_5m,
                 showlegend=False, opacity=0.8
             ), row=2, col=1)
 
@@ -3573,7 +3715,7 @@ if st.session_state.sel_code:
 
             # 우측 Y축 눈금(yaxis3)을 활성화하기 위한 더미 투명 트레이스 주입 (row/col 생략하여 layout y3 매핑)
             fig_5m.add_trace(go.Scatter(
-                x=time_str_list_5m,
+                x=tick_vals_5m,
                 y=df_5min_tail['Close'],
                 yaxis='y3',
                 showlegend=False,
@@ -3585,8 +3727,8 @@ if st.session_state.sel_code:
             last_5m_close = df_5min_tail['Close'].iloc[-1]
             fig_5m.update_layout(
                 template='plotly_dark',
-                height=480,
-                margin=dict(t=20, l=10, r=55, b=10), # 우측 눈금을 위한 여백
+                height=650,
+                margin=dict(t=20, l=10, r=55, b=40), # X축 레이블 짤림 방지 및 우측 눈금 여백
                 xaxis_rangeslider_visible=False,
                 legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
                 font=dict(family='malgun gothic, nanum gothic, sans-serif'),
@@ -3629,25 +3771,56 @@ if st.session_state.sel_code:
                 nticks=18,             # 눈금을 더 촘촘히 표시
                 row=1, col=1
             )
-            fig_5m.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
-            fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
-            fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, nticks=15, row=2, col=1)
+            # 거래량 Y축 스케일 조정 (장 시작 첫 봉의 비정상적인 거래량으로 인해 나머지 막대가 안 보이는 현상 방지)
+            vol_s_5m = df_5min_tail['Volume'] // 1000
+            vol_max_5m = vol_s_5m.quantile(0.98) * 1.5 if not vol_s_5m.empty else 100
+            if vol_max_5m <= 0 or pd.isna(vol_max_5m): vol_max_5m = vol_s_5m.max()
+            fig_5m.update_yaxes(
+                tickformat=',d', 
+                ticksuffix='K', 
+                tickfont=dict(size=10, color='#888'),
+                gridcolor='rgba(255,255,255,0.06)', 
+                range=[0, vol_max_5m], 
+                row=2, col=1
+            )
+            
+            fig_5m.update_xaxes(
+                type='category',
+                gridcolor='rgba(255,255,255,0.04)',
+                showticklabels=False,
+                row=1, col=1
+            )
+            fig_5m.update_xaxes(
+                type='category',
+                gridcolor='rgba(255,255,255,0.04)',
+                tickangle=0,
+                tickmode='array',
+                tickvals=display_tick_vals_5m,
+                ticktext=display_tick_texts_5m,
+                row=2, col=1
+            )
 
         # ── 1분봉 차트 생성 ─────────────────────────────
         fig_1m = make_subplots(
             rows=2, cols=1,
-            row_heights=[0.72, 0.28],
+            row_heights=[0.85, 0.15],
             vertical_spacing=0.03,
             shared_xaxes=True
         )
         if not df_1min.empty:
-            # 1분봉: 최근 3시간(약 180봉) 데이터만 유지하여 캔들 가시성 확보
-            df_1min_tail = df_1min.tail(180).copy()
+            # 1분봉: 당일 전체(약 390봉) 데이터 유지하여 캔들 가시성 확보
+            df_1min_tail = df_1min.tail(400).copy().reset_index(drop=True)
             
-            time_str_list_1m = df_1min_tail['DateTime'].dt.strftime('%d일 %H:%M').tolist()
+            tick_vals_1m = list(range(len(df_1min_tail)))
+            tick_texts_1m = df_1min_tail['DateTime'].dt.strftime('%H:%M').tolist()
+            
+            # 1분봉: 약 12개 내외의 라벨만 표시되도록 다운샘플링 (x축 텍스트 겹침 방지)
+            step_1m = max(1, len(tick_vals_1m) // 12)
+            display_tick_vals_1m = tick_vals_1m[::step_1m]
+            display_tick_texts_1m = tick_texts_1m[::step_1m]
             
             fig_1m.add_trace(go.Candlestick(
-                x=time_str_list_1m,
+                x=tick_vals_1m,
                 open=df_1min_tail['Open'],
                 high=df_1min_tail['High'],
                 low=df_1min_tail['Low'],
@@ -3659,13 +3832,13 @@ if st.session_state.sel_code:
             
             # MA5, MA20 그리기
             fig_1m.add_trace(go.Scatter(
-                x=time_str_list_1m, y=df_1min_tail['MA5'],
+                x=tick_vals_1m, y=df_1min_tail['MA5'],
                 name='MA5', mode='lines',
                 line=dict(color='#ffd43b', width=1.5)
             ), row=1, col=1)
             
             fig_1m.add_trace(go.Scatter(
-                x=time_str_list_1m, y=df_1min_tail['MA20'],
+                x=tick_vals_1m, y=df_1min_tail['MA20'],
                 name='MA20', mode='lines',
                 line=dict(color='#ff922b', width=1.5)
             ), row=1, col=1)
@@ -3673,7 +3846,7 @@ if st.session_state.sel_code:
             # ATR 손절선 그리기
             if 'Stop_Loss' in df_1min_tail.columns:
                 fig_1m.add_trace(go.Scatter(
-                    x=time_str_list_1m, y=df_1min_tail['Stop_Loss'],
+                    x=tick_vals_1m, y=df_1min_tail['Stop_Loss'],
                     name='ATR 손절선', mode='lines',
                     line=dict(color='#e74c3c', width=1.5, dash='dash')
                 ), row=1, col=1)
@@ -3688,15 +3861,15 @@ if st.session_state.sel_code:
                     showlegend=True
                 ), row=1, col=1)
                 
-                exit_signals_1m = df_1min_tail[df_1min_tail['Exit_Signal'] == True]
-                if not exit_signals_1m.empty:
-                    exit_times_1m = exit_signals_1m['DateTime'].dt.strftime('%H:%M').tolist()
-                    exit_prices_1m = exit_signals_1m['Close'].tolist()
+                exit_indices_1m = [i for i, val in enumerate(df_1min_tail['Exit_Signal']) if val]
+                if exit_indices_1m:
+                    exit_prices_1m = df_1min_tail.loc[exit_indices_1m, 'Close'].tolist()
+                    exit_highs_1m = df_1min_tail.loc[exit_indices_1m, 'High'].tolist()
                     hover_texts_1m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_1m]
                     
                     fig_1m.add_trace(go.Scatter(
-                        x=exit_times_1m,
-                        y=exit_signals_1m['High'] * 1.002,
+                        x=exit_indices_1m,
+                        y=[h * 1.002 for h in exit_highs_1m],
                         mode='markers',
                         name='매도 신호',
                         marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
@@ -3715,15 +3888,15 @@ if st.session_state.sel_code:
                     showlegend=True
                 ), row=1, col=1)
                 
-                buy_signals_1m = df_1min_tail[df_1min_tail['Buy_Signal'] == True]
-                if not buy_signals_1m.empty:
-                    buy_times_1m = buy_signals_1m['DateTime'].dt.strftime('%H:%M').tolist()
-                    buy_prices_1m = buy_signals_1m['Close'].tolist()
+                buy_indices_1m = [i for i, val in enumerate(df_1min_tail['Buy_Signal']) if val]
+                if buy_indices_1m:
+                    buy_prices_1m = df_1min_tail.loc[buy_indices_1m, 'Close'].tolist()
+                    buy_lows_1m = df_1min_tail.loc[buy_indices_1m, 'Low'].tolist()
                     hover_texts_1m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_1m]
                     
                     fig_1m.add_trace(go.Scatter(
-                        x=buy_times_1m,
-                        y=buy_signals_1m['Low'] * 0.998,
+                        x=buy_indices_1m,
+                        y=[l * 0.998 for l in buy_lows_1m],
                         mode='markers',
                         name='매수 신호',
                         marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
@@ -3738,20 +3911,18 @@ if st.session_state.sel_code:
             if code_disp in portfolio:
                 my_entry_price = portfolio[code_disp]["entry_price"]
                 fig_1m.add_trace(go.Scatter(
-                    x=time_str_list_1m, y=[my_entry_price] * len(time_str_list_1m),
+                    x=tick_vals_1m, y=[my_entry_price] * len(tick_vals_1m),
                     name='나의 매수단가', mode='lines',
                     line=dict(color='#ffd700', width=2.0, dash='dashdot')
                 ), row=1, col=1)
                 
-            vol_colors_1m = []
-            for i in range(len(df_1min_tail)):
-                if i == 0:
-                    vol_colors_1m.append('#ff6b6b')
-                else:
-                    vol_colors_1m.append('#ff6b6b' if df_1min_tail['Close'].iloc[i] >= df_1min_tail['Close'].iloc[i-1] else '#4e9ff5')
+            vol_colors_1m = [
+                '#ff6b6b' if c >= o else '#4e9ff5'
+                for c, o in zip(df_1min_tail['Close'], df_1min_tail['Open'])
+            ]
             fig_1m.add_trace(go.Bar(
-                x=time_str_list_1m, y=df_1min_tail['Volume'],
-                name='거래량', marker_color=vol_colors_1m,
+                x=tick_vals_1m, y=df_1min_tail['Volume'] // 1000,
+                name='거래량(K)', marker_color=vol_colors_1m,
                 showlegend=False, opacity=0.8
             ), row=2, col=1)
 
@@ -3770,7 +3941,7 @@ if st.session_state.sel_code:
 
             # 우측 Y축 눈금(yaxis3)을 활성화하기 위한 더미 투명 트레이스 주입 (row/col 생략하여 layout y3 매핑)
             fig_1m.add_trace(go.Scatter(
-                x=time_str_list_1m,
+                x=tick_vals_1m,
                 y=df_1min_tail['Close'],
                 yaxis='y3',
                 showlegend=False,
@@ -3782,8 +3953,8 @@ if st.session_state.sel_code:
             last_1m_close = df_1min_tail['Close'].iloc[-1]
             fig_1m.update_layout(
                 template='plotly_dark',
-                height=480,
-                margin=dict(t=20, l=10, r=55, b=10), # 우측 눈금을 위한 여백
+                height=650,
+                margin=dict(t=20, l=10, r=55, b=40), # X축 레이블 짤림 방지 및 우측 눈금 여백
                 xaxis_rangeslider_visible=False,
                 legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
                 font=dict(family='malgun gothic, nanum gothic, sans-serif'),
@@ -3826,9 +3997,34 @@ if st.session_state.sel_code:
                 nticks=18,             # 눈금을 더 촘촘히 표시
                 row=1, col=1
             )
-            fig_1m.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
-            fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
-            fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, nticks=15, row=2, col=1)
+            # 거래량 Y축 스케일 조정 (장 시작 첫 봉의 비정상적인 거래량으로 인해 나머지 막대가 안 보이는 현상 방지)
+            vol_s_1m = df_1min_tail['Volume'] // 1000
+            vol_max_1m = vol_s_1m.quantile(0.98) * 2.0 if not vol_s_1m.empty else 100
+            if vol_max_1m <= 0 or pd.isna(vol_max_1m): vol_max_1m = vol_s_1m.max()
+            fig_1m.update_yaxes(
+                tickformat=',d', 
+                ticksuffix='K', 
+                tickfont=dict(size=10, color='#888'),
+                gridcolor='rgba(255,255,255,0.06)', 
+                range=[0, vol_max_1m], 
+                row=2, col=1
+            )
+            
+            fig_1m.update_xaxes(
+                type='category',
+                gridcolor='rgba(255,255,255,0.04)',
+                showticklabels=False,
+                row=1, col=1
+            )
+            fig_1m.update_xaxes(
+                type='category',
+                gridcolor='rgba(255,255,255,0.04)',
+                tickangle=0,
+                tickmode='array',
+                tickvals=display_tick_vals_1m,
+                ticktext=display_tick_texts_1m,
+                row=2, col=1
+            )
 
         # ── 탭 레이아웃 렌더링 ─────────────────────────────
         tab_day, tab_5m, tab_1m = st.tabs(["📅 일봉 차트", "⏱️ 5분봉 (캔들)", "⚡ 1분봉 (캔들)"])
