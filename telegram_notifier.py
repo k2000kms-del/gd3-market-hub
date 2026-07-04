@@ -1,0 +1,162 @@
+# -*- coding: utf-8 -*-
+"""
+telegram_notifier.py
+-------------------
+스캘핑 신호 발생 시 텔레그램 봇으로 실시간 푸시 알림을 전송하는 모듈.
+requests 라이브러리만 사용하므로 별도 패키지 설치 불필요.
+"""
+
+import requests
+from datetime import datetime
+
+# 텔레그램 Bot API 기본 URL
+_TG_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
+
+# ─────────────────────────────────────────────────────────────
+# 내부 헬퍼 함수
+# ─────────────────────────────────────────────────────────────
+
+def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML") -> bool:
+    """텔레그램 Bot API로 메시지를 전송하는 내부 함수.
+    
+    Returns:
+        bool: 전송 성공 여부
+    """
+    if not token or not chat_id:
+        print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
+        return False
+    try:
+        url = _TG_API_BASE.format(token=token)
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": True,
+        }
+        res = requests.post(url, json=payload, timeout=5)
+        if res.status_code == 200:
+            return True
+        else:
+            print(f"DEBUG: 텔레그램 전송 실패 (status={res.status_code}): {res.text[:100]}")
+            return False
+    except Exception as e:
+        print(f"DEBUG: 텔레그램 전송 예외 발생: {e}")
+        return False
+
+
+# ─────────────────────────────────────────────────────────────
+# 공개 API
+# ─────────────────────────────────────────────────────────────
+
+def notify_buy_signal(
+    token: str,
+    chat_id: str,
+    ticker: str,
+    name: str,
+    price: float,
+    timestamp: datetime,
+    rsi: float = None,
+    vwap: float = None,
+) -> bool:
+    """매수 신호(BUY_SIGNAL) 발생 시 텔레그램 알림 전송.
+    
+    Args:
+        token:     텔레그램 봇 토큰 (secrets.toml 의 TELEGRAM_BOT_TOKEN)
+        chat_id:   수신자 Chat ID (secrets.toml 의 TELEGRAM_CHAT_ID)
+        ticker:    종목 코드 (예: '005930')
+        name:      종목명 (예: '삼성전자')
+        price:     신호 발생 시 종가
+        timestamp: 신호 발생 시각 (datetime)
+        rsi:       RSI 값 (선택)
+        vwap:      VWAP 값 (선택)
+    
+    Returns:
+        bool: 전송 성공 여부
+    """
+    time_str = timestamp.strftime("%H:%M")
+    
+    # 보조지표 줄 구성
+    extra_lines = ""
+    if rsi is not None:
+        extra_lines += f"\n├ RSI(14): <b>{rsi:.1f}</b>"
+    if vwap is not None:
+        extra_lines += f"\n└ VWAP: <b>{vwap:,.0f}원</b>"
+
+    text = (
+        f"🟢 <b>[매수 신호]</b> {name} ({ticker})\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 현재가: <b>{price:,.0f}원</b>\n"
+        f"⏰ 발생 시각: {time_str}"
+        f"{extra_lines}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"<i>GD 3.0 Market Hub 스캘핑 신호</i>"
+    )
+    return _send(token, chat_id, text)
+
+
+def notify_exit_signal(
+    token: str,
+    chat_id: str,
+    ticker: str,
+    name: str,
+    price: float,
+    timestamp: datetime,
+    pnl_pct: float = None,
+    holding_minutes: float = None,
+) -> bool:
+    """매도/청산 신호(EXIT_SIGNAL) 발생 시 텔레그램 알림 전송.
+    
+    Args:
+        token:           텔레그램 봇 토큰
+        chat_id:         수신자 Chat ID
+        ticker:          종목 코드
+        name:            종목명
+        price:           신호 발생 시 종가
+        timestamp:       신호 발생 시각
+        pnl_pct:         실현 손익률 (%) — None이면 미계산
+        holding_minutes: 보유 시간 (분) — None이면 미계산
+    
+    Returns:
+        bool: 전송 성공 여부
+    """
+    time_str = timestamp.strftime("%H:%M")
+
+    # 손익 라인
+    if pnl_pct is not None:
+        pnl_emoji = "📈" if pnl_pct >= 0 else "📉"
+        pnl_sign  = "+" if pnl_pct >= 0 else ""
+        pnl_line  = f"\n├ 손익률: <b>{pnl_sign}{pnl_pct:.3f}%</b> {pnl_emoji}"
+    else:
+        pnl_line  = ""
+
+    # 보유시간 라인
+    if holding_minutes is not None:
+        hold_line = f"\n└ 보유 시간: <b>{holding_minutes:.1f}분</b>"
+    else:
+        hold_line = ""
+
+    text = (
+        f"🔴 <b>[청산 신호]</b> {name} ({ticker})\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 현재가: <b>{price:,.0f}원</b>\n"
+        f"⏰ 발생 시각: {time_str}"
+        f"{pnl_line}"
+        f"{hold_line}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"<i>GD 3.0 Market Hub 스캘핑 신호</i>"
+    )
+    return _send(token, chat_id, text)
+
+
+def notify_custom(token: str, chat_id: str, message: str) -> bool:
+    """임의 텍스트 메시지를 텔레그램으로 전송.
+    
+    Args:
+        token:   텔레그램 봇 토큰
+        chat_id: 수신자 Chat ID
+        message: 전송할 메시지 (HTML 태그 사용 가능)
+    
+    Returns:
+        bool: 전송 성공 여부
+    """
+    return _send(token, chat_id, message)

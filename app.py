@@ -10,6 +10,7 @@ import time
 import os
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
+import live_logger  # 스캘핑 신호 CSV 로거 + 텔레그램 알림 연동
 
 # ── Supabase 클라이언트 초기화 ────────────────────────────────
 supabase = None
@@ -36,58 +37,6 @@ def get_kospi_ma20():
     except Exception as e:
         print(f"DEBUG: Failed to get KOSPI MA20: {e}")
     return 0.0, 0.0, False
-
-def draw_quant_radar_chart(q_row):
-    """퀀트 5대 지표 점수 레이더 차트 생성"""
-    if q_row.empty:
-        return None
-    
-    categories = ['모멘텀', '수급', '거래량', '이평선', '캔들패턴']
-    values = [
-        float(q_row.iloc[0].get('Score_Momentum', 0)),
-        float(q_row.iloc[0].get('Score_Supply', 0)),
-        float(q_row.iloc[0].get('Score_Volume', 0)),
-        float(q_row.iloc[0].get('Score_MA', 0)),
-        float(q_row.iloc[0].get('Score_Candle', 0))
-    ]
-    
-    # 폐곡선을 만들기 위해 첫 번째 지표 값을 끝에 추가
-    categories_closed = categories + [categories[0]]
-    values_closed = values + [values[0]]
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(
-        r=values_closed,
-        theta=categories_closed,
-        fill='toself',
-        fillcolor='rgba(0, 229, 255, 0.15)',
-        line=dict(color='#00e5ff', width=2),
-        marker=dict(color='#00e5ff', size=6),
-        hoverinfo='theta+r'
-    ))
-    
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 100],
-                tickfont=dict(size=9, color="#888888"),
-                gridcolor="rgba(255, 255, 255, 0.08)",
-                linecolor="rgba(255, 255, 255, 0.1)"
-            ),
-            angularaxis=dict(
-                tickfont=dict(size=11, color="#ffffff"),
-                gridcolor="rgba(255, 255, 255, 0.08)"
-            ),
-            bgcolor='rgba(0,0,0,0)'
-        ),
-        showlegend=False,
-        height=280,
-        margin=dict(t=30, b=20, l=40, r=40),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)'
-    )
-    return fig
 
 
 @st.cache_data(ttl=1200)
@@ -150,12 +99,13 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     # 2026-06 공식 문서(ai.google.dev/gemini-api/docs/models) 기준 검증된 모델 목록
     # gemini-3.5-flash = gemini-flash-latest 의 실체 (Stable GA)
     models_to_try = [
-        "gemini-3.5-flash",           # ★ Stable GA — 최우선 (최신 안정 모델)
+        "gemini-3.5-flash",           # ★ Stable GA — 최신 안정 모델 (기본 시도)
+        "gemini-3.5-pro",             # 최신 고성능 모델
+        "gemini-flash-lite-latest",   # Stable — 초경량 고속 폴백
         "gemini-2.5-flash",           # Stable — 이전 세대 가성비 폴백
         "gemini-2.5-pro",             # Stable — 복잡 추론 고성능 폴백
         "gemini-2.0-flash",           # Stable — 최신 2.0 세대 폴백
         "gemini-2.0-flash-lite",      # Stable — 최신 2.0 세대 라이트 폴백
-        "gemini-flash-lite-latest",   # Stable — 초경량 고속 폴백 (가장 넉넉한 쿼터)
         "gemini-2.5-flash-lite",      # Stable — 2.5 라이트 폴백
         "gemini-flash-latest",        # latest alias — 최후 안전망
     ]
@@ -163,9 +113,9 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     last_err = None
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        for attempt in range(2):
+        for attempt in range(1):
             try:
-                r = requests.post(url, json=payload, headers=headers, timeout=15)
+                r = requests.post(url, json=payload, headers=headers, timeout=5)
                 if r.status_code == 200:
                     res_json = r.json()
                     candidates = res_json.get('candidates', [])
@@ -182,7 +132,7 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
                         break
             except Exception as e:
                 last_err = str(e)
-            time.sleep(0.5)
+            time.sleep(0.1)
             
     # 에러 메시지 한글 정제
     friendly_err = "현재 API 서버와의 통신이 일시적으로 지연되고 있습니다. 잠시 후 다시 시도해 주세요."
@@ -1874,6 +1824,72 @@ if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_w
 kis_key = st.secrets.get("KIS_APP_KEY", st.secrets.get("KIS_KEY", os.environ.get("KIS_APP_KEY", os.environ.get("KIS_KEY", ""))))
 kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.environ.get("KIS_APP_SECRET", os.environ.get("KIS_SECRET", ""))))
 
+# 텔레그램 알림 키 (secrets.toml 또는 환경변수에서 로드)
+tg_token   = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_ID",   ""))
+
+# ── 포트폴리오 전체 종목 자동 스캔 (텔레그램 알람) ─────────────────────────
+# 대시보드 갱신(5초 자동 새로고침 포함)마다 포트폴리오 보유 종목 전체를
+# 1분봉 기준으로 신호를 검사하여 매수/청산 신호 발생 시 즉시 알람을 전송합니다.
+if tg_token and tg_chat_id:
+    try:
+        _port_scan = load_portfolio()
+        if _port_scan:
+            for _scan_code, _scan_info in _port_scan.items():
+                try:
+                    _scan_name  = _scan_info.get('name', _scan_code)
+                    _scan_entry = float(_scan_info.get('entry_price', 0.0))
+
+                    # 1분봉 데이터 취득 (KIS 우선 → 네이버 폴백)
+                    _df_scan = pd.DataFrame()
+                    if kis_key and kis_sec:
+                        _df_scan = get_kis_minute_history(kis_key, kis_sec, _scan_code)
+                    if _df_scan.empty:
+                        _df_scan = get_minute_history(_scan_code, count=800)
+
+                    if _df_scan.empty or len(_df_scan) < 20:
+                        continue
+
+                    # 신호 계산
+                    _df_scan = calculate_intraday_signals(_df_scan, my_entry_price=_scan_entry)
+
+                    # 가장 최근 캔들만 확인 (5분 이내 최신 신호만 허용)
+                    _last = _df_scan.iloc[-1]
+                    if 'DateTime' not in _df_scan.columns or pd.isna(_last.get('DateTime')):
+                        continue
+                    _time_diff = (pd.Timestamp.now() - pd.to_datetime(_last['DateTime'])).total_seconds()
+                    if _time_diff >= 300:  # 5분 초과 → 오래된 신호 무시
+                        continue
+
+                    _rsi_v  = float(_last['RSI_14']) if 'RSI_14' in _last and pd.notna(_last.get('RSI_14')) else None
+                    _vwap_v = float(_last['VWAP'])   if 'VWAP'   in _last and pd.notna(_last.get('VWAP'))   else None
+
+                    if _last.get('Buy_Signal') == True:
+                        live_logger.log_buy_signal(
+                            ticker=_scan_code,
+                            price=float(_last['Close']),
+                            timestamp=_last['DateTime'],
+                            name=_scan_name,
+                            tg_token=tg_token,
+                            tg_chat_id=tg_chat_id,
+                            rsi=_rsi_v,
+                            vwap=_vwap_v,
+                        )
+                    elif _last.get('Exit_Signal') == True:
+                        live_logger.log_exit_signal(
+                            ticker=_scan_code,
+                            price=float(_last['Close']),
+                            timestamp=_last['DateTime'],
+                            name=_scan_name,
+                            tg_token=tg_token,
+                            tg_chat_id=tg_chat_id,
+                        )
+                except Exception as _scan_err:
+                    print(f"DEBUG: 포트폴리오 스캔 오류 [{_scan_code}]: {_scan_err}")
+    except Exception as _port_scan_err:
+        print(f"DEBUG: 포트폴리오 전체 스캔 실패: {_port_scan_err}")
+# ──────────────────────────────────────────────────────────────────────────────
+
 if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
     with st.sidebar.spinner("🎯 퀀트 연산 및 데이터 수집 중 (약 30~50초 소요)..."):
         try:
@@ -2119,12 +2135,11 @@ with title_col_right:
     </div>"""
     st.markdown(regime_html, unsafe_allow_html=True)
 
-# 첫 번째 행 (Row 1)과 두 번째 행 (Row 2) 정의
-row1_col1, row1_col2, row1_col3 = st.columns(3)
-row2_col1, row2_col2, row2_col3 = st.columns(3)
+# ── 3열(Column) 그리드 레이아웃 정의 (세로 연속 배치로 공백 제거) ──
+col1, col2, col3 = st.columns(3)
 
 # ── [Panel 1] 실시간 수급 (Treemap) ─────────────────────────
-with row1_col1:
+with col2:
     st.markdown("##### 📊 실시간 수급 (외/기/프)")
     if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
         df_hd_clean = df_hd.copy()
@@ -2264,7 +2279,7 @@ with row1_col1:
         )
         handle_chart_click(ev_p1)
 # ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
-with row1_col2:
+with col2:
     st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
     fig_p2 = go.Figure()
     x_val = pd.Series(dtype=float)  # NameError 방지: df_q 비어있을 때 기본값
@@ -2360,7 +2375,7 @@ with row1_col2:
     handle_chart_click(ev_p2)
 
 # ── [Panel 3] 거래대금 리더 (Horizontal Bar) ─────────────────
-with row1_col3:
+with col3:
     st.markdown("##### 🔥 거래대금 리더 (12)")
     fig_p3 = go.Figure()
     df3 = pd.DataFrame()  # NameError 방지: df_m 비어있을 때 기본값
@@ -2486,7 +2501,7 @@ with row1_col3:
     handle_chart_click(ev_p3)
 
 # ── [Panel 4] 시장 요약 테이블 ──────────────────────────────
-with row2_col1:
+with col1:
     st.markdown("##### 📉 시장 요약")
     fig_p4 = go.Figure()
     if not df_summary.empty:
@@ -2555,14 +2570,14 @@ with row2_col1:
             )
         ))
     fig_p4.update_layout(
-        height=320,
+        height=170,  # 5행 테이블 크기에 맞게 170으로 축소하여 상단 공백 제거
         template='plotly_dark',
         margin=dict(t=10, b=10, l=10, r=10)
     )
     st.plotly_chart(fig_p4, use_container_width=True)
 
 # ── [Panel 5] 코스피/코스닥 수급 (Line) ───────────────────────
-with row2_col2:
+with col1:
     st.markdown("##### 📈 수급 현황 (일중 추이)")
     market_tab = st.radio("수급 구분", ["코스피 수급", "코스닥 수급"], horizontal=True, label_visibility="collapsed", key="p5_market_tab")
     target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
@@ -2607,8 +2622,12 @@ with row2_col2:
             if c in df_line.columns:
                 df_line[c] = pd.to_numeric(df_line[c].astype(str).str.replace(',', ''), errors='coerce')
         
-        # 1분 단위 정규화 (빈 시간은 NaN이 되어 선이 끊어짐)
-        df_line = df_line.set_index('Datetime').resample('1min').asfreq().reset_index()
+        # 1분 단위 정규화 및 선형 보간 (결측치 보간으로 끊김 없는 매끄러운 선 그래프 제공)
+        df_line = df_line.set_index('Datetime').resample('1min').asfreq()
+        num_cols = [c for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net'] if c in df_line.columns]
+        if num_cols:
+            df_line[num_cols] = df_line[num_cols].interpolate(method='linear').ffill().bfill()
+        df_line = df_line.reset_index()
 
         col_cfg = [
             ('Foreign_Net',       '외국인', '#4e9ff5'),
@@ -2621,8 +2640,8 @@ with row2_col2:
                 fig_p5.add_trace(go.Scatter(
                     x=df_line['Datetime'], y=df_line[col],
                     name=name, mode='lines',  # 점(마커) 제거하여 뭉개짐 방지
-                    connectgaps=False,        # 데이터 누락 구간은 선을 잇지 않고 끊어서 표시 (왜곡 방지)
-                    line=dict(color=color, width=2),
+                    connectgaps=True,         # 선이 끊기지 않고 매끄럽게 연결되도록 설정
+                    line=dict(color=color, width=2, shape='spline'),  # 부드러운 곡선(spline) 스타일 적용
                     hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
                 ))
     else:
@@ -2638,7 +2657,7 @@ with row2_col2:
         )
 
     fig_p5.update_layout(
-        height=265,  # Radio 높이 고려한 높이 보정
+        height=450,  # 시장 요약 축소에 맞게 높이를 450으로 확대하여 옆의 Quant Buy 끝선과 맞춤
         template='plotly_dark',
         margin=dict(t=10, b=10, l=10, r=10),
         hovermode='x unified',
@@ -2659,7 +2678,7 @@ with row2_col2:
     st.plotly_chart(fig_p5, use_container_width=True, config={'displayModeBar': False})
 
 # ── [Panel 6] 상승률 리더 (Horizontal Bar) ───────────────────
-with row2_col3:
+with col3:
     st.markdown("##### 🚀 상승률 리더 (12)")
     fig_p6 = go.Figure()
     df6 = pd.DataFrame()  # NameError 방지: df_m 비어있을 때 기본값
@@ -2775,10 +2794,28 @@ if st.session_state.sel_code:
             if 'DateTime' in df_1min.columns and pd.notna(last_row.get('DateTime')):
                 time_diff = (pd.Timestamp.now() - pd.to_datetime(last_row['DateTime'])).total_seconds()
                 if time_diff < 300:  # 5분 이내의 최신 신호만 로깅 허용
+                    _rsi_val  = float(last_row['RSI_14']) if 'RSI_14'  in last_row and pd.notna(last_row.get('RSI_14'))  else None
+                    _vwap_val = float(last_row['VWAP'])   if 'VWAP'    in last_row and pd.notna(last_row.get('VWAP'))    else None
                     if last_row.get('Buy_Signal') == True:
-                        live_logger.log_buy_signal(code_disp, float(last_row['Close']), last_row['DateTime'])
+                        live_logger.log_buy_signal(
+                            ticker=code_disp,
+                            price=float(last_row['Close']),
+                            timestamp=last_row['DateTime'],
+                            name=name_disp,
+                            tg_token=tg_token,
+                            tg_chat_id=tg_chat_id,
+                            rsi=_rsi_val,
+                            vwap=_vwap_val,
+                        )
                     elif last_row.get('Exit_Signal') == True:
-                        live_logger.log_exit_signal(code_disp, float(last_row['Close']), last_row['DateTime'])
+                        live_logger.log_exit_signal(
+                            ticker=code_disp,
+                            price=float(last_row['Close']),
+                            timestamp=last_row['DateTime'],
+                            name=name_disp,
+                            tg_token=tg_token,
+                            tg_chat_id=tg_chat_id,
+                        )
         # -------------------------------------------------------------
 
     if df_candle.empty:
@@ -3203,10 +3240,20 @@ if st.session_state.sel_code:
                 ai_comment = str(e)
             except Exception as e:
                 ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
-            
             # AI 코멘트 내부의 줄바꿈을 <br>로 변환하되, Gemini가 생성한 정상적인 HTML 태그(<strong>, <ul> 등)는 보존하기 위해 escape 하지 않음
-            ai_comment_escaped = ai_comment.replace('\n', '<br/>')
+            import re
+            ai_comment_cleaned = ai_comment
+            # 마크다운 ** 기호가 혼용된 경우 <strong> 태그로 치환 보정
+            ai_comment_cleaned = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', ai_comment_cleaned)
+            # HTML 블록/리스트 태그 근처의 불필요한 줄바꿈(\n) 제거
+            tag_patterns = [r'</ul>', r'<ul>', r'</ol>', r'<ol>', r'</li>', r'<li>', r'<br\s*/?>', r'</strong>', r'<strong>']
+            for pat in tag_patterns:
+                ai_comment_cleaned = re.sub(rf'\s*\n\s*({pat})', r'\1', ai_comment_cleaned)
+                ai_comment_cleaned = re.sub(rf'({pat})\s*\n\s*', r'\1', ai_comment_cleaned)
             
+            ai_comment_escaped = ai_comment_cleaned.replace('\n', '<br/>')
+            # 중복된 br 태그 단일화하여 지나친 공백 방지
+            ai_comment_escaped = re.sub(r'(<br\s*/?>\s*){2,}', '<br/>', ai_comment_escaped)
             opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
 <h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
@@ -3346,6 +3393,8 @@ if st.session_state.sel_code:
                     st.html(table_html)
                 else:
                     st.info("등록된 포트폴리오 종목이 없습니다.")
+                
+
 
         # 캔들 차트 생성
         fig_c = make_subplots(

@@ -3,6 +3,13 @@ import os
 import pandas as pd
 from datetime import datetime
 
+# 텔레그램 알림 모듈 임포트 (선택적 — 미설치 시에도 로거는 정상 동작)
+try:
+    from telegram_notifier import notify_buy_signal, notify_exit_signal
+    _TG_AVAILABLE = True
+except ImportError:
+    _TG_AVAILABLE = False
+
 LOG_PATH = "scalping_signal_log.csv"
 
 def _ensure_log_file():
@@ -63,25 +70,80 @@ def get_last_entry(ticker: str):
         print(f"DEBUG: get_last_entry error: {e}")
         return None
 
-def log_buy_signal(ticker: str, price: float, timestamp: datetime):
+def log_buy_signal(
+    ticker: str,
+    price: float,
+    timestamp: datetime,
+    name: str = "",
+    tg_token: str = "",
+    tg_chat_id: str = "",
+    rsi: float = None,
+    vwap: float = None,
+):
+    """매수 신호를 CSV에 기록하고, 텔레그램으로 실시간 알림을 전송.
+    
+    Args:
+        ticker:     종목 코드
+        price:      현재가
+        timestamp:  신호 발생 시각
+        name:       종목명 (텔레그램 메시지 표시용)
+        tg_token:   텔레그램 봇 토큰 (없으면 알림 생략)
+        tg_chat_id: 텔레그램 Chat ID (없으면 알림 생략)
+        rsi:        RSI 값 (선택 — 메시지에 포함)
+        vwap:       VWAP 값 (선택 — 메시지에 포함)
+    """
     _ensure_log_file()
     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:00')
     
     if is_already_logged(ticker, "BUY_SIGNAL", ts_str):
-        return  # 이미 기록됨
+        return  # 이미 기록됨 (중복 방지)
         
     with open(LOG_PATH, "a", newline="", encoding="utf-8-sig") as f:
         csv.writer(f).writerow([
             str(ticker), "BUY_SIGNAL", ts_str, price,
             "", ""
         ])
+    
+    # 텔레그램 알림 전송 (토큰/Chat ID가 설정된 경우에만)
+    if _TG_AVAILABLE and tg_token and tg_chat_id:
+        try:
+            notify_buy_signal(
+                token=tg_token,
+                chat_id=tg_chat_id,
+                ticker=ticker,
+                name=name if name else ticker,
+                price=price,
+                timestamp=timestamp,
+                rsi=rsi,
+                vwap=vwap,
+            )
+        except Exception as e:
+            print(f"DEBUG: 텔레그램 매수 알림 전송 실패: {e}")
 
-def log_exit_signal(ticker: str, price: float, timestamp: datetime):
+
+def log_exit_signal(
+    ticker: str,
+    price: float,
+    timestamp: datetime,
+    name: str = "",
+    tg_token: str = "",
+    tg_chat_id: str = "",
+):
+    """매도/청산 신호를 CSV에 기록하고, PnL 계산 후 텔레그램으로 실시간 알림을 전송.
+    
+    Args:
+        ticker:     종목 코드
+        price:      현재가
+        timestamp:  신호 발생 시각
+        name:       종목명 (텔레그램 메시지 표시용)
+        tg_token:   텔레그램 봇 토큰 (없으면 알림 생략)
+        tg_chat_id: 텔레그램 Chat ID (없으면 알림 생략)
+    """
     _ensure_log_file()
     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:00')
     
     if is_already_logged(ticker, "EXIT_SIGNAL", ts_str):
-        return  # 이미 기록됨
+        return  # 이미 기록됨 (중복 방지)
         
     entry = get_last_entry(ticker)
     pnl_pct = ""
@@ -98,3 +160,19 @@ def log_exit_signal(ticker: str, price: float, timestamp: datetime):
             str(ticker), "EXIT_SIGNAL", ts_str, price,
             pnl_pct, holding_minutes
         ])
+    
+    # 텔레그램 알림 전송 (토큰/Chat ID가 설정된 경우에만)
+    if _TG_AVAILABLE and tg_token and tg_chat_id:
+        try:
+            notify_exit_signal(
+                token=tg_token,
+                chat_id=tg_chat_id,
+                ticker=ticker,
+                name=name if name else ticker,
+                price=price,
+                timestamp=timestamp,
+                pnl_pct=pnl_pct if pnl_pct != "" else None,
+                holding_minutes=holding_minutes if holding_minutes != "" else None,
+            )
+        except Exception as e:
+            print(f"DEBUG: 텔레그램 청산 알림 전송 실패: {e}")
