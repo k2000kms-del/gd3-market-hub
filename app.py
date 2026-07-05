@@ -99,15 +99,13 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     # 2026-06 공식 문서(ai.google.dev/gemini-api/docs/models) 기준 검증된 모델 목록
     # gemini-3.5-flash = gemini-flash-latest 의 실체 (Stable GA)
     models_to_try = [
-        "gemini-3.5-flash",           # ★ Stable GA — 최신 안정 모델 (기본 시도)
-        "gemini-3.5-pro",             # 최신 고성능 모델
-        "gemini-flash-lite-latest",   # Stable — 초경량 고속 폴백
-        "gemini-2.5-flash",           # Stable — 이전 세대 가성비 폴백
-        "gemini-2.5-pro",             # Stable — 복잡 추론 고성능 폴백
-        "gemini-2.0-flash",           # Stable — 최신 2.0 세대 폴백
-        "gemini-2.0-flash-lite",      # Stable — 최신 2.0 세대 라이트 폴백
-        "gemini-2.5-flash-lite",      # Stable — 2.5 라이트 폴백
-        "gemini-flash-latest",        # latest alias — 최후 안전망
+        "gemini-2.5-flash",           # ★ 최신 2.5세대 기본 고성능/가성비 모델 (테스트 완료)
+        "gemini-1.5-flash",           # ★ 안정적인 1.5세대 표준 모델
+        "gemini-2.5-pro",             # 고난도 추론용 2.5세대 프로 모델
+        "gemini-1.5-pro",             # 안정적인 1.5세대 프로 모델
+        "gemini-2.0-flash",           # 2.0세대 플래시 모델
+        "gemini-2.0-flash-lite",      # 2.0세대 플래시 라이트 모델
+        "gemini-flash-latest"         # 최후 폴백용 닉네임 엔드포인트
     ]
     
     last_err = None
@@ -1728,10 +1726,10 @@ if st.sidebar.button("Gemini에게 질문하기", use_container_width=True):
 
 # 헬프 센터 다중 모델 순차 폴백 호출
             models_to_try = [
-                "gemini-3.5-flash",
                 "gemini-2.5-flash",
+                "gemini-1.5-flash",
                 "gemini-2.5-pro",
-                "gemini-2.5-flash-lite",
+                "gemini-1.5-pro",
                 "gemini-flash-latest"
             ]
 
