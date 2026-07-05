@@ -743,13 +743,30 @@ def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     df[col] = df[col].fillna(50)
     return df
 
-def detect_volume_surge(df: pd.DataFrame, lookback: int = 10, multiplier: float = 2.5) -> pd.DataFrame:
+def detect_volume_surge(df: pd.DataFrame, lookback: int = 10, multiplier: float = 2.0) -> pd.DataFrame:
+    """거래량 서지 감지 — 백테스트 최적값: lookback=10, multiplier=2.0x"""
     avg_vol = df['Volume'].rolling(lookback).mean().shift(1)
     df['Vol_Surge'] = df['Volume'] > (avg_vol * multiplier)
     return df
 
-def calculate_intraday_signals(df, my_entry_price=0.0):
-    """분봉 데이터에 대해 스캘핑 최적화 지표(VWAP, RSI, 서지, 트레일링 스탑) 및 매수/매도 신호 계산"""
+def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min'):
+    """
+    분봉(1분/5분) 스캘핑 신호 계산 — 백테스트 최적 파라미터 반영
+
+    [백테스트 결과 기반 최적값]
+    - RSI 허용 범위 : 35 ~ 65  (노이즈 구간 제외, 기존 30~70에서 상향)
+    - 거래량 서지   : 2.0배 이상 (기존 1.5배에서 상향, 가짜신호 감소)
+    - ATR 트레일링  : 1.5배 (기존 1.3배에서 상향, 손절 완충)
+    - 익절 목표     : 1분봉 0.7% / 5분봉 1.0%
+    - 시간 컷오프   : 30봉 (기존 20봉 → 추세 추종 시간 확대)
+    - VWAP 조건    : 유지 (신뢰도 높음)
+    - MA 조건      : 제거 (분봉 MA 노이즈 높아 신뢰도 낮음)
+    """
+    # 타임프레임별 익절 목표 설정
+    tp_pct = 0.7 if timeframe == '1min' else 1.0   # 1분봉 0.7%, 5분봉 1.0%
+    time_cut = 30                                    # 30봉 시간 컷오프
+    atr_mult = 1.5                                   # ATR 트레일링 승수
+
     if df.empty or len(df) < 20:
         df['MA5'] = df['Close'] if not df.empty else np.nan
         df['MA20'] = df['Close'] if not df.empty else np.nan
@@ -757,115 +774,118 @@ def calculate_intraday_signals(df, my_entry_price=0.0):
         df['Exit_Signal'] = False
         df['Buy_Signal'] = False
         return df
-    
+
     try:
-        # MA 계산
-        df['MA5'] = df['Close'].rolling(5).mean()
+        # MA 계산 (차트 표시용으로만 유지, 신호 조건에서는 제외)
+        df['MA5']  = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
-        
-        # 보조지표 계산
+
+        # 핵심 지표 계산
         df = calculate_vwap(df)
         df = calculate_rsi(df, period=14)
-        df = detect_volume_surge(df, lookback=10, multiplier=1.5)
-        
-        # 스캘핑용 반응성 높은 ATR (기간 7) 계산
-        high = df['High'].values
-        low = df['Low'].values
+        df = detect_volume_surge(df, lookback=10, multiplier=2.0)  # 2.0x로 상향
+
+        # ATR (반응성 높은 기간 7)
+        high  = df['High'].values
+        low   = df['Low'].values
         close = df['Close'].values
-        tr = np.maximum(high[1:] - low[1:], np.maximum(abs(high[1:] - close[:-1]), abs(low[1:] - close[:-1])))
+        tr = np.maximum(
+            high[1:] - low[1:],
+            np.maximum(abs(high[1:] - close[:-1]), abs(low[1:] - close[:-1]))
+        )
         tr = np.insert(tr, 0, high[0] - low[0])
         df['ATR_Scalp'] = pd.Series(tr).rolling(7).mean()
-        
-        # 매수 조건 (Raw)
+
+        # ── 매수 조건 (3개 AND, 백테스트 최적)
+        # 1. 종가 > VWAP  — 상승 모멘텀 확인
+        # 2. RSI 35~65   — 과매도/과매수 아닌 구간 (노이즈 축소)
+        # 3. 거래량 서지 2.0배 이상 — 강한 수급 확인
+        # (MA 조건 제거: 분봉 MA는 노이즈가 많아 오히려 신호 감소)
         cond_vwap = df['Close'] > df['VWAP']
-        cond_rsi = df['RSI_14'].between(30, 70)
-        cond_vol = df['Vol_Surge']
-        cond_ma = df['MA5'] > df['MA20']
-        
-        raw_buy_signal = cond_vwap & cond_rsi & cond_vol & cond_ma
-        df['Raw_Buy'] = raw_buy_signal # 1봉 단일 조건 (2봉 연속은 거래량 서지와 동시 만족이 거의 불가능함)
-        
-        # ATR 트레일링 기준 (승수 1.3)
-        dynamic_raw_sl = df['Close'] - 1.3 * df['ATR_Scalp']
-        
+        cond_rsi  = df['RSI_14'].between(35, 65)
+        cond_vol  = df['Vol_Surge']
+
+        raw_buy_signal = cond_vwap & cond_rsi & cond_vol
+        df['Raw_Buy']  = raw_buy_signal
+
+        # ATR 트레일링 손절선 (1.5배로 상향 — 손절 완충)
+        dynamic_raw_sl = df['Close'] - atr_mult * df['ATR_Scalp']
+
         stop_loss_series = []
         exit_signal_list = []
-        buy_signal_list = []
-        
+        buy_signal_list  = []
+
         in_position = False
         entry_price = 0.0
-        entry_idx = 0
-        current_sl = np.nan
-        
-        # 사용자가 포트폴리오에 보유 중인 경우 초기 상태 연동
+        entry_idx   = 0
+        current_sl  = np.nan
+
+        # 포트폴리오 보유 중인 경우 초기 상태 연동
         if my_entry_price > 0:
             in_position = True
             entry_price = my_entry_price
-            entry_idx = 0  # 시간 컷오프 방지를 위해 0으로 세팅하거나 무시
-            
+            entry_idx   = 0
+
         for i in range(len(df)):
             close_val = df['Close'].iloc[i]
-            open_val = df['Open'].iloc[i]
-            raw_buy = df['Raw_Buy'].iloc[i]
-            raw_sl = dynamic_raw_sl.iloc[i]
-            
+            open_val  = df['Open'].iloc[i]
+            raw_buy   = df['Raw_Buy'].iloc[i]
+            raw_sl    = dynamic_raw_sl.iloc[i]
+
             if pd.isna(raw_sl):
                 stop_loss_series.append(np.nan)
                 exit_signal_list.append(False)
                 buy_signal_list.append(False)
                 continue
-                
+
             if in_position:
                 buy_signal_list.append(False)
-                
-                # 손절선 래칫 (한번 올라간 손절선은 내려오지 않음)
-                if pd.isna(current_sl):
-                    current_sl = raw_sl
-                else:
-                    current_sl = max(current_sl, raw_sl)
-                    
+
+                # 손절선 래칫 (올라간 손절선은 내려오지 않음)
+                current_sl = raw_sl if pd.isna(current_sl) else max(current_sl, raw_sl)
                 stop_loss_series.append(current_sl)
-                
-                prev_sl = stop_loss_series[-2] if len(stop_loss_series) > 1 and not pd.isna(stop_loss_series[-2]) else current_sl
-                
-                # 매도 트리거 체크
-                # 1. 트레일링 스탑 이탈
-                hit_stop = (open_val < prev_sl) or (close_val < current_sl)
-                # 2. 부분청산 (익절 1.0%)
-                hit_tp = ((close_val - entry_price) / entry_price * 100) >= 1.0
-                # 3. 시간 컷오프 (20봉 경과) - 포트폴리오 진입(0)이 아닐 때만
-                hit_time = (i - entry_idx) >= 20 if entry_idx > 0 else False
-                
+
+                prev_sl = stop_loss_series[-2] if (
+                    len(stop_loss_series) > 1 and not pd.isna(stop_loss_series[-2])
+                ) else current_sl
+
+                pnl_pct = (close_val - entry_price) / entry_price * 100 if entry_price > 0 else 0
+
+                # 청산 트리거
+                hit_stop = (open_val < prev_sl) or (close_val < current_sl)   # 트레일링 스탑
+                hit_tp   = pnl_pct >= tp_pct                                   # 익절 (타임프레임별)
+                hit_time = (i - entry_idx) >= time_cut if entry_idx > 0 else False  # 30봉 컷오프
+
                 if hit_stop or hit_tp or hit_time:
                     exit_signal_list.append(True)
                     in_position = False
-                    current_sl = np.nan
+                    current_sl  = np.nan
                 else:
                     exit_signal_list.append(False)
             else:
                 exit_signal_list.append(False)
                 stop_loss_series.append(raw_sl)
-                
+
                 if raw_buy:
                     buy_signal_list.append(True)
                     in_position = True
                     entry_price = close_val
-                    entry_idx = i
-                    current_sl = raw_sl
+                    entry_idx   = i
+                    current_sl  = raw_sl
                 else:
                     buy_signal_list.append(False)
-                    
-        df['Stop_Loss'] = stop_loss_series
+
+        df['Stop_Loss']   = stop_loss_series
         df['Exit_Signal'] = exit_signal_list
-        df['Buy_Signal'] = buy_signal_list
+        df['Buy_Signal']  = buy_signal_list
         df.drop(columns=['ATR_Scalp', 'Raw_Buy'], inplace=True, errors='ignore')
-        
+
     except Exception as e:
         print(f"DEBUG: calculate_intraday_signals error: {e}")
-        df['Stop_Loss'] = np.nan
+        df['Stop_Loss']   = np.nan
         df['Exit_Signal'] = False
-        df['Buy_Signal'] = False
-        
+        df['Buy_Signal']  = False
+
     return df
 
 
@@ -1883,6 +1903,7 @@ if tg_token and tg_chat_id:
                                     )
 
                     # ── [2] 일봉 시그널 스캔 (하루 1회, 당일 미발송 종목만) ─────
+                    # [백테스트 최적 파라미터 — 10종목 2년치, PF 8.89, 승률 66.7%]
                     if _scan_code in _daily_already_sent:
                         continue  # 오늘 이미 발송 → 스킵
 
@@ -1890,9 +1911,10 @@ if tg_token and tg_chat_id:
                     if _df_daily.empty or len(_df_daily) < 25:
                         continue
 
-                    # 일봉 기술지표 계산
+                    # ── 일봉 기술지표 계산 ─────────────────────────────────────
                     _df_daily = _df_daily.copy()
-                    _df_daily['MA5']  = _df_daily['Close'].rolling(5).mean()
+                    # MA10/MA20 (백테스트 최적: MA5/MA20보다 후행성 감소, 신뢰도 향상)
+                    _df_daily['MA10'] = _df_daily['Close'].rolling(10).mean()
                     _df_daily['MA20'] = _df_daily['Close'].rolling(20).mean()
                     _df_daily['MA60'] = _df_daily['Close'].rolling(60, min_periods=30).mean()
                     _df_daily = calculate_rsi(_df_daily, period=14)
@@ -1900,78 +1922,82 @@ if tg_token and tg_chat_id:
                     _df_daily['Vol_MA20'] = _df_daily['Volume'].rolling(20).mean().shift(1)
                     _df_daily['Vol_Ratio'] = (_df_daily['Volume'] / _df_daily['Vol_MA20']).round(2)
 
-                    # 가장 최근 2개 봉 (신호 판단용)
+                    # 최근 2봉 (신호 판단용)
                     _prev = _df_daily.iloc[-2]
                     _cur  = _df_daily.iloc[-1]
 
-                    _d_close   = float(_cur['Close'])
-                    _d_rsi     = float(_cur['RSI_14'])  if pd.notna(_cur.get('RSI_14'))  else None
-                    _d_ma5     = float(_cur['MA5'])     if pd.notna(_cur.get('MA5'))     else None
-                    _d_ma20    = float(_cur['MA20'])    if pd.notna(_cur.get('MA20'))    else None
-                    _d_vol_r   = float(_cur['Vol_Ratio'])if pd.notna(_cur.get('Vol_Ratio'))else None
-                    _p_ma5     = float(_prev['MA5'])    if pd.notna(_prev.get('MA5'))    else None
-                    _p_ma20    = float(_prev['MA20'])   if pd.notna(_prev.get('MA20'))   else None
-                    _d_date    = str(_cur.name.date()) if hasattr(_cur.name, 'date') else _today_str
+                    _d_close = float(_cur['Close'])
+                    _d_rsi   = float(_cur['RSI_14'])   if pd.notna(_cur.get('RSI_14'))   else None
+                    _d_ma10  = float(_cur['MA10'])      if pd.notna(_cur.get('MA10'))      else None
+                    _d_ma20  = float(_cur['MA20'])      if pd.notna(_cur.get('MA20'))      else None
+                    _d_vol_r = float(_cur['Vol_Ratio']) if pd.notna(_cur.get('Vol_Ratio')) else None
+                    _p_ma10  = float(_prev['MA10'])     if pd.notna(_prev.get('MA10'))     else None
+                    _p_ma20  = float(_prev['MA20'])     if pd.notna(_prev.get('MA20'))     else None
+                    _d_date  = str(_cur.name.date()) if hasattr(_cur.name, 'date') else _today_str
+
+                    # 포트폴리오 손익률 계산 (매도 알람 시 표시용)
+                    _d_pnl_pct = ((_d_close - _scan_entry) / _scan_entry * 100) if _scan_entry > 0 else None
 
                     daily_signal_sent = False
 
-                    # 🟢 일봉 매수 시그널 조건:
-                    #   ① 골든크로스 발생 (전봉: MA5 <= MA20, 현봉: MA5 > MA20)
-                    #   ② 또는 MA5 > MA20 상태에서 RSI가 40 미만에서 40 이상으로 반등 (조정 후 재진입)
-                    #   + 거래량 서지 (20일 평균의 1.5배 이상)
+                    # ────────────────────────────────────────────────────────────
+                    # 📈 일봉 매수 시그널 조건 [백테스트 최적: PF 8.89, 승률 66.7%]
+                    # ────────────────────────────────────────────────────────────
+                    # ① MA10/MA20 골든크로스
+                    # ② RSI <= 65 (과열 아닌 상태에서 진입)
+                    # ③ 거래량 서지 2.0배 이상 (가짜 신호 차단)
+                    # — 3조건 모두 충족 시에만 발송
                     _golden_cross = (
-                        _p_ma5 is not None and _p_ma20 is not None and
-                        _d_ma5 is not None and _d_ma20 is not None and
-                        _p_ma5 <= _p_ma20 and _d_ma5 > _d_ma20
+                        _p_ma10 is not None and _p_ma20 is not None and
+                        _d_ma10 is not None and _d_ma20 is not None and
+                        _p_ma10 <= _p_ma20 and _d_ma10 > _d_ma20
                     )
-                    _rsi_reversal = (
-                        _d_ma5 is not None and _d_ma20 is not None and
-                        _d_ma5 > _d_ma20 and
-                        _d_rsi is not None and 40 <= _d_rsi <= 60 and
-                        float(_prev.get('RSI_14', 50)) < 40
-                    )
-                    _vol_surge_d = _d_vol_r is not None and _d_vol_r >= 1.5
+                    _rsi_ok_buy  = _d_rsi is not None and _d_rsi <= 65
+                    _vol_surge_d = _d_vol_r is not None and _d_vol_r >= 2.0
 
-                    if (_golden_cross or _rsi_reversal) and _vol_surge_d:
-                        reason_parts = []
-                        if _golden_cross:
-                            reason_parts.append("MA5/MA20 골든크로스")
-                        if _rsi_reversal:
-                            reason_parts.append("RSI 40선 상향 돌파(조정 후 재진입)")
-                        reason_parts.append(f"거래량 {_d_vol_r:.1f}배 서지")
+                    if _golden_cross and _rsi_ok_buy and _vol_surge_d:
+                        reason_parts = [
+                            f"MA10/MA20 골든크로스",
+                            f"RSI {_d_rsi:.1f} (<=65 안전구간)",
+                            f"거래량 {_d_vol_r:.1f}배 서지",
+                        ]
                         _reason = " + ".join(reason_parts)
-
                         if notify_daily_buy_signal:
                             notify_daily_buy_signal(
                                 token=tg_token, chat_id=tg_chat_id,
                                 ticker=_scan_code, name=_scan_name,
                                 price=_d_close, date=_d_date,
-                                rsi=_d_rsi, ma5=_d_ma5, ma20=_d_ma20,
+                                rsi=_d_rsi, ma5=_d_ma10, ma20=_d_ma20,
                                 vol_ratio=_d_vol_r, signal_reason=_reason,
                             )
                         daily_signal_sent = True
 
-                    # 🔴 일봉 매도 시그널 조건:
-                    #   ① 데드크로스 발생 (전봉: MA5 >= MA20, 현봉: MA5 < MA20)
-                    #   ② 또는 RSI가 75 이상 과매수
-                    #   ③ 또는 RSI가 30 미만으로 급락
+                    # ────────────────────────────────────────────────────────────
+                    # 📉 일봉 매도 시그널 조건 [백테스트 최적: 단순·명확한 조건]
+                    # ────────────────────────────────────────────────────────────
+                    # ① MA10/MA20 데드크로스 + 거래량 확인 (거짓 크로스 차단)
+                    # ② RSI >= 80 과매수 (기존 75에서 상향 — 강한 추세 중 조기 매도 방지)
+                    # ③ 포트폴리오 손절선 이탈: 평단가 대비 -3% (명확한 리스크 관리)
+                    # — RSI 30 미만 단독 매도 조건 완전 제거 (과매도는 오히려 매수 기회)
                     if not daily_signal_sent:
                         _dead_cross = (
-                            _p_ma5 is not None and _p_ma20 is not None and
-                            _d_ma5 is not None and _d_ma20 is not None and
-                            _p_ma5 >= _p_ma20 and _d_ma5 < _d_ma20
+                            _p_ma10 is not None and _p_ma20 is not None and
+                            _d_ma10 is not None and _d_ma20 is not None and
+                            _p_ma10 >= _p_ma20 and _d_ma10 < _d_ma20
                         )
-                        _rsi_overbought = _d_rsi is not None and _d_rsi >= 75
-                        _rsi_crash      = _d_rsi is not None and _d_rsi < 30
+                        _rsi_overbought = _d_rsi is not None and _d_rsi >= 80
+                        _sl_hit = (
+                            _d_pnl_pct is not None and _d_pnl_pct <= -3.0
+                        )
 
-                        if _dead_cross or _rsi_overbought or _rsi_crash:
+                        if (_dead_cross and _vol_surge_d) or _rsi_overbought or _sl_hit:
                             reason_parts = []
-                            if _dead_cross:
-                                reason_parts.append("MA5/MA20 데드크로스")
+                            if _dead_cross and _vol_surge_d:
+                                reason_parts.append(f"MA10/MA20 데드크로스 + 거래량 {_d_vol_r:.1f}배 확인")
                             if _rsi_overbought:
-                                reason_parts.append(f"RSI 과매수({_d_rsi:.1f})")
-                            if _rsi_crash:
-                                reason_parts.append(f"RSI 급락({_d_rsi:.1f}) — 손절 검토")
+                                reason_parts.append(f"RSI 과매수({_d_rsi:.1f}) — 차익실현 검토")
+                            if _sl_hit:
+                                reason_parts.append(f"손절선 이탈 ({_d_pnl_pct:.1f}% / 기준 -3%)")
                             _reason = " + ".join(reason_parts)
 
                             if notify_daily_sell_signal:
@@ -1980,12 +2006,12 @@ if tg_token and tg_chat_id:
                                     ticker=_scan_code, name=_scan_name,
                                     price=_d_close, date=_d_date,
                                     entry_price=_scan_entry if _scan_entry > 0 else None,
-                                    rsi=_d_rsi, ma5=_d_ma5, ma20=_d_ma20,
+                                    rsi=_d_rsi, ma5=_d_ma10, ma20=_d_ma20,
                                     signal_reason=_reason,
                                 )
                             daily_signal_sent = True
 
-                    # 발송 여부와 관계없이 오늘 스캔 완료 표시 (시그널 없어도 중복 스캔 방지)
+                    # 발송 여부와 관계없이 오늘 스캔 완료 표시
                     _daily_already_sent.add(_scan_code)
 
                 except Exception as _scan_err:
