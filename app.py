@@ -1831,61 +1831,169 @@ tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_
 # ── 포트폴리오 전체 종목 자동 스캔 (텔레그램 알람) ─────────────────────────
 # 대시보드 갱신(5초 자동 새로고침 포함)마다 포트폴리오 보유 종목 전체를
 # 1분봉 기준으로 신호를 검사하여 매수/청산 신호 발생 시 즉시 알람을 전송합니다.
+# 추가로 일봉 기준 매수/매도 시그널도 하루 1회 스캔하여 알람을 전송합니다.
 if tg_token and tg_chat_id:
+    try:
+        from telegram_notifier import notify_daily_buy_signal, notify_daily_sell_signal
+    except ImportError:
+        notify_daily_buy_signal = None
+        notify_daily_sell_signal = None
+
     try:
         _port_scan = load_portfolio()
         if _port_scan:
+            # ── 일봉 시그널 전송 여부 (하루 1회만) ──────────────────────────────
+            # session_state에 오늘 날짜를 기록해 중복 발송을 방지합니다.
+            _today_str = datetime.now(_KST).strftime('%Y-%m-%d')
+            _daily_sent_key = f"daily_signal_sent_{_today_str}"
+            _daily_already_sent = st.session_state.get(_daily_sent_key, set())
+
             for _scan_code, _scan_info in _port_scan.items():
                 try:
                     _scan_name  = _scan_info.get('name', _scan_code)
                     _scan_entry = float(_scan_info.get('entry_price', 0.0))
 
-                    # 1분봉 데이터 취득 (KIS 우선 → 네이버 폴백)
+                    # ── [1] 1분봉 스캘핑 신호 스캔 ──────────────────────────────
                     _df_scan = pd.DataFrame()
                     if kis_key and kis_sec:
                         _df_scan = get_kis_minute_history(kis_key, kis_sec, _scan_code)
                     if _df_scan.empty:
                         _df_scan = get_minute_history(_scan_code, count=800)
 
-                    if _df_scan.empty or len(_df_scan) < 20:
+                    if not _df_scan.empty and len(_df_scan) >= 20:
+                        _df_scan = calculate_intraday_signals(_df_scan, my_entry_price=_scan_entry)
+                        _last = _df_scan.iloc[-1]
+                        if 'DateTime' in _df_scan.columns and not pd.isna(_last.get('DateTime')):
+                            _time_diff = (pd.Timestamp.now() - pd.to_datetime(_last['DateTime'])).total_seconds()
+                            if _time_diff < 300:  # 5분 이내 신호만 허용
+                                _rsi_v  = float(_last['RSI_14']) if 'RSI_14' in _last and pd.notna(_last.get('RSI_14')) else None
+                                _vwap_v = float(_last['VWAP'])   if 'VWAP'   in _last and pd.notna(_last.get('VWAP'))   else None
+                                if _last.get('Buy_Signal') == True:
+                                    live_logger.log_buy_signal(
+                                        ticker=_scan_code, price=float(_last['Close']),
+                                        timestamp=_last['DateTime'], name=_scan_name,
+                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
+                                        rsi=_rsi_v, vwap=_vwap_v,
+                                    )
+                                elif _last.get('Exit_Signal') == True:
+                                    live_logger.log_exit_signal(
+                                        ticker=_scan_code, price=float(_last['Close']),
+                                        timestamp=_last['DateTime'], name=_scan_name,
+                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
+                                    )
+
+                    # ── [2] 일봉 시그널 스캔 (하루 1회, 당일 미발송 종목만) ─────
+                    if _scan_code in _daily_already_sent:
+                        continue  # 오늘 이미 발송 → 스킵
+
+                    _df_daily = get_stock_history(_scan_code)
+                    if _df_daily.empty or len(_df_daily) < 25:
                         continue
 
-                    # 신호 계산
-                    _df_scan = calculate_intraday_signals(_df_scan, my_entry_price=_scan_entry)
+                    # 일봉 기술지표 계산
+                    _df_daily = _df_daily.copy()
+                    _df_daily['MA5']  = _df_daily['Close'].rolling(5).mean()
+                    _df_daily['MA20'] = _df_daily['Close'].rolling(20).mean()
+                    _df_daily['MA60'] = _df_daily['Close'].rolling(60, min_periods=30).mean()
+                    _df_daily = calculate_rsi(_df_daily, period=14)
+                    # 거래량 20일 평균 대비 배율
+                    _df_daily['Vol_MA20'] = _df_daily['Volume'].rolling(20).mean().shift(1)
+                    _df_daily['Vol_Ratio'] = (_df_daily['Volume'] / _df_daily['Vol_MA20']).round(2)
 
-                    # 가장 최근 캔들만 확인 (5분 이내 최신 신호만 허용)
-                    _last = _df_scan.iloc[-1]
-                    if 'DateTime' not in _df_scan.columns or pd.isna(_last.get('DateTime')):
-                        continue
-                    _time_diff = (pd.Timestamp.now() - pd.to_datetime(_last['DateTime'])).total_seconds()
-                    if _time_diff >= 300:  # 5분 초과 → 오래된 신호 무시
-                        continue
+                    # 가장 최근 2개 봉 (신호 판단용)
+                    _prev = _df_daily.iloc[-2]
+                    _cur  = _df_daily.iloc[-1]
 
-                    _rsi_v  = float(_last['RSI_14']) if 'RSI_14' in _last and pd.notna(_last.get('RSI_14')) else None
-                    _vwap_v = float(_last['VWAP'])   if 'VWAP'   in _last and pd.notna(_last.get('VWAP'))   else None
+                    _d_close   = float(_cur['Close'])
+                    _d_rsi     = float(_cur['RSI_14'])  if pd.notna(_cur.get('RSI_14'))  else None
+                    _d_ma5     = float(_cur['MA5'])     if pd.notna(_cur.get('MA5'))     else None
+                    _d_ma20    = float(_cur['MA20'])    if pd.notna(_cur.get('MA20'))    else None
+                    _d_vol_r   = float(_cur['Vol_Ratio'])if pd.notna(_cur.get('Vol_Ratio'))else None
+                    _p_ma5     = float(_prev['MA5'])    if pd.notna(_prev.get('MA5'))    else None
+                    _p_ma20    = float(_prev['MA20'])   if pd.notna(_prev.get('MA20'))   else None
+                    _d_date    = str(_cur.name.date()) if hasattr(_cur.name, 'date') else _today_str
 
-                    if _last.get('Buy_Signal') == True:
-                        live_logger.log_buy_signal(
-                            ticker=_scan_code,
-                            price=float(_last['Close']),
-                            timestamp=_last['DateTime'],
-                            name=_scan_name,
-                            tg_token=tg_token,
-                            tg_chat_id=tg_chat_id,
-                            rsi=_rsi_v,
-                            vwap=_vwap_v,
+                    daily_signal_sent = False
+
+                    # 🟢 일봉 매수 시그널 조건:
+                    #   ① 골든크로스 발생 (전봉: MA5 <= MA20, 현봉: MA5 > MA20)
+                    #   ② 또는 MA5 > MA20 상태에서 RSI가 40 미만에서 40 이상으로 반등 (조정 후 재진입)
+                    #   + 거래량 서지 (20일 평균의 1.5배 이상)
+                    _golden_cross = (
+                        _p_ma5 is not None and _p_ma20 is not None and
+                        _d_ma5 is not None and _d_ma20 is not None and
+                        _p_ma5 <= _p_ma20 and _d_ma5 > _d_ma20
+                    )
+                    _rsi_reversal = (
+                        _d_ma5 is not None and _d_ma20 is not None and
+                        _d_ma5 > _d_ma20 and
+                        _d_rsi is not None and 40 <= _d_rsi <= 60 and
+                        float(_prev.get('RSI_14', 50)) < 40
+                    )
+                    _vol_surge_d = _d_vol_r is not None and _d_vol_r >= 1.5
+
+                    if (_golden_cross or _rsi_reversal) and _vol_surge_d:
+                        reason_parts = []
+                        if _golden_cross:
+                            reason_parts.append("MA5/MA20 골든크로스")
+                        if _rsi_reversal:
+                            reason_parts.append("RSI 40선 상향 돌파(조정 후 재진입)")
+                        reason_parts.append(f"거래량 {_d_vol_r:.1f}배 서지")
+                        _reason = " + ".join(reason_parts)
+
+                        if notify_daily_buy_signal:
+                            notify_daily_buy_signal(
+                                token=tg_token, chat_id=tg_chat_id,
+                                ticker=_scan_code, name=_scan_name,
+                                price=_d_close, date=_d_date,
+                                rsi=_d_rsi, ma5=_d_ma5, ma20=_d_ma20,
+                                vol_ratio=_d_vol_r, signal_reason=_reason,
+                            )
+                        daily_signal_sent = True
+
+                    # 🔴 일봉 매도 시그널 조건:
+                    #   ① 데드크로스 발생 (전봉: MA5 >= MA20, 현봉: MA5 < MA20)
+                    #   ② 또는 RSI가 75 이상 과매수
+                    #   ③ 또는 RSI가 30 미만으로 급락
+                    if not daily_signal_sent:
+                        _dead_cross = (
+                            _p_ma5 is not None and _p_ma20 is not None and
+                            _d_ma5 is not None and _d_ma20 is not None and
+                            _p_ma5 >= _p_ma20 and _d_ma5 < _d_ma20
                         )
-                    elif _last.get('Exit_Signal') == True:
-                        live_logger.log_exit_signal(
-                            ticker=_scan_code,
-                            price=float(_last['Close']),
-                            timestamp=_last['DateTime'],
-                            name=_scan_name,
-                            tg_token=tg_token,
-                            tg_chat_id=tg_chat_id,
-                        )
+                        _rsi_overbought = _d_rsi is not None and _d_rsi >= 75
+                        _rsi_crash      = _d_rsi is not None and _d_rsi < 30
+
+                        if _dead_cross or _rsi_overbought or _rsi_crash:
+                            reason_parts = []
+                            if _dead_cross:
+                                reason_parts.append("MA5/MA20 데드크로스")
+                            if _rsi_overbought:
+                                reason_parts.append(f"RSI 과매수({_d_rsi:.1f})")
+                            if _rsi_crash:
+                                reason_parts.append(f"RSI 급락({_d_rsi:.1f}) — 손절 검토")
+                            _reason = " + ".join(reason_parts)
+
+                            if notify_daily_sell_signal:
+                                notify_daily_sell_signal(
+                                    token=tg_token, chat_id=tg_chat_id,
+                                    ticker=_scan_code, name=_scan_name,
+                                    price=_d_close, date=_d_date,
+                                    entry_price=_scan_entry if _scan_entry > 0 else None,
+                                    rsi=_d_rsi, ma5=_d_ma5, ma20=_d_ma20,
+                                    signal_reason=_reason,
+                                )
+                            daily_signal_sent = True
+
+                    # 발송 여부와 관계없이 오늘 스캔 완료 표시 (시그널 없어도 중복 스캔 방지)
+                    _daily_already_sent.add(_scan_code)
+
                 except Exception as _scan_err:
                     print(f"DEBUG: 포트폴리오 스캔 오류 [{_scan_code}]: {_scan_err}")
+
+            # 오늘 발송 기록 세션에 저장
+            st.session_state[_daily_sent_key] = _daily_already_sent
+
     except Exception as _port_scan_err:
         print(f"DEBUG: 포트폴리오 전체 스캔 실패: {_port_scan_err}")
 # ──────────────────────────────────────────────────────────────────────────────

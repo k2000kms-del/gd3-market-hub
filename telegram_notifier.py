@@ -160,3 +160,116 @@ def notify_custom(token: str, chat_id: str, message: str) -> bool:
         bool: 전송 성공 여부
     """
     return _send(token, chat_id, message)
+
+
+def notify_daily_buy_signal(
+    token: str,
+    chat_id: str,
+    ticker: str,
+    name: str,
+    price: float,
+    date: str,
+    rsi: float = None,
+    ma5: float = None,
+    ma20: float = None,
+    vol_ratio: float = None,
+    signal_reason: str = "",
+) -> bool:
+    """일봉 기준 매수 시그널 발생 시 텔레그램 알림 전송.
+
+    Args:
+        token:         텔레그램 봇 토큰
+        chat_id:       수신자 Chat ID
+        ticker:        종목 코드 (예: '005930')
+        name:          종목명 (예: '삼성전자')
+        price:         당일 종가
+        date:          발생 날짜 문자열 (예: '2026-07-05')
+        rsi:           RSI(14) 값 (선택)
+        ma5:           5일 이동평균 (선택)
+        ma20:          20일 이동평균 (선택)
+        vol_ratio:     거래량 / 20일 평균 거래량 비율 (선택)
+        signal_reason: 신호 발생 이유 요약 문자열 (선택)
+
+    Returns:
+        bool: 전송 성공 여부
+    """
+    extra_lines = ""
+    if rsi is not None:
+        extra_lines += f"\n├ RSI(14): <b>{rsi:.1f}</b>"
+    if ma5 is not None and ma20 is not None:
+        extra_lines += f"\n├ MA5: <b>{ma5:,.0f}원</b> / MA20: <b>{ma20:,.0f}원</b>"
+    if vol_ratio is not None:
+        extra_lines += f"\n└ 거래량 배율: <b>{vol_ratio:.1f}배</b> (20일 평균 대비)"
+    if signal_reason:
+        extra_lines += f"\n\n📋 <i>{signal_reason}</i>"
+
+    text = (
+        f"📈 <b>[일봉 매수신호]</b> {name} ({ticker})\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 당일 종가: <b>{price:,.0f}원</b>\n"
+        f"📅 기준일: {date}"
+        f"{extra_lines}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"<i>GD 3.0 Market Hub 일봉 시그널</i>"
+    )
+    return _send(token, chat_id, text)
+
+
+def notify_daily_sell_signal(
+    token: str,
+    chat_id: str,
+    ticker: str,
+    name: str,
+    price: float,
+    date: str,
+    entry_price: float = None,
+    rsi: float = None,
+    ma5: float = None,
+    ma20: float = None,
+    signal_reason: str = "",
+) -> bool:
+    """일봉 기준 매도 시그널 발생 시 텔레그램 알림 전송.
+
+    Args:
+        token:         텔레그램 봇 토큰
+        chat_id:       수신자 Chat ID
+        ticker:        종목 코드
+        name:          종목명
+        price:         당일 종가
+        date:          발생 날짜 문자열
+        entry_price:   포트폴리오 매수 평단가 (손익 표시용, 선택)
+        rsi:           RSI(14) 값 (선택)
+        ma5:           5일 이동평균 (선택)
+        ma20:          20일 이동평균 (선택)
+        signal_reason: 신호 발생 이유 요약 문자열 (선택)
+
+    Returns:
+        bool: 전송 성공 여부
+    """
+    extra_lines = ""
+
+    # 수익률 계산 (평단가가 있는 경우)
+    if entry_price and entry_price > 0:
+        pnl = (price - entry_price) / entry_price * 100
+        pnl_emoji = "📈" if pnl >= 0 else "📉"
+        pnl_sign = "+" if pnl >= 0 else ""
+        extra_lines += f"\n├ 평단가: <b>{entry_price:,.0f}원</b>"
+        extra_lines += f"\n├ 수익률: <b>{pnl_sign}{pnl:.2f}%</b> {pnl_emoji}"
+
+    if rsi is not None:
+        extra_lines += f"\n├ RSI(14): <b>{rsi:.1f}</b>"
+    if ma5 is not None and ma20 is not None:
+        extra_lines += f"\n└ MA5: <b>{ma5:,.0f}원</b> / MA20: <b>{ma20:,.0f}원</b>"
+    if signal_reason:
+        extra_lines += f"\n\n📋 <i>{signal_reason}</i>"
+
+    text = (
+        f"📉 <b>[일봉 매도신호]</b> {name} ({ticker})\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 당일 종가: <b>{price:,.0f}원</b>\n"
+        f"📅 기준일: {date}"
+        f"{extra_lines}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"<i>GD 3.0 Market Hub 일봉 시그널</i>"
+    )
+    return _send(token, chat_id, text)
