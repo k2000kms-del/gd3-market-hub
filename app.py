@@ -99,7 +99,8 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     # 2026-06 공식 문서(ai.google.dev/gemini-api/docs/models) 기준 검증된 모델 목록
     # gemini-3.5-flash = gemini-flash-latest 의 실체 (Stable GA)
     models_to_try = [
-        "gemini-2.5-flash",           # ★ 최신 2.5세대 기본 고성능/가성비 모델 (테스트 완료)
+        "gemini-3.5-flash",           # ★ 최신 3.5세대 기본 고성능/가성비 모델 (검증 완료)
+        "gemini-2.5-flash",           # ★ 2.5세대 기본 고성능/가성비 모델
         "gemini-1.5-flash",           # ★ 안정적인 1.5세대 표준 모델
         "gemini-2.5-pro",             # 고난도 추론용 2.5세대 프로 모델
         "gemini-1.5-pro",             # 안정적인 1.5세대 프로 모델
@@ -1726,6 +1727,7 @@ if st.sidebar.button("Gemini에게 질문하기", use_container_width=True):
 
 # 헬프 센터 다중 모델 순차 폴백 호출
             models_to_try = [
+                "gemini-3.5-flash",
                 "gemini-2.5-flash",
                 "gemini-1.5-flash",
                 "gemini-2.5-pro",
