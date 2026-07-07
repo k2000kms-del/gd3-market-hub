@@ -110,38 +110,52 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     ]
     
     last_err = None
+    is_quota_limit = False
+    is_invalid_key = False
+    
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        for attempt in range(1):
-            try:
-                r = requests.post(url, json=payload, headers=headers, timeout=5)
-                if r.status_code == 200:
-                    res_json = r.json()
-                    candidates = res_json.get('candidates', [])
-                    if candidates:
-                        content = candidates[0].get('content', {})
-                        parts = content.get('parts', [])
-                        if parts:
-                            return parts[0].get('text', '').strip()
-                    last_err = "API 응답 본문에 텍스트 데이터가 누락되었습니다."
-                else:
-                    last_err = f"API 응답 코드: {r.status_code} ({r.text[:100]})"
-                    # 할당량 초과(429), 서버 정체(503), 모델 없음(404) 시 신속한 전환을 위해 즉시 다음 모델로 폴백
-                    if r.status_code in [404, 429, 503]:
-                        break
-            except Exception as e:
-                last_err = str(e)
-            time.sleep(0.1)
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=5)
+            if r.status_code == 200:
+                res_json = r.json()
+                candidates = res_json.get('candidates', [])
+                if candidates:
+                    content = candidates[0].get('content', {})
+                    parts = content.get('parts', [])
+                    if parts:
+                        return parts[0].get('text', '').strip()
+                last_err = "API 응답 본문에 텍스트 데이터가 누락되었습니다."
+            else:
+                last_err = f"API 응답 코드: {r.status_code} ({r.text[:100]})"
+                
+                # 429 (속도 제한)인 경우 즉시 다른 모델 시도 중단 (불필요한 중복 요청 최소화)
+                if r.status_code == 429:
+                    is_quota_limit = True
+                    break
+                # 400 (잘못된 API 키)인 경우 즉시 중단
+                elif r.status_code == 400:
+                    is_invalid_key = True
+                    break
+        except Exception as e:
+            last_err = str(e)
+            if "429" in last_err or "Quota" in last_err:
+                is_quota_limit = True
+                break
+            elif "400" in last_err or "API key" in last_err:
+                is_invalid_key = True
+                break
+        time.sleep(0.1)
             
     # 에러 메시지 한글 정제
     friendly_err = "현재 API 서버와의 통신이 일시적으로 지연되고 있습니다. 잠시 후 다시 시도해 주세요."
-    if last_err:
+    if is_quota_limit:
+        friendly_err = "Gemini API 호출 속도 제한을 초과했습니다. 잠시 후 다시 시도해 주세요."
+    elif is_invalid_key:
+        friendly_err = "입력하신 Gemini API Key가 올바르지 않습니다. 사이드바 설정을 다시 확인해 주세요."
+    elif last_err:
         if "503" in last_err or "high demand" in last_err:
             friendly_err = "Gemini API 서버에 일시적으로 접속자가 몰려 응답이 지연되고 있습니다. 잠시 후 새로고침해 주세요."
-        elif "429" in last_err or "Quota" in last_err:
-            friendly_err = "Gemini API 호출 속도 제한을 초과했습니다. 잠시 후 다시 시도해 주세요."
-        elif "400" in last_err or "API key" in last_err:
-            friendly_err = "입력하신 Gemini API Key가 올바르지 않습니다. 사이드바 설정을 다시 확인해 주세요."
             
     raise RuntimeWarning(f"⚠️ {friendly_err}")
             
@@ -381,6 +395,48 @@ def fetch_naver_realtime_supply():
 
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+def _fetch_remote_portfolio_raw():
+    gh_token = st.secrets.get("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))
+    if gh_token:
+        import base64
+        import requests
+        url = "https://api.github.com/repos/k2000kms-del/gd3-market-hub/contents/data/my_portfolio.json"
+        headers = {"Authorization": f"token {gh_token}", "Accept": "application/vnd.github.v3+json"}
+        try:
+            res = requests.get(url, headers=headers, timeout=3)
+            if res.status_code == 200:
+                content_b64 = res.json().get('content', '')
+                if content_b64:
+                    content_str = base64.b64decode(content_b64).decode('utf-8')
+                    return json.loads(content_str)
+        except Exception as e:
+            print(f"DEBUG: _fetch_remote_portfolio_raw failed: {e}")
+    return None
+
+def _load_portfolio_raw():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
+    
+    remote_data = _fetch_remote_portfolio_raw()
+    if remote_data is not None:
+        try:
+            os.makedirs(os.path.dirname(port_path), exist_ok=True)
+            with open(port_path, 'w', encoding='utf-8') as f:
+                json.dump(remote_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        return remote_data
+        
+    if os.path.exists(port_path):
+        try:
+            with open(port_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"DEBUG: _load_portfolio_raw fallback failed: {e}")
+    return {}
 
 @st.cache_data(ttl=60)
 def fetch_remote_portfolio():
@@ -507,9 +563,8 @@ DATA_FILES = [
     'df_supply_intraday.csv',
 ]
 
-@st.cache_data(ttl=300)  # 5분 캐시 (일봉 데이터는 자주 바뀌지 않음)
-def get_stock_history(code: str):
-    """종목 일봉 데이터 조회 (90일)"""
+def _get_stock_history_raw(code: str):
+    """종목 일봉 데이터 조회 (90일) - 캐시 없는 내부 함수"""
     try:
         # 20일 샹들리에 출구(Chandelier Exit) 계산에 충분한 데이터를 패딩하기 위해 180일 전부터 가져옴 (영업일 기준 약 120일)
         start = (pd.Timestamp.now() - pd.Timedelta(days=180)).strftime('%Y-%m-%d')
@@ -518,9 +573,13 @@ def get_stock_history(code: str):
     except Exception:
         return pd.DataFrame()
 
+@st.cache_data(ttl=300)  # 5분 캐시 (일봉 데이터는 자주 바뀌지 않음)
+def get_stock_history(code: str):
+    """종목 일봉 데이터 조회 (90일)"""
+    return _get_stock_history_raw(code)
 
-@st.cache_data(ttl=3600*20)
-def get_kis_access_token(app_key: str, app_secret: str) -> str:
+
+def _get_kis_access_token_raw(app_key: str, app_secret: str) -> str:
     try:
         url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
         headers = {"content-type": "application/json"}
@@ -537,11 +596,14 @@ def get_kis_access_token(app_key: str, app_secret: str) -> str:
         print(f"DEBUG: KIS token error: {e}")
     return ""
 
-@st.cache_data(ttl=60)
-def get_kis_minute_history(app_key: str, app_secret: str, code: str):
-    """KIS API 당일 1분봉 데이터 조회 (OHLCV 완벽 지원, 페이징 처리로 약 390봉 수집)"""
+@st.cache_data(ttl=3600*20)
+def get_kis_access_token(app_key: str, app_secret: str) -> str:
+    return _get_kis_access_token_raw(app_key, app_secret)
+
+def _get_kis_minute_history_raw(app_key: str, app_secret: str, code: str):
+    """KIS API 당일 1분봉 데이터 조회 (캐시 없는 내부 함수)"""
     try:
-        token = get_kis_access_token(app_key, app_secret)
+        token = _get_kis_access_token_raw(app_key, app_secret)
         if not token:
             return pd.DataFrame()
             
@@ -633,10 +695,14 @@ def get_kis_minute_history(app_key: str, app_secret: str, code: str):
         print(f"DEBUG: KIS minute history error: {e}")
     return pd.DataFrame()
 
-
 @st.cache_data(ttl=60)
-def get_minute_history(code: str, count: int = 800):
-    """네이버 실시간 1분봉 데이터 조회"""
+def get_kis_minute_history(app_key: str, app_secret: str, code: str):
+    """KIS API 당일 1분봉 데이터 조회 (OHLCV 완벽 지원, 캐싱 지원)"""
+    return _get_kis_minute_history_raw(app_key, app_secret, code)
+
+
+def _get_minute_history_raw(code: str, count: int = 800):
+    """네이버 실시간 1분봉 데이터 조회 (캐시 없는 내부 함수)"""
     try:
         url = f"https://api.finance.naver.com/siseJson.naver?symbol={code}&requestType=0&timeframe=minute&count={count}"
         res = requests.get(url, timeout=5)
@@ -682,6 +748,11 @@ def get_minute_history(code: str, count: int = 800):
     except Exception as e:
         print(f"DEBUG: Failed to get minute history: {e}")
     return pd.DataFrame()
+
+@st.cache_data(ttl=60)
+def get_minute_history(code: str, count: int = 800):
+    """네이버 실시간 1분봉 데이터 조회 (캐싱 지원)"""
+    return _get_minute_history_raw(code, count)
 
 
 def resample_to_5min(df_1min):
@@ -887,6 +958,222 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min'):
 
     return df
 
+
+# ── 백그라운드 포트폴리오 스캔 관련 전역 상태 ──
+_daily_signals_sent_lock = threading.Lock()
+_daily_signals_sent_date = ""
+_daily_signals_sent_codes = set()
+
+def run_portfolio_background_scanner():
+    """
+    백그라운드에서 주기적으로 포트폴리오를 스캔하는 데몬 스레드 루프
+    """
+    global _daily_signals_sent_date, _daily_signals_sent_codes
+    
+    # 파일 로그 기록
+    try:
+        with open("daemon_debug.txt", "a", encoding="utf-8") as f_log:
+            f_log.write(f"[{datetime.now()}] DEBUG: run_portfolio_background_scanner daemon thread started.\n")
+    except Exception:
+        pass
+    
+    # KST 시간대 설정을 위해 내부 import 및 계산
+    from datetime import timezone, timedelta
+    _KST = timezone(timedelta(hours=9))
+    
+    while True:
+        try:
+            try:
+                with open("daemon_debug.txt", "a", encoding="utf-8") as f_log:
+                    f_log.write(f"[{datetime.now()}] DEBUG: Loop iteration started.\n")
+            except Exception:
+                pass
+                
+            # 1. 텔레그램 및 KIS 설정 로드
+            tg_token   = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+            tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_ID",   ""))
+            kis_key    = st.secrets.get("KIS_APP_KEY", st.secrets.get("KIS_KEY", os.environ.get("KIS_APP_KEY", os.environ.get("KIS_KEY", ""))))
+            kis_sec    = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.environ.get("KIS_APP_SECRET", os.environ.get("KIS_SECRET", ""))))
+            
+            if not (tg_token and tg_chat_id):
+                try:
+                    with open("daemon_debug.txt", "a", encoding="utf-8") as f_log:
+                        f_log.write(f"[{datetime.now()}] DEBUG: Telegram credentials missing (token: {bool(tg_token)}, chat_id: {bool(tg_chat_id)}). Sleeping...\n")
+                except Exception:
+                    pass
+                time.sleep(15)
+                continue
+                
+            try:
+                from telegram_notifier import notify_daily_buy_signal, notify_daily_sell_signal
+            except ImportError:
+                notify_daily_buy_signal = None
+                notify_daily_sell_signal = None
+                
+            # 2. 포트폴리오 로드
+            portfolio_data = _load_portfolio_raw()
+            if not portfolio_data:
+                try:
+                    with open("daemon_debug.txt", "a", encoding="utf-8") as f_log:
+                        f_log.write(f"[{datetime.now()}] DEBUG: Portfolio data is empty. Sleeping...\n")
+                except Exception:
+                    pass
+                time.sleep(15)
+                continue
+                
+            # 일봉 이미 발송한 정보 동기화
+            today_str = datetime.now(_KST).strftime('%Y-%m-%d')
+            with _daily_signals_sent_lock:
+                if _daily_signals_sent_date != today_str:
+                    _daily_signals_sent_date = today_str
+                    _daily_signals_sent_codes.clear()
+            
+            # 각 종목을 처리할 타겟 함수
+            def scan_single_stock(code, info):
+                try:
+                    name = info.get('name', code)
+                    entry_price = float(info.get('entry_price', 0.0))
+                    
+                    # 1분봉 데이터 수집 및 연산
+                    df_scan = pd.DataFrame()
+                    if kis_key and kis_sec:
+                        df_scan = _get_kis_minute_history_raw(kis_key, kis_sec, code)
+                    if df_scan.empty:
+                        df_scan = _get_minute_history_raw(code, count=800)
+                        
+                    if not df_scan.empty and len(df_scan) >= 20:
+                        df_scan = calculate_intraday_signals(df_scan, my_entry_price=entry_price)
+                        last_row = df_scan.iloc[-1]
+                        if 'DateTime' in df_scan.columns and not pd.isna(last_row.get('DateTime')):
+                            # UTC/KST 차이를 감안한 시간차 체크
+                            time_diff = (pd.Timestamp.now() - pd.to_datetime(last_row['DateTime'])).total_seconds()
+                            if time_diff < 300: # 5분 이내
+                                rsi_v = float(last_row['RSI_14']) if 'RSI_14' in last_row and pd.notna(last_row.get('RSI_14')) else None
+                                vwap_v = float(last_row['VWAP']) if 'VWAP' in last_row and pd.notna(last_row.get('VWAP')) else None
+                                if last_row.get('Buy_Signal') == True:
+                                    live_logger.log_buy_signal(
+                                        ticker=code, price=float(last_row['Close']),
+                                        timestamp=last_row['DateTime'], name=name,
+                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
+                                        rsi=rsi_v, vwap=vwap_v
+                                    )
+                                elif last_row.get('Exit_Signal') == True:
+                                    live_logger.log_exit_signal(
+                                        ticker=code, price=float(last_row['Close']),
+                                        timestamp=last_row['DateTime'], name=name,
+                                        tg_token=tg_token, tg_chat_id=tg_chat_id
+                                    )
+                                    
+                    # 일봉 시그널 스캔
+                    with _daily_signals_sent_lock:
+                        already_sent = code in _daily_signals_sent_codes
+                        
+                    if not already_sent:
+                        df_daily = _get_stock_history_raw(code)
+                        if not df_daily.empty and len(df_daily) >= 25:
+                            df_daily = df_daily.copy()
+                            df_daily['MA10'] = df_daily['Close'].rolling(10).mean()
+                            df_daily['MA20'] = df_daily['Close'].rolling(20).mean()
+                            df_daily['MA60'] = df_daily['Close'].rolling(60, min_periods=30).mean()
+                            df_daily = calculate_rsi(df_daily, period=14)
+                            df_daily['Vol_MA20'] = df_daily['Volume'].rolling(20).mean().shift(1)
+                            df_daily['Vol_Ratio'] = (df_daily['Volume'] / df_daily['Vol_MA20']).round(2)
+                            
+                            prev_row = df_daily.iloc[-2]
+                            cur_row = df_daily.iloc[-1]
+                            
+                            d_close = float(cur_row['Close'])
+                            d_rsi = float(cur_row['RSI_14']) if pd.notna(cur_row.get('RSI_14')) else None
+                            d_ma10 = float(cur_row['MA10']) if pd.notna(cur_row.get('MA10')) else None
+                            d_ma20 = float(cur_row['MA20']) if pd.notna(cur_row.get('MA20')) else None
+                            d_vol_r = float(cur_row['Vol_Ratio']) if pd.notna(cur_row.get('Vol_Ratio')) else None
+                            p_ma10 = float(prev_row['MA10']) if pd.notna(prev_row.get('MA10')) else None
+                            p_ma20 = float(prev_row['MA20']) if pd.notna(prev_row.get('MA20')) else None
+                            d_date = str(cur_row.name.date()) if hasattr(cur_row.name, 'date') else today_str
+                            
+                            d_pnl_pct = ((d_close - entry_price) / entry_price * 100) if entry_price > 0 else None
+                            daily_signal_sent = False
+                            
+                            # 일봉 매수 조건
+                            golden_cross = (
+                                p_ma10 is not None and p_ma20 is not None and
+                                d_ma10 is not None and d_ma20 is not None and
+                                p_ma10 <= p_ma20 and d_ma10 > d_ma20
+                            )
+                            rsi_ok_buy = d_rsi is not None and d_rsi <= 65
+                            vol_surge_d = d_vol_r is not None and d_vol_r >= 2.0
+                            
+                            if golden_cross and rsi_ok_buy and vol_surge_d:
+                                reason = f"MA10/MA20 골든크로스 + RSI {d_rsi:.1f} (<=65 안전구간) + 거래량 {d_vol_r:.1f}배 서지"
+                                if notify_daily_buy_signal:
+                                    notify_daily_buy_signal(
+                                        token=tg_token, chat_id=tg_chat_id,
+                                        ticker=code, name=name, price=d_close, date=d_date,
+                                        rsi=d_rsi, ma5=d_ma10, ma20=d_ma20, vol_ratio=d_vol_r,
+                                        signal_reason=reason
+                                    )
+                                daily_signal_sent = True
+                                
+                            # 일봉 매도 조건
+                            if not daily_signal_sent:
+                                dead_cross = (
+                                    p_ma10 is not None and p_ma20 is not None and
+                                    d_ma10 is not None and d_ma20 is not None and
+                                    p_ma10 >= p_ma20 and d_ma10 < d_ma20
+                                )
+                                rsi_overbought = d_rsi is not None and d_rsi >= 80
+                                sl_hit = d_pnl_pct is not None and d_pnl_pct <= -3.0
+                                
+                                if (dead_cross and vol_surge_d) or rsi_overbought or sl_hit:
+                                    reason_parts = []
+                                    if dead_cross and vol_surge_d:
+                                        reason_parts.append(f"MA10/MA20 데드크로스 + 거래량 {d_vol_r:.1f}배 확인")
+                                    if rsi_overbought:
+                                        reason_parts.append(f"RSI 과매수({d_rsi:.1f}) — 차익실현 검토")
+                                    if sl_hit:
+                                        reason_parts.append(f"손절선 이탈 ({d_pnl_pct:.1f}% / 기준 -3%)")
+                                    reason = " + ".join(reason_parts)
+                                    
+                                    if notify_daily_sell_signal:
+                                        notify_daily_sell_signal(
+                                            token=tg_token, chat_id=tg_chat_id,
+                                            ticker=code, name=name, price=d_close, date=d_date,
+                                            entry_price=entry_price if entry_price > 0 else None,
+                                            rsi=d_rsi, ma5=d_ma10, ma20=d_ma20,
+                                            signal_reason=reason
+                                        )
+                                    daily_signal_sent = True
+                                    
+                            if daily_signal_sent:
+                                with _daily_signals_sent_lock:
+                                    _daily_signals_sent_codes.add(code)
+                                    
+                except Exception as ex:
+                    print(f"DEBUG: Back scanner thread single stock [{code}] error: {ex}")
+                    
+            # 3. ThreadPoolExecutor를 이용한 병렬 스캔 적용
+            # 동시 스레드 수는 포트폴리오 개수 또는 적당한 수(예: 5)로 제한
+            max_workers = min(len(portfolio_data), 5) if portfolio_data else 1
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(scan_single_stock, code, info) for code, info in portfolio_data.items()]
+                # 스캔 완료 대기
+                for fut in futures:
+                    fut.result()
+                    
+        except Exception as err:
+            print(f"DEBUG: Back scanner thread loop error: {err}")
+            
+        # 15초 대기 후 다음 스캔
+        time.sleep(15)
+
+@st.cache_resource
+def start_background_portfolio_scanner():
+    """
+    최초 기동 시 백그라운드 스레드를 1회 구동하고 스레드 객체를 리턴함.
+    """
+    t = threading.Thread(target=run_portfolio_background_scanner, daemon=True, name="PortfolioScannerDaemon")
+    t.start()
+    return t
 
 
 @st.cache_data(ttl=60)  # 60초 캐시 — rerun마다 전체 시장 다운로드 방지 (핵심 병목)
@@ -1848,180 +2135,25 @@ kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.envir
 tg_token   = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_ID",   ""))
 
-# ── 포트폴리오 전체 종목 자동 스캔 (텔레그램 알람) ─────────────────────────
-# 대시보드 갱신(5초 자동 새로고침 포함)마다 포트폴리오 보유 종목 전체를
-# 1분봉 기준으로 신호를 검사하여 매수/청산 신호 발생 시 즉시 알람을 전송합니다.
-# 추가로 일봉 기준 매수/매도 시그널도 하루 1회 스캔하여 알람을 전송합니다.
-if tg_token and tg_chat_id:
-    try:
-        from telegram_notifier import notify_daily_buy_signal, notify_daily_sell_signal
-    except ImportError:
-        notify_daily_buy_signal = None
-        notify_daily_sell_signal = None
+# ── 백그라운드 포트폴리오 스캐너 시작 ──
+# st.cache_resource에 의해 최초 1회만 구동됩니다.
+try:
+    start_background_portfolio_scanner()
+except Exception as _bg_err:
+    print(f"DEBUG: 백그라운드 스캐너 기동 실패: {_bg_err}")
+# ── URL 쿼리 파라미터에서 refresh_gemini 감지 및 강제 갱신 처리 ──
+try:
+    if st.query_params.get("refresh_gemini") == "1":
+        code_to_refresh = st.query_params.get("sel_code")
+        if code_to_refresh:
+            st.session_state[f"force_refresh_gemini_{code_to_refresh}"] = True
+        
+        # 주소창에서 refresh_gemini 파라미터만 제거
+        del st.query_params["refresh_gemini"]
+        st.rerun()
+except Exception as _q_err:
+    pass
 
-    try:
-        _port_scan = load_portfolio()
-        if _port_scan:
-            # ── 일봉 시그널 전송 여부 (하루 1회만) ──────────────────────────────
-            # session_state에 오늘 날짜를 기록해 중복 발송을 방지합니다.
-            _today_str = datetime.now(_KST).strftime('%Y-%m-%d')
-            _daily_sent_key = f"daily_signal_sent_{_today_str}"
-            _daily_already_sent = st.session_state.get(_daily_sent_key, set())
-
-            for _scan_code, _scan_info in _port_scan.items():
-                try:
-                    _scan_name  = _scan_info.get('name', _scan_code)
-                    _scan_entry = float(_scan_info.get('entry_price', 0.0))
-
-                    # ── [1] 1분봉 스캘핑 신호 스캔 ──────────────────────────────
-                    _df_scan = pd.DataFrame()
-                    if kis_key and kis_sec:
-                        _df_scan = get_kis_minute_history(kis_key, kis_sec, _scan_code)
-                    if _df_scan.empty:
-                        _df_scan = get_minute_history(_scan_code, count=800)
-
-                    if not _df_scan.empty and len(_df_scan) >= 20:
-                        _df_scan = calculate_intraday_signals(_df_scan, my_entry_price=_scan_entry)
-                        _last = _df_scan.iloc[-1]
-                        if 'DateTime' in _df_scan.columns and not pd.isna(_last.get('DateTime')):
-                            _time_diff = (pd.Timestamp.now() - pd.to_datetime(_last['DateTime'])).total_seconds()
-                            if _time_diff < 300:  # 5분 이내 신호만 허용
-                                _rsi_v  = float(_last['RSI_14']) if 'RSI_14' in _last and pd.notna(_last.get('RSI_14')) else None
-                                _vwap_v = float(_last['VWAP'])   if 'VWAP'   in _last and pd.notna(_last.get('VWAP'))   else None
-                                if _last.get('Buy_Signal') == True:
-                                    live_logger.log_buy_signal(
-                                        ticker=_scan_code, price=float(_last['Close']),
-                                        timestamp=_last['DateTime'], name=_scan_name,
-                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
-                                        rsi=_rsi_v, vwap=_vwap_v,
-                                    )
-                                elif _last.get('Exit_Signal') == True:
-                                    live_logger.log_exit_signal(
-                                        ticker=_scan_code, price=float(_last['Close']),
-                                        timestamp=_last['DateTime'], name=_scan_name,
-                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
-                                    )
-
-                    # ── [2] 일봉 시그널 스캔 (하루 1회, 당일 미발송 종목만) ─────
-                    # [백테스트 최적 파라미터 — 10종목 2년치, PF 8.89, 승률 66.7%]
-                    if _scan_code in _daily_already_sent:
-                        continue  # 오늘 이미 발송 → 스킵
-
-                    _df_daily = get_stock_history(_scan_code)
-                    if _df_daily.empty or len(_df_daily) < 25:
-                        continue
-
-                    # ── 일봉 기술지표 계산 ─────────────────────────────────────
-                    _df_daily = _df_daily.copy()
-                    # MA10/MA20 (백테스트 최적: MA5/MA20보다 후행성 감소, 신뢰도 향상)
-                    _df_daily['MA10'] = _df_daily['Close'].rolling(10).mean()
-                    _df_daily['MA20'] = _df_daily['Close'].rolling(20).mean()
-                    _df_daily['MA60'] = _df_daily['Close'].rolling(60, min_periods=30).mean()
-                    _df_daily = calculate_rsi(_df_daily, period=14)
-                    # 거래량 20일 평균 대비 배율
-                    _df_daily['Vol_MA20'] = _df_daily['Volume'].rolling(20).mean().shift(1)
-                    _df_daily['Vol_Ratio'] = (_df_daily['Volume'] / _df_daily['Vol_MA20']).round(2)
-
-                    # 최근 2봉 (신호 판단용)
-                    _prev = _df_daily.iloc[-2]
-                    _cur  = _df_daily.iloc[-1]
-
-                    _d_close = float(_cur['Close'])
-                    _d_rsi   = float(_cur['RSI_14'])   if pd.notna(_cur.get('RSI_14'))   else None
-                    _d_ma10  = float(_cur['MA10'])      if pd.notna(_cur.get('MA10'))      else None
-                    _d_ma20  = float(_cur['MA20'])      if pd.notna(_cur.get('MA20'))      else None
-                    _d_vol_r = float(_cur['Vol_Ratio']) if pd.notna(_cur.get('Vol_Ratio')) else None
-                    _p_ma10  = float(_prev['MA10'])     if pd.notna(_prev.get('MA10'))     else None
-                    _p_ma20  = float(_prev['MA20'])     if pd.notna(_prev.get('MA20'))     else None
-                    _d_date  = str(_cur.name.date()) if hasattr(_cur.name, 'date') else _today_str
-
-                    # 포트폴리오 손익률 계산 (매도 알람 시 표시용)
-                    _d_pnl_pct = ((_d_close - _scan_entry) / _scan_entry * 100) if _scan_entry > 0 else None
-
-                    daily_signal_sent = False
-
-                    # ────────────────────────────────────────────────────────────
-                    # 📈 일봉 매수 시그널 조건 [백테스트 최적: PF 8.89, 승률 66.7%]
-                    # ────────────────────────────────────────────────────────────
-                    # ① MA10/MA20 골든크로스
-                    # ② RSI <= 65 (과열 아닌 상태에서 진입)
-                    # ③ 거래량 서지 2.0배 이상 (가짜 신호 차단)
-                    # — 3조건 모두 충족 시에만 발송
-                    _golden_cross = (
-                        _p_ma10 is not None and _p_ma20 is not None and
-                        _d_ma10 is not None and _d_ma20 is not None and
-                        _p_ma10 <= _p_ma20 and _d_ma10 > _d_ma20
-                    )
-                    _rsi_ok_buy  = _d_rsi is not None and _d_rsi <= 65
-                    _vol_surge_d = _d_vol_r is not None and _d_vol_r >= 2.0
-
-                    if _golden_cross and _rsi_ok_buy and _vol_surge_d:
-                        reason_parts = [
-                            f"MA10/MA20 골든크로스",
-                            f"RSI {_d_rsi:.1f} (<=65 안전구간)",
-                            f"거래량 {_d_vol_r:.1f}배 서지",
-                        ]
-                        _reason = " + ".join(reason_parts)
-                        if notify_daily_buy_signal:
-                            notify_daily_buy_signal(
-                                token=tg_token, chat_id=tg_chat_id,
-                                ticker=_scan_code, name=_scan_name,
-                                price=_d_close, date=_d_date,
-                                rsi=_d_rsi, ma5=_d_ma10, ma20=_d_ma20,
-                                vol_ratio=_d_vol_r, signal_reason=_reason,
-                            )
-                        daily_signal_sent = True
-
-                    # ────────────────────────────────────────────────────────────
-                    # 📉 일봉 매도 시그널 조건 [백테스트 최적: 단순·명확한 조건]
-                    # ────────────────────────────────────────────────────────────
-                    # ① MA10/MA20 데드크로스 + 거래량 확인 (거짓 크로스 차단)
-                    # ② RSI >= 80 과매수 (기존 75에서 상향 — 강한 추세 중 조기 매도 방지)
-                    # ③ 포트폴리오 손절선 이탈: 평단가 대비 -3% (명확한 리스크 관리)
-                    # — RSI 30 미만 단독 매도 조건 완전 제거 (과매도는 오히려 매수 기회)
-                    if not daily_signal_sent:
-                        _dead_cross = (
-                            _p_ma10 is not None and _p_ma20 is not None and
-                            _d_ma10 is not None and _d_ma20 is not None and
-                            _p_ma10 >= _p_ma20 and _d_ma10 < _d_ma20
-                        )
-                        _rsi_overbought = _d_rsi is not None and _d_rsi >= 80
-                        _sl_hit = (
-                            _d_pnl_pct is not None and _d_pnl_pct <= -3.0
-                        )
-
-                        if (_dead_cross and _vol_surge_d) or _rsi_overbought or _sl_hit:
-                            reason_parts = []
-                            if _dead_cross and _vol_surge_d:
-                                reason_parts.append(f"MA10/MA20 데드크로스 + 거래량 {_d_vol_r:.1f}배 확인")
-                            if _rsi_overbought:
-                                reason_parts.append(f"RSI 과매수({_d_rsi:.1f}) — 차익실현 검토")
-                            if _sl_hit:
-                                reason_parts.append(f"손절선 이탈 ({_d_pnl_pct:.1f}% / 기준 -3%)")
-                            _reason = " + ".join(reason_parts)
-
-                            if notify_daily_sell_signal:
-                                notify_daily_sell_signal(
-                                    token=tg_token, chat_id=tg_chat_id,
-                                    ticker=_scan_code, name=_scan_name,
-                                    price=_d_close, date=_d_date,
-                                    entry_price=_scan_entry if _scan_entry > 0 else None,
-                                    rsi=_d_rsi, ma5=_d_ma10, ma20=_d_ma20,
-                                    signal_reason=_reason,
-                                )
-                            daily_signal_sent = True
-
-                    # 발송 여부와 관계없이 오늘 스캔 완료 표시
-                    _daily_already_sent.add(_scan_code)
-
-                except Exception as _scan_err:
-                    print(f"DEBUG: 포트폴리오 스캔 오류 [{_scan_code}]: {_scan_err}")
-
-            # 오늘 발송 기록 세션에 저장
-            st.session_state[_daily_sent_key] = _daily_already_sent
-
-    except Exception as _port_scan_err:
-        print(f"DEBUG: 포트폴리오 전체 스캔 실패: {_port_scan_err}")
 # ──────────────────────────────────────────────────────────────────────────────
 
 if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
@@ -3366,14 +3498,42 @@ if st.session_state.sel_code:
             if code_disp in current_portfolio:
                 avg_price_for_gemini = current_portfolio[code_disp].get('entry_price')
                 
-            try:
-                ai_comment = get_gemini_commentary(
-                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini, supply_trend_prompt, recent_news_prompt
-                )
-            except RuntimeWarning as e:
-                ai_comment = str(e)
-            except Exception as e:
-                ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
+            # ── Gemini AI 분석 세션 캐싱 및 속도 제한 방지 (에러 상태 캐싱 포함) ──
+            if 'gemini_cache' not in st.session_state:
+                st.session_state.gemini_cache = {}
+
+            now_ts = time.time()
+            cached_val = st.session_state.gemini_cache.get(code_disp)
+            force_refresh = st.session_state.get(f"force_refresh_gemini_{code_disp}", False)
+
+            use_cache = False
+            if cached_val and not force_refresh:
+                cached_comment, cached_ts, is_error = cached_val
+                # 정상적인 답변은 10분(600초) 캐싱, 에러 답변(속도제한 등)은 API 쿨다운을 위해 30초 캐싱
+                cache_duration = 30 if is_error else 600
+                if now_ts - cached_ts < cache_duration:
+                    use_cache = True
+
+            if use_cache:
+                ai_comment = cached_comment
+            else:
+                try:
+                    ai_comment = get_gemini_commentary(
+                        code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini, supply_trend_prompt, recent_news_prompt
+                    )
+                    # 정상적인 결과일 때 캐싱 (is_error = False)
+                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, False)
+                except RuntimeWarning as e:
+                    ai_comment = str(e)
+                    # 속도 제한 등 임시 오류 시 30초 동안 쿨다운 상태 캐싱 (is_error = True)
+                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, True)
+                except Exception as e:
+                    ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
+                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, True)
+                
+                # 강제 갱신 상태 초기화
+                if force_refresh:
+                    st.session_state[f"force_refresh_gemini_{code_disp}"] = False
             # AI 코멘트 내부의 줄바꿈을 <br>로 변환하되, Gemini가 생성한 정상적인 HTML 태그(<strong>, <ul> 등)는 보존하기 위해 escape 하지 않음
             import re
             ai_comment_cleaned = ai_comment
@@ -3391,9 +3551,14 @@ if st.session_state.sel_code:
             opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
 <h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
-    <div>
-        <span style="font-size: 14px; color: #aaa; font-family: 'malgun gothic', sans-serif;">보정 평가 등급:</span>
-        <strong style="font-size: 18px; color: {grade_color}; margin-left: 8px; font-family: 'malgun gothic', sans-serif;">{quant_grade}</strong>
+    <div style="display: flex; align-items: center; gap: 15px;">
+        <div>
+            <span style="font-size: 14px; color: #aaa; font-family: 'malgun gothic', sans-serif;">보정 평가 등급:</span>
+            <strong style="font-size: 18px; color: {grade_color}; margin-left: 8px; font-family: 'malgun gothic', sans-serif;">{quant_grade}</strong>
+        </div>
+        <a href="?sel_code={code_disp}&sel_name={name_disp}&refresh_gemini=1" target="_self" style="text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background-color: #1a2333; color: #38bdf8; padding: 4.5px 12px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.4); font-size: 12px; font-family: 'malgun gothic', sans-serif; cursor: pointer; transition: all 0.2s; font-weight: 500;" onmouseover="this.style.backgroundColor='rgba(56, 189, 248, 0.15)'; this.style.borderColor='rgba(56, 189, 248, 0.7)';" onmouseout="this.style.backgroundColor='#1a2333'; this.style.borderColor='rgba(56, 189, 248, 0.4)';">
+            🔄 AI 분석 다시 받기
+        </a>
     </div>
     <div style="text-align: right; min-width: 140px;">
         <span style="font-size: 13px; color: #2ecc71; font-family: 'malgun gothic', sans-serif;">매수 보정 점수: <strong>{t_score_str}</strong> <span style="font-size: 11px; color: #888;">{t_score_raw_str}</span></span><br/>
