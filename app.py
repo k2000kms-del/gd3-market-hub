@@ -1963,14 +1963,14 @@ st.sidebar.caption('대시보드 동작에 문제가 있거나 질문이 있는 
 
 # 1. API Key 불러오기 및 입력창
 import os
-default_gemini_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
-gemini_api_key = st.sidebar.text_input(
-    "Gemini API Key",
-    value=default_gemini_key,
-    type="password",
-    placeholder="AIzaSy...",
-    help="기본으로 공용 API Key가 사용되지만, 한도 초과 시 본인의 Gemini API Key를 입력할 수 있습니다."
-)
+gemini_api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+if not gemini_api_key:
+    gemini_api_key = st.sidebar.text_input(
+        "Gemini API Key 입력",
+        type="password",
+        placeholder="AIzaSy...",
+        help="Google AI Studio에서 발급받은 API Key를 입력하세요."
+    )
 
 # 2. 대시보드 상태 로그 첨부 여부
 attach_status = st.sidebar.checkbox("대시보드 상태 데이터 첨부", value=True, help="체크하면 대시보드 파일 크기, 시간대, 데이터 로드 상태 등의 디버깅 힌트가 질문과 함께 전송됩니다.")
