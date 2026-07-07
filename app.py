@@ -830,8 +830,14 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min'):
     - VWAP 조건    : 유지 (신뢰도 높음)
     - MA 조건      : 제거 (분봉 MA 노이즈 높아 신뢰도 낮음)
     """
-    # 타임프레임별 익절 목표 설정
-    tp_pct = 0.7 if timeframe == '1min' else 1.0   # 1분봉 0.7%, 5분봉 1.0%
+    # 타임프레임별 익절 목표 및 거래량 서지 임계치 설정
+    if timeframe == '5min':
+        tp_pct = 1.0        # 5분봉 익절 1.0%
+        vol_mult = 1.5      # 5분봉 거래량 서지는 1.5배로 완화하여 신뢰도 유지하며 검출력 보완
+    else:
+        tp_pct = 0.7        # 1분봉 익절 0.7%
+        vol_mult = 2.0      # 1분봉 거래량 서지는 2.0배 유지
+
     time_cut = 30                                    # 30봉 시간 컷오프
     atr_mult = 1.5                                   # ATR 트레일링 승수
 
@@ -851,7 +857,7 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min'):
         # 핵심 지표 계산
         df = calculate_vwap(df)
         df = calculate_rsi(df, period=14)
-        df = detect_volume_surge(df, lookback=10, multiplier=2.0)  # 2.0x로 상향
+        df = detect_volume_surge(df, lookback=10, multiplier=vol_mult)
 
         # ATR (반응성 높은 기간 7)
         high  = df['High'].values
@@ -3033,13 +3039,18 @@ if st.session_state.sel_code:
     with st.spinner(f'📡 {name_disp} 주가 데이터 조회 중...'):
         df_candle = get_stock_history(code_disp)
         
-        # 1분봉 데이터 획득 (KIS 우선, 실패 시 네이버 폴백)
+        # 1분봉 데이터 획득 (KIS 데이터에 네이버 과거 800봉 데이터를 결합하여 장 개시 직후에도 안정적인 지표 수렴 보장)
         df_1min = pd.DataFrame()
         if kis_key and kis_sec:
             df_1min = get_kis_minute_history(kis_key, kis_sec, code_disp)
             
-        if df_1min.empty:
-            df_1min = get_minute_history(code_disp, count=800)
+        df_naver = get_minute_history(code_disp, count=800)
+        
+        if not df_1min.empty and not df_naver.empty:
+            df_1min = pd.concat([df_1min, df_naver], ignore_index=True)
+            df_1min = df_1min.drop_duplicates(subset=['DateTime']).sort_values('DateTime').reset_index(drop=True)
+        elif df_1min.empty:
+            df_1min = df_naver
             
         df_5min = resample_to_5min(df_1min)
         
@@ -3048,8 +3059,8 @@ if st.session_state.sel_code:
         if code_disp in portfolio:
             my_entry_price = portfolio[code_disp].get('entry_price', 0.0)
             
-        df_1min = calculate_intraday_signals(df_1min, my_entry_price=my_entry_price)
-        df_5min = calculate_intraday_signals(df_5min, my_entry_price=my_entry_price)
+        df_1min = calculate_intraday_signals(df_1min, my_entry_price=my_entry_price, timeframe='1min')
+        df_5min = calculate_intraday_signals(df_5min, my_entry_price=my_entry_price, timeframe='5min')
         
         # --- 라이브 신호 로거 연동 (최근 1분봉 캔들의 신호 감지) ---
         if not df_1min.empty and len(df_1min) > 1:
