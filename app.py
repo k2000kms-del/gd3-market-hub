@@ -3695,59 +3695,303 @@ if st.session_state.sel_code:
                 
 
 
-        # 캔들 차트 생성
-        fig_c = make_subplots(
-            rows=2, cols=1,
-            row_heights=[0.85, 0.15],
-            vertical_spacing=0.03,
-            shared_xaxes=True
+        # ── 차트 선택 (st.tabs의 오버헤드를 막기 위해 레이지 렌더링 적용) ─────────────────────────────
+        chart_type = st.radio(
+            "차트 주기 선택",
+            ["📅 일봉 차트", "⏱️ 5분봉 (캔들)", "⚡ 1분봉 (캔들)"],
+            horizontal=True,
+            key="scalping_chart_selector",
+            label_visibility="collapsed"
         )
+        st.write("") # 간격 조절
 
-        # 주말 및 휴장일로 인한 캔들 끊어짐 방지를 위해 x축 데이터를 문자열 카테고리 리스트로 변환
-        date_str_list = df_candle.index.strftime('%Y-%m-%d').tolist()
+        if chart_type == "📅 일봉 차트":
+            # 캔들 차트 생성
+            fig_c = make_subplots(
+                rows=2, cols=1,
+                row_heights=[0.85, 0.15],
+                vertical_spacing=0.03,
+                shared_xaxes=True
+            )
 
-        # 캔들스틱 (한국식: 상승=빨강, 하락=파랑)
-        fig_c.add_trace(go.Candlestick(
-            x=date_str_list,
-            open=df_candle['Open'], high=df_candle['High'],
-            low=df_candle['Low'],   close=df_candle['Close'],
-            increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
-            decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
-            name='캔들', showlegend=False
-        ), row=1, col=1)
+            # 주말 및 휴장일로 인한 캔들 끊어짐 방지를 위해 x축 데이터를 문자열 카테고리 리스트로 변환
+            date_str_list = df_candle.index.strftime('%Y-%m-%d').tolist()
 
-        # MA5
-        fig_c.add_trace(go.Scatter(
-            x=date_str_list, y=df_candle['MA5'],
-            name='MA5', mode='lines',
-            line=dict(color='#ffd43b', width=1.5)
-        ), row=1, col=1)
-
-        # MA20
-        fig_c.add_trace(go.Scatter(
-            x=date_str_list, y=df_candle['MA20'],
-            name='MA20', mode='lines',
-            line=dict(color='#ff922b', width=1.5)
-        ), row=1, col=1)
-
-        # ATR 손절 가이드선 (2.5 ATR)
-        if 'Stop_Loss' in df_candle.columns:
-            fig_c.add_trace(go.Scatter(
-                x=date_str_list, y=df_candle['Stop_Loss'],
-                name='ATR 손절선', mode='lines',
-                line=dict(color='#e74c3c', width=1.5, dash='dash')
+            # 캔들스틱 (한국식: 상승=빨강, 하락=파랑)
+            fig_c.add_trace(go.Candlestick(
+                x=date_str_list,
+                open=df_candle['Open'], high=df_candle['High'],
+                low=df_candle['Low'],   close=df_candle['Close'],
+                increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
+                decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
+                name='캔들', showlegend=False
             ), row=1, col=1)
+
+            # MA5
+            fig_c.add_trace(go.Scattergl(
+                x=date_str_list, y=df_candle['MA5'],
+                name='MA5', mode='lines',
+                line=dict(color='#ffd43b', width=1.5)
+            ), row=1, col=1)
+
+            # MA20
+            fig_c.add_trace(go.Scattergl(
+                x=date_str_list, y=df_candle['MA20'],
+                name='MA20', mode='lines',
+                line=dict(color='#ff922b', width=1.5)
+            ), row=1, col=1)
+
+            # ATR 손절 가이드선 (2.5 ATR)
+            if 'Stop_Loss' in df_candle.columns:
+                fig_c.add_trace(go.Scattergl(
+                    x=date_str_list, y=df_candle['Stop_Loss'],
+                    name='ATR 손절선', mode='lines',
+                    line=dict(color='#e74c3c', width=1.5, dash='dash')
+                ), row=1, col=1)
+                
+                # 매도 신호 (Plotly Marker + Hover Tooltip)
+                if 'Exit_Signal' in df_candle.columns:
+                    exit_signals = df_candle[df_candle['Exit_Signal'] == True]
+                    if not exit_signals.empty:
+                        exit_dates = exit_signals.index.strftime('%Y-%m-%d').tolist()
+                        exit_prices = exit_signals['Close'].tolist()
+                        hover_texts = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices]
+                        
+                        # 범례(Legend) 표시용 더미 트레이스 (수직 정렬을 위해 사각형 사용)
+                        fig_c.add_trace(go.Scattergl(
+                            x=[None], y=[None],
+                            mode='markers',
+                            name='매도 신호',
+                            marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
+                            showlegend=True
+                        ), row=1, col=1)
+                        
+                        fig_c.add_trace(go.Scattergl(
+                            x=exit_dates,
+                            y=exit_signals['High'] * 1.015, # 캔들 고점 위쪽에 살짝 띄워서 마커 표시
+                            mode='markers',
+                            name='매도 신호',
+                            marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
+                            text=hover_texts,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+                
+                # 매수 신호 (Plotly Marker + Hover Tooltip)
+                if 'Buy_Signal' in df_candle.columns:
+                    buy_signals = df_candle[df_candle['Buy_Signal'] == True]
+                    if not buy_signals.empty:
+                        buy_dates = buy_signals.index.strftime('%Y-%m-%d').tolist()
+                        buy_prices = buy_signals['Close'].tolist()
+                        hover_texts = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices]
+                        
+                        # 범례(Legend) 표시용 더미 트레이스 (수직 정렬을 위해 사각형 사용)
+                        fig_c.add_trace(go.Scattergl(
+                            x=[None], y=[None],
+                            mode='markers',
+                            name='매수 신호',
+                            marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
+                            showlegend=True
+                        ), row=1, col=1)
+                        
+                        fig_c.add_trace(go.Scattergl(
+                            x=buy_dates,
+                            y=buy_signals['Low'] * 0.985, # 캔들 저점 아래쪽에 살짝 띄워서 마커 표시
+                            mode='markers',
+                            name='매수 신호',
+                            marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
+                            text=hover_texts,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+
+            # 나의 매수 단가선 (포트폴리오 등록 시 황금색 점선으로 표시)
+            portfolio = load_portfolio()
+            my_entry_price = 0
+            if code_disp in portfolio:
+                my_entry_price = portfolio[code_disp]["entry_price"]
+                fig_c.add_trace(go.Scattergl(
+                    x=date_str_list, y=[my_entry_price] * len(date_str_list),
+                    name='나의 매수단가', mode='lines',
+                    line=dict(color='#ffd700', width=2.0, dash='dashdot')
+                ), row=1, col=1)
+
+            # 일봉 차트의 가격 범위(y_range)를 완벽히 동기화하기 위한 수동 계산
+            try:
+                min_val = df_candle[['High', 'Low', 'Close', 'Open']].min().min()
+                max_val = df_candle[['High', 'Low', 'Close', 'Open']].max().max()
+                for col in ['MA5', 'MA20', 'Stop_Loss']:
+                    if col in df_candle.columns:
+                        min_val = min(min_val, df_candle[col].min(skipna=True))
+                        max_val = max(max_val, df_candle[col].max(skipna=True))
+                if my_entry_price > 0:
+                    min_val = min(min_val, my_entry_price)
+                    max_val = max(max_val, my_entry_price)
+                margin_bottom = (max_val - min_val) * 0.05 if max_val > min_val else 1000
+                margin_top = (max_val - min_val) * 0.25 if max_val > min_val else 2000
+                y_range = [min_val - margin_bottom, max_val + margin_top]
+            except Exception:
+                y_range = None
+
+            # 거래량 막대 (색상: 상승일=빨강, 하락일=파랑)
+            vol_colors = [
+                '#ff6b6b' if c >= o else '#4e9ff5'
+                for c, o in zip(df_candle['Close'], df_candle['Open'])
+            ]
+            fig_c.add_trace(go.Bar(
+                x=date_str_list, y=df_candle['Volume'] // 1000,
+                name='거래량', marker_color=vol_colors,
+                showlegend=False, opacity=0.8
+            ), row=2, col=1)
+
+            # 우측 Y축 눈금(yaxis3)을 활성화하기 위한 더미 투명 트레이스 주입 (row/col 생략하여 layout y3 매핑)
+            fig_c.add_trace(go.Scattergl(
+                x=date_str_list,
+                y=df_candle['Close'],
+                yaxis='y3',
+                showlegend=False,
+                hoverinfo='skip',
+                mode='markers',
+                marker=dict(opacity=0)
+            ))
+
+            fig_c.update_layout(
+                template='plotly_dark',
+                height=650,
+                margin=dict(t=50, l=10, r=55, b=10), # 우측 가격 눈금을 위한 여백 및 상단 라벨 잘림 방지
+                xaxis_rangeslider_visible=False,
+                legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
+                font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+                plot_bgcolor='#0d1b2a',
+                paper_bgcolor='#0d1b2a',
+                dragmode=False, # 돋보기/십자선(Zoom) 커서 대신 기본 화살표 커서 사용
+                hovermode='closest', # 마우스 커서 위치에 가장 가까운 데이터를 하이라이트
+                # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
+                yaxis3=dict(
+                    overlaying='y',
+                    side='right',
+                    showgrid=False,
+                    tickfont=dict(size=10, color='#888'),
+                    anchor='x',
+                    tickformat=',d',
+                    showticklabels=True,
+                    range=y_range,
+                    nticks=18, # 눈금을 더 촘촘히 표시
+                    fixedrange=True # 우측 눈금에도 확대/축소 잠금을 걸어야 화살표 커서 유지
+                )
+            )
+            # 좌측 Y축 눈금 정의 및 촘촘함 적용 (yaxis = row1의 주가 축)
+            fig_c.update_yaxes(
+                tickformat=',d',
+                gridcolor='rgba(255,255,255,0.06)',
+                ticks='outside',       # 눈금 방향: 바깥
+                showticklabels=True,
+                tickfont=dict(size=10, color='#888'),
+                range=y_range,
+                nticks=18,             # 눈금을 더 촘촘히 표시
+                fixedrange=True,       # Y축 확대/축소(Zoom/Pan) 비활성화
+                showspikes=True, spikemode='across', spikesnap='cursor', spikedash='dot', spikecolor='#999999', spikethickness=1, # 마우스 십자선
+                row=1, col=1
+            )
+            fig_c.update_xaxes(
+                fixedrange=True, # X축 확대/축소 비활성화
+                row=1, col=1
+            )
+
+            # 현재가 우측 Y축 라벨 박스 및 보조선 투사 (HTS 형태)
+            price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
+            fig_c.add_hline(y=last_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
+            fig_c.add_annotation(
+                xref='paper', yref='y',
+                x=1.002, y=last_close,
+                text=f" <b>{int(last_close):,}</b> ",
+                showarrow=False,
+                font=dict(color="#ffffff", size=9, family="malgun gothic"),
+                bgcolor=price_color,
+                bordercolor=price_color,
+                borderwidth=1,
+                borderpad=3,
+                xanchor='left' # Y축선 상에 겹치도록 왼쪽 앵커 정렬 및 row, col 제외로 paper 앵킹 유지
+            )
+
+            # x축 카테고리 틱 라벨의 과도한 밀집 방지를 위해 약 8개 틱만 고르게 추출하여 표시
+            tick_indices = np.linspace(0, len(date_str_list) - 1, 8, dtype=int) if len(date_str_list) > 0 else []
+            tick_vals = [date_str_list[i] for i in tick_indices]
+            tick_texts = [date_str_list[i] for i in tick_indices]
+
+            fig_c.update_yaxes(tickformat=',d', ticksuffix='K', gridcolor='rgba(255,255,255,0.06)', fixedrange=True, row=2, col=1)
+            fig_c.update_xaxes(
+                type='category',
+                gridcolor='rgba(255,255,255,0.04)',
+                showticklabels=False,
+                row=1, col=1
+            )
+            fig_c.update_xaxes(
+                type='category',
+                gridcolor='rgba(255,255,255,0.04)',
+                tickangle=-30,
+                tickmode='array',
+                tickvals=tick_vals,
+                ticktext=tick_texts,
+                fixedrange=True,
+                row=2, col=1
+            )
             
-            # 매도 신호 (Plotly Marker + Hover Tooltip)
-            if 'Exit_Signal' in df_candle.columns:
-                exit_signals = df_candle[df_candle['Exit_Signal'] == True]
-                if not exit_signals.empty:
-                    exit_dates = exit_signals.index.strftime('%Y-%m-%d').tolist()
-                    exit_prices = exit_signals['Close'].tolist()
-                    hover_texts = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices]
+            st.plotly_chart(fig_c, use_container_width=True, config={'displayModeBar': False})
+
+        elif chart_type == "⏱️ 5분봉 (캔들)":
+            # ── 5분봉 차트 생성 ─────────────────────────────
+            fig_5m = make_subplots(
+                rows=2, cols=1,
+                row_heights=[0.85, 0.15],
+                vertical_spacing=0.03,
+                shared_xaxes=True
+            )
+            if not df_5min.empty:
+                # 5분봉: 최근 1.5일(약 120봉) 데이터만 유지하여 캔들 가시성 확보
+                df_5min_tail = df_5min.tail(120).copy().reset_index(drop=True)
+                
+                tick_vals_5m = list(range(len(df_5min_tail)))
+                tick_texts_5m = df_5min_tail['DateTime'].dt.strftime('%H:%M').tolist()
+                
+                # 5분봉: 약 10개 내외의 라벨만 표시되도록 다운샘플링 (x축 텍스트 겹침 방지)
+                step_5m = max(1, len(tick_vals_5m) // 10)
+                display_tick_vals_5m = tick_vals_5m[::step_5m]
+                display_tick_texts_5m = tick_texts_5m[::step_5m]
+                
+                fig_5m.add_trace(go.Candlestick(
+                    x=tick_vals_5m,
+                    open=df_5min_tail['Open'], high=df_5min_tail['High'],
+                    low=df_5min_tail['Low'], close=df_5min_tail['Close'],
+                    increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
+                    decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
+                    name='5분봉 캔들', showlegend=False
+                ), row=1, col=1)
+                
+                # MA5, MA20 그리기
+                fig_5m.add_trace(go.Scattergl(
+                    x=tick_vals_5m, y=df_5min_tail['MA5'],
+                    name='MA5', mode='lines',
+                    line=dict(color='#ffd43b', width=1.5)
+                ), row=1, col=1)
+                
+                fig_5m.add_trace(go.Scattergl(
+                    x=tick_vals_5m, y=df_5min_tail['MA20'],
+                    name='MA20', mode='lines',
+                    line=dict(color='#ff922b', width=1.5)
+                ), row=1, col=1)
+                
+                # ATR 손절선 그리기
+                if 'Stop_Loss' in df_5min_tail.columns:
+                    fig_5m.add_trace(go.Scattergl(
+                        x=tick_vals_5m, y=df_5min_tail['Stop_Loss'],
+                        name='ATR 손절선', mode='lines',
+                        line=dict(color='#e74c3c', width=1.5, dash='dash')
+                    ), row=1, col=1)
                     
-                    # 범례(Legend) 표시용 더미 트레이스 (수직 정렬을 위해 사각형 사용)
-                    fig_c.add_trace(go.Scatter(
+                # 매도 신호 그리기
+                if 'Exit_Signal' in df_5min_tail.columns:
+                    fig_5m.add_trace(go.Scattergl(
                         x=[None], y=[None],
                         mode='markers',
                         name='매도 신호',
@@ -3755,27 +3999,25 @@ if st.session_state.sel_code:
                         showlegend=True
                     ), row=1, col=1)
                     
-                    fig_c.add_trace(go.Scatter(
-                        x=exit_dates,
-                        y=exit_signals['High'] * 1.015, # 캔들 고점 위쪽에 살짝 띄워서 마커 표시
-                        mode='markers',
-                        name='매도 신호',
-                        marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
-                        text=hover_texts,
-                        hovertemplate="%{text}<extra></extra>",
-                        showlegend=False
-                    ), row=1, col=1)
-            
-            # 매수 신호 (Plotly Marker + Hover Tooltip)
-            if 'Buy_Signal' in df_candle.columns:
-                buy_signals = df_candle[df_candle['Buy_Signal'] == True]
-                if not buy_signals.empty:
-                    buy_dates = buy_signals.index.strftime('%Y-%m-%d').tolist()
-                    buy_prices = buy_signals['Close'].tolist()
-                    hover_texts = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices]
-                    
-                    # 범례(Legend) 표시용 더미 트레이스 (수직 정렬을 위해 사각형 사용)
-                    fig_c.add_trace(go.Scatter(
+                    exit_indices_5m = [i for i, val in enumerate(df_5min_tail['Exit_Signal']) if val]
+                    if exit_indices_5m:
+                        exit_prices_5m = df_5min_tail.loc[exit_indices_5m, 'Close'].tolist()
+                        exit_highs_5m = df_5min_tail.loc[exit_indices_5m, 'High'].tolist()
+                        hover_texts_5m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_5m]
+                        fig_5m.add_trace(go.Scattergl(
+                            x=exit_indices_5m,
+                            y=[h * 1.002 for h in exit_highs_5m],
+                            mode='markers',
+                            name='매도 신호',
+                            marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
+                            text=hover_texts_5m,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+                        
+                # 매수 신호 그리기
+                if 'Buy_Signal' in df_5min_tail.columns:
+                    fig_5m.add_trace(go.Scattergl(
                         x=[None], y=[None],
                         mode='markers',
                         name='매수 신호',
@@ -3783,608 +4025,374 @@ if st.session_state.sel_code:
                         showlegend=True
                     ), row=1, col=1)
                     
-                    fig_c.add_trace(go.Scatter(
-                        x=buy_dates,
-                        y=buy_signals['Low'] * 0.985, # 캔들 저점 아래쪽에 살짝 띄워서 마커 표시
-                        mode='markers',
-                        name='매수 신호',
-                        marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
-                        text=hover_texts,
-                        hovertemplate="%{text}<extra></extra>",
-                        showlegend=False
-                    ), row=1, col=1)
-
-        # 나의 매수 단가선 (포트폴리오 등록 시 황금색 점선으로 표시)
-        portfolio = load_portfolio()
-        my_entry_price = 0
-        if code_disp in portfolio:
-            my_entry_price = portfolio[code_disp]["entry_price"]
-            fig_c.add_trace(go.Scatter(
-                x=date_str_list, y=[my_entry_price] * len(date_str_list),
-                name='나의 매수단가', mode='lines',
-                line=dict(color='#ffd700', width=2.0, dash='dashdot')
-            ), row=1, col=1)
-
-        # 일봉 차트의 가격 범위(y_range)를 완벽히 동기화하기 위한 수동 계산
-        try:
-            min_val = df_candle[['High', 'Low', 'Close', 'Open']].min().min()
-            max_val = df_candle[['High', 'Low', 'Close', 'Open']].max().max()
-            for col in ['MA5', 'MA20', 'Stop_Loss']:
-                if col in df_candle.columns:
-                    min_val = min(min_val, df_candle[col].min(skipna=True))
-                    max_val = max(max_val, df_candle[col].max(skipna=True))
-            if my_entry_price > 0:
-                min_val = min(min_val, my_entry_price)
-                max_val = max(max_val, my_entry_price)
-            margin_bottom = (max_val - min_val) * 0.05 if max_val > min_val else 1000
-            margin_top = (max_val - min_val) * 0.25 if max_val > min_val else 2000
-            y_range = [min_val - margin_bottom, max_val + margin_top]
-        except Exception:
-            y_range = None
-
-        # 거래량 막대 (색상: 상승일=빨강, 하락일=파랑)
-        vol_colors = [
-            '#ff6b6b' if c >= o else '#4e9ff5'
-            for c, o in zip(df_candle['Close'], df_candle['Open'])
-        ]
-        fig_c.add_trace(go.Bar(
-            x=date_str_list, y=df_candle['Volume'] // 1000,
-            name='거래량', marker_color=vol_colors,
-            showlegend=False, opacity=0.8
-        ), row=2, col=1)
-
-        # 우측 Y축 눈금(yaxis3)을 활성화하기 위한 더미 투명 트레이스 주입 (row/col 생략하여 layout y3 매핑)
-        fig_c.add_trace(go.Scatter(
-            x=date_str_list,
-            y=df_candle['Close'],
-            yaxis='y3',
-            showlegend=False,
-            hoverinfo='skip',
-            mode='markers',
-            marker=dict(opacity=0)
-        ))
-
-        fig_c.update_layout(
-            template='plotly_dark',
-            height=650,
-            margin=dict(t=50, l=10, r=55, b=10), # 우측 가격 눈금을 위한 여백 및 상단 라벨 잘림 방지
-            xaxis_rangeslider_visible=False,
-            legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
-            font=dict(family='malgun gothic, nanum gothic, sans-serif'),
-            plot_bgcolor='#0d1b2a',
-            paper_bgcolor='#0d1b2a',
-            dragmode=False, # 돋보기/십자선(Zoom) 커서 대신 기본 화살표 커서 사용
-            hovermode='closest', # 마우스 커서 위치에 가장 가까운 데이터를 하이라이트
-            # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
-            yaxis3=dict(
-                overlaying='y',
-                side='right',
-                showgrid=False,
-                tickfont=dict(size=10, color='#888'),
-                anchor='x',
-                tickformat=',d',
-                showticklabels=True,
-                range=y_range,
-                nticks=18, # 눈금을 더 촘촘히 표시
-                fixedrange=True # 우측 눈금에도 확대/축소 잠금을 걸어야 화살표 커서 유지
-            )
-        )
-        # 좌측 Y축 눈금 정의 및 촘촘함 적용 (yaxis = row1의 주가 축)
-        fig_c.update_yaxes(
-            tickformat=',d',
-            gridcolor='rgba(255,255,255,0.06)',
-            ticks='outside',       # 눈금 방향: 바깥
-            showticklabels=True,
-            tickfont=dict(size=10, color='#888'),
-            range=y_range,
-            nticks=18,             # 눈금을 더 촘촘히 표시
-            fixedrange=True,       # Y축 확대/축소(Zoom/Pan) 비활성화
-            showspikes=True, spikemode='across', spikesnap='cursor', spikedash='dot', spikecolor='#999999', spikethickness=1, # 마우스 십자선
-            row=1, col=1
-        )
-        fig_c.update_xaxes(
-            fixedrange=True, # X축 확대/축소 비활성화
-            row=1, col=1
-        )
-
-        # 현재가 우측 Y축 라벨 박스 및 보조선 투사 (HTS 형태)
-        price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
-        fig_c.add_hline(y=last_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
-        fig_c.add_annotation(
-            xref='paper', yref='y',
-            x=1.002, y=last_close,
-            text=f" <b>{int(last_close):,}</b> ",
-            showarrow=False,
-            font=dict(color="#ffffff", size=9, family="malgun gothic"),
-            bgcolor=price_color,
-            bordercolor=price_color,
-            borderwidth=1,
-            borderpad=3,
-            xanchor='left' # Y축선 상에 겹치도록 왼쪽 앵커 정렬 및 row, col 제외로 paper 앵킹 유지
-        )
-
-        # x축 카테고리 틱 라벨의 과도한 밀집 방지를 위해 약 8개 틱만 고르게 추출하여 표시
-        tick_indices = np.linspace(0, len(date_str_list) - 1, 8, dtype=int) if len(date_str_list) > 0 else []
-        tick_vals = [date_str_list[i] for i in tick_indices]
-        tick_texts = [date_str_list[i] for i in tick_indices]
-
-        fig_c.update_yaxes(tickformat=',d', ticksuffix='K', gridcolor='rgba(255,255,255,0.06)', fixedrange=True, row=2, col=1)
-        fig_c.update_xaxes(
-            type='category',
-            gridcolor='rgba(255,255,255,0.04)',
-            showticklabels=False,
-            row=1, col=1
-        )
-        fig_c.update_xaxes(
-            type='category',
-            gridcolor='rgba(255,255,255,0.04)',
-            tickangle=-30,
-            tickmode='array',
-            tickvals=tick_vals,
-            ticktext=tick_texts,
-            fixedrange=True,
-            row=2, col=1
-        )
-
-        # ── 5분봉 차트 생성 ─────────────────────────────
-        fig_5m = make_subplots(
-            rows=2, cols=1,
-            row_heights=[0.85, 0.15],
-            vertical_spacing=0.03,
-            shared_xaxes=True
-        )
-        if not df_5min.empty:
-            # 5분봉: 최근 1.5일(약 120봉) 데이터만 유지하여 캔들 가시성 확보
-            df_5min_tail = df_5min.tail(120).copy().reset_index(drop=True)
-            
-            tick_vals_5m = list(range(len(df_5min_tail)))
-            tick_texts_5m = df_5min_tail['DateTime'].dt.strftime('%H:%M').tolist()
-            
-            # 5분봉: 약 10개 내외의 라벨만 표시되도록 다운샘플링 (x축 텍스트 겹침 방지)
-            step_5m = max(1, len(tick_vals_5m) // 10)
-            display_tick_vals_5m = tick_vals_5m[::step_5m]
-            display_tick_texts_5m = tick_texts_5m[::step_5m]
-            
-            fig_5m.add_trace(go.Candlestick(
-                x=tick_vals_5m,
-                open=df_5min_tail['Open'], high=df_5min_tail['High'],
-                low=df_5min_tail['Low'], close=df_5min_tail['Close'],
-                increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
-                decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
-                name='5분봉 캔들', showlegend=False
-            ), row=1, col=1)
-            
-            # MA5, MA20 그리기
-            fig_5m.add_trace(go.Scatter(
-                x=tick_vals_5m, y=df_5min_tail['MA5'],
-                name='MA5', mode='lines',
-                line=dict(color='#ffd43b', width=1.5)
-            ), row=1, col=1)
-            
-            fig_5m.add_trace(go.Scatter(
-                x=tick_vals_5m, y=df_5min_tail['MA20'],
-                name='MA20', mode='lines',
-                line=dict(color='#ff922b', width=1.5)
-            ), row=1, col=1)
-            
-            # ATR 손절선 그리기
-            if 'Stop_Loss' in df_5min_tail.columns:
-                fig_5m.add_trace(go.Scatter(
-                    x=tick_vals_5m, y=df_5min_tail['Stop_Loss'],
-                    name='ATR 손절선', mode='lines',
-                    line=dict(color='#e74c3c', width=1.5, dash='dash')
-                ), row=1, col=1)
-                
-            # 매도 신호 그리기
-            if 'Exit_Signal' in df_5min_tail.columns:
-                fig_5m.add_trace(go.Scatter(
-                    x=[None], y=[None],
-                    mode='markers',
-                    name='매도 신호',
-                    marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
-                    showlegend=True
-                ), row=1, col=1)
-                
-                exit_indices_5m = [i for i, val in enumerate(df_5min_tail['Exit_Signal']) if val]
-                if exit_indices_5m:
-                    exit_prices_5m = df_5min_tail.loc[exit_indices_5m, 'Close'].tolist()
-                    exit_highs_5m = df_5min_tail.loc[exit_indices_5m, 'High'].tolist()
-                    hover_texts_5m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_5m]
-                    fig_5m.add_trace(go.Scatter(
-                        x=exit_indices_5m,
-                        y=[h * 1.002 for h in exit_highs_5m],
-                        mode='markers',
-                        name='매도 신호',
-                        marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
-                        text=hover_texts_5m,
-                        hovertemplate="%{text}<extra></extra>",
-                        showlegend=False
+                    buy_indices_5m = [i for i, val in enumerate(df_5min_tail['Buy_Signal']) if val]
+                    if buy_indices_5m:
+                        buy_prices_5m = df_5min_tail.loc[buy_indices_5m, 'Close'].tolist()
+                        buy_lows_5m = df_5min_tail.loc[buy_indices_5m, 'Low'].tolist()
+                        hover_texts_5m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_5m]
+                        fig_5m.add_trace(go.Scattergl(
+                            x=buy_indices_5m,
+                            y=[l * 0.998 for l in buy_lows_5m],
+                            mode='markers',
+                            name='매수 신호',
+                            marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
+                            text=hover_texts_5m,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+                        
+                # 나의 매수단가선 그리기
+                portfolio = load_portfolio()
+                my_entry_price = 0
+                if code_disp in portfolio:
+                    my_entry_price = portfolio[code_disp]["entry_price"]
+                    fig_5m.add_trace(go.Scattergl(
+                        x=tick_vals_5m, y=[my_entry_price] * len(tick_vals_5m),
+                        name='나의 매수단가', mode='lines',
+                        line=dict(color='#ffd700', width=2.0, dash='dashdot')
                     ), row=1, col=1)
                     
-            # 매수 신호 그리기
-            if 'Buy_Signal' in df_5min_tail.columns:
-                fig_5m.add_trace(go.Scatter(
-                    x=[None], y=[None],
+                vol_colors_5m = [
+                    '#ff6b6b' if c >= o else '#4e9ff5'
+                    for c, o in zip(df_5min_tail['Close'], df_5min_tail['Open'])
+                ]
+                fig_5m.add_trace(go.Bar(
+                    x=tick_vals_5m, y=df_5min_tail['Volume'] // 1000,
+                    name='거래량(K)', marker_color=vol_colors_5m,
+                    showlegend=False, opacity=0.8
+                ), row=2, col=1)
+
+                # 5분봉 가격 범위(y_range) 수동 계산
+                try:
+                    min_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].min().min()
+                    max_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].max().max()
+                    for col in ['MA5', 'MA20', 'Stop_Loss']:
+                        if col in df_5min_tail.columns:
+                            min_val_5m = min(min_val_5m, df_5min_tail[col].min(skipna=True))
+                            max_val_5m = max(max_val_5m, df_5min_tail[col].max(skipna=True))
+                    margin_5m = (max_val_5m - min_val_5m) * 0.05 if max_val_5m > min_val_5m else 100
+                    y_range_5m = [min_val_5m - margin_5m, max_val_5m + margin_5m]
+                except Exception:
+                    y_range_5m = None
+
+                # 우측 Y축 눈금(yaxis3)을 활성화하기 위한 더미 투명 트레이스 주입 (row/col 생략하여 layout y3 매핑)
+                fig_5m.add_trace(go.Scattergl(
+                    x=tick_vals_5m,
+                    y=df_5min_tail['Close'],
+                    yaxis='y3',
+                    showlegend=False,
+                    hoverinfo='skip',
                     mode='markers',
-                    name='매수 신호',
-                    marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
-                    showlegend=True
-                ), row=1, col=1)
-                
-                buy_indices_5m = [i for i, val in enumerate(df_5min_tail['Buy_Signal']) if val]
-                if buy_indices_5m:
-                    buy_prices_5m = df_5min_tail.loc[buy_indices_5m, 'Close'].tolist()
-                    buy_lows_5m = df_5min_tail.loc[buy_indices_5m, 'Low'].tolist()
-                    hover_texts_5m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_5m]
-                    fig_5m.add_trace(go.Scatter(
-                        x=buy_indices_5m,
-                        y=[l * 0.998 for l in buy_lows_5m],
-                        mode='markers',
-                        name='매수 신호',
-                        marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
-                        text=hover_texts_5m,
-                        hovertemplate="%{text}<extra></extra>",
-                        showlegend=False
-                    ), row=1, col=1)
-                    
-            # 나의 매수단가선 그리기
-            portfolio = load_portfolio()
-            my_entry_price = 0
-            if code_disp in portfolio:
-                my_entry_price = portfolio[code_disp]["entry_price"]
-                fig_5m.add_trace(go.Scatter(
-                    x=tick_vals_5m, y=[my_entry_price] * len(tick_vals_5m),
-                    name='나의 매수단가', mode='lines',
-                    line=dict(color='#ffd700', width=2.0, dash='dashdot')
-                ), row=1, col=1)
-                
-            vol_colors_5m = [
-                '#ff6b6b' if c >= o else '#4e9ff5'
-                for c, o in zip(df_5min_tail['Close'], df_5min_tail['Open'])
-            ]
-            fig_5m.add_trace(go.Bar(
-                x=tick_vals_5m, y=df_5min_tail['Volume'] // 1000,
-                name='거래량(K)', marker_color=vol_colors_5m,
-                showlegend=False, opacity=0.8
-            ), row=2, col=1)
+                    marker=dict(opacity=0)
+                ))
 
-            # 5분봉 가격 범위(y_range) 수동 계산
-            try:
-                min_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].min().min()
-                max_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].max().max()
-                for col in ['MA5', 'MA20', 'Stop_Loss']:
-                    if col in df_5min_tail.columns:
-                        min_val_5m = min(min_val_5m, df_5min_tail[col].min(skipna=True))
-                        max_val_5m = max(max_val_5m, df_5min_tail[col].max(skipna=True))
-                margin_5m = (max_val_5m - min_val_5m) * 0.05 if max_val_5m > min_val_5m else 100
-                y_range_5m = [min_val_5m - margin_5m, max_val_5m + margin_5m]
-            except Exception:
-                y_range_5m = None
-
-            # 우측 Y축 눈금(yaxis3)을 활성화하기 위한 더미 투명 트레이스 주입 (row/col 생략하여 layout y3 매핑)
-            fig_5m.add_trace(go.Scatter(
-                x=tick_vals_5m,
-                y=df_5min_tail['Close'],
-                yaxis='y3',
-                showlegend=False,
-                hoverinfo='skip',
-                mode='markers',
-                marker=dict(opacity=0)
-            ))
-
-            last_5m_close = df_5min_tail['Close'].iloc[-1]
-            fig_5m.update_layout(
-                template='plotly_dark',
-                height=650,
-                margin=dict(t=20, l=10, r=55, b=40), # X축 레이블 짤림 방지 및 우측 눈금 여백
-                xaxis_rangeslider_visible=False,
-                legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
-                font=dict(family='malgun gothic, nanum gothic, sans-serif'),
-                plot_bgcolor='#0d1b2a',
-                paper_bgcolor='#0d1b2a',
-                # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
-                yaxis3=dict(
-                    overlaying='y',
-                    side='right',
-                    showgrid=False,
-                    tickfont=dict(size=10, color='#888'),
-                    anchor='x',
+                last_5m_close = df_5min_tail['Close'].iloc[-1]
+                fig_5m.update_layout(
+                    template='plotly_dark',
+                    height=650,
+                    margin=dict(t=20, l=10, r=55, b=40), # X축 레이블 짤림 방지 및 우측 눈금 여백
+                    xaxis_rangeslider_visible=False,
+                    legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
+                    font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+                    plot_bgcolor='#0d1b2a',
+                    paper_bgcolor='#0d1b2a',
+                    # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
+                    yaxis3=dict(
+                        overlaying='y',
+                        side='right',
+                        showgrid=False,
+                        tickfont=dict(size=10, color='#888'),
+                        anchor='x',
+                        tickformat=',d',
+                        showticklabels=True,
+                        range=y_range_5m,
+                        nticks=18 # 눈금을 더 촘촘히 표시
+                    )
+                )
+                price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
+                fig_5m.add_hline(y=last_5m_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
+                fig_5m.add_annotation(
+                    xref='paper', yref='y',
+                    x=1.002, y=last_5m_close,
+                    text=f" <b>{int(last_5m_close):,}</b> ",
+                    showarrow=False,
+                    font=dict(color="#ffffff", size=9, family="malgun gothic"),
+                    bgcolor=price_color,
+                    bordercolor=price_color,
+                    borderwidth=1,
+                    borderpad=3,
+                    xanchor='left'
+                )
+                fig_5m.update_yaxes(
                     tickformat=',d',
+                    gridcolor='rgba(255,255,255,0.06)',
+                    ticks='outside',
                     showticklabels=True,
+                    tickfont=dict(size=10, color='#888'),
                     range=y_range_5m,
-                    nticks=18 # 눈금을 더 촘촘히 표시
+                    nticks=18,             # 눈금을 더 촘촘히 표시
+                    row=1, col=1
                 )
-            )
-            price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
-            fig_5m.add_hline(y=last_5m_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
-            fig_5m.add_annotation(
-                xref='paper', yref='y',
-                x=1.002, y=last_5m_close,
-                text=f" <b>{int(last_5m_close):,}</b> ",
-                showarrow=False,
-                font=dict(color="#ffffff", size=9, family="malgun gothic"),
-                bgcolor=price_color,
-                bordercolor=price_color,
-                borderwidth=1,
-                borderpad=3,
-                xanchor='left'
-            )
-            fig_5m.update_yaxes(
-                tickformat=',d',
-                gridcolor='rgba(255,255,255,0.06)',
-                ticks='outside',
-                showticklabels=True,
-                tickfont=dict(size=10, color='#888'),
-                range=y_range_5m,
-                nticks=18,             # 눈금을 더 촘촘히 표시
-                row=1, col=1
-            )
-            # 거래량 Y축 스케일 조정 (장 시작 첫 봉의 비정상적인 거래량으로 인해 나머지 막대가 안 보이는 현상 방지)
-            vol_s_5m = df_5min_tail['Volume'] // 1000
-            vol_max_5m = vol_s_5m.quantile(0.98) * 1.5 if not vol_s_5m.empty else 100
-            if vol_max_5m <= 0 or pd.isna(vol_max_5m): vol_max_5m = vol_s_5m.max()
-            fig_5m.update_yaxes(
-                tickformat=',d', 
-                ticksuffix='K', 
-                tickfont=dict(size=10, color='#888'),
-                gridcolor='rgba(255,255,255,0.06)', 
-                range=[0, vol_max_5m], 
-                row=2, col=1
-            )
-            
-            fig_5m.update_xaxes(
-                type='category',
-                gridcolor='rgba(255,255,255,0.04)',
-                showticklabels=False,
-                row=1, col=1
-            )
-            fig_5m.update_xaxes(
-                type='category',
-                gridcolor='rgba(255,255,255,0.04)',
-                tickangle=0,
-                tickmode='array',
-                tickvals=display_tick_vals_5m,
-                ticktext=display_tick_texts_5m,
-                row=2, col=1
-            )
-
-        # ── 1분봉 차트 생성 ─────────────────────────────
-        fig_1m = make_subplots(
-            rows=2, cols=1,
-            row_heights=[0.85, 0.15],
-            vertical_spacing=0.03,
-            shared_xaxes=True
-        )
-        if not df_1min.empty:
-            # 1분봉: 당일 전체(약 390봉) 데이터 유지하여 캔들 가시성 확보
-            df_1min_tail = df_1min.tail(400).copy().reset_index(drop=True)
-            
-            tick_vals_1m = list(range(len(df_1min_tail)))
-            tick_texts_1m = df_1min_tail['DateTime'].dt.strftime('%H:%M').tolist()
-            
-            # 1분봉: 약 12개 내외의 라벨만 표시되도록 다운샘플링 (x축 텍스트 겹침 방지)
-            step_1m = max(1, len(tick_vals_1m) // 12)
-            display_tick_vals_1m = tick_vals_1m[::step_1m]
-            display_tick_texts_1m = tick_texts_1m[::step_1m]
-            
-            fig_1m.add_trace(go.Candlestick(
-                x=tick_vals_1m,
-                open=df_1min_tail['Open'],
-                high=df_1min_tail['High'],
-                low=df_1min_tail['Low'],
-                close=df_1min_tail['Close'],
-                increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
-                decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
-                name='1분봉 캔들', showlegend=False
-            ), row=1, col=1)
-            
-            # MA5, MA20 그리기
-            fig_1m.add_trace(go.Scatter(
-                x=tick_vals_1m, y=df_1min_tail['MA5'],
-                name='MA5', mode='lines',
-                line=dict(color='#ffd43b', width=1.5)
-            ), row=1, col=1)
-            
-            fig_1m.add_trace(go.Scatter(
-                x=tick_vals_1m, y=df_1min_tail['MA20'],
-                name='MA20', mode='lines',
-                line=dict(color='#ff922b', width=1.5)
-            ), row=1, col=1)
-            
-            # ATR 손절선 그리기
-            if 'Stop_Loss' in df_1min_tail.columns:
-                fig_1m.add_trace(go.Scatter(
-                    x=tick_vals_1m, y=df_1min_tail['Stop_Loss'],
-                    name='ATR 손절선', mode='lines',
-                    line=dict(color='#e74c3c', width=1.5, dash='dash')
-                ), row=1, col=1)
-                
-            # 매도 신호 그리기
-            if 'Exit_Signal' in df_1min_tail.columns:
-                fig_1m.add_trace(go.Scatter(
-                    x=[None], y=[None],
-                    mode='markers',
-                    name='매도 신호',
-                    marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
-                    showlegend=True
-                ), row=1, col=1)
-                
-                exit_indices_1m = [i for i, val in enumerate(df_1min_tail['Exit_Signal']) if val]
-                if exit_indices_1m:
-                    exit_prices_1m = df_1min_tail.loc[exit_indices_1m, 'Close'].tolist()
-                    exit_highs_1m = df_1min_tail.loc[exit_indices_1m, 'High'].tolist()
-                    hover_texts_1m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_1m]
-                    
-                    fig_1m.add_trace(go.Scatter(
-                        x=exit_indices_1m,
-                        y=[h * 1.002 for h in exit_highs_1m],
-                        mode='markers',
-                        name='매도 신호',
-                        marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
-                        text=hover_texts_1m,
-                        hovertemplate="%{text}<extra></extra>",
-                        showlegend=False
-                    ), row=1, col=1)
-                    
-            # 매수 신호 그리기
-            if 'Buy_Signal' in df_1min_tail.columns:
-                fig_1m.add_trace(go.Scatter(
-                    x=[None], y=[None],
-                    mode='markers',
-                    name='매수 신호',
-                    marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
-                    showlegend=True
-                ), row=1, col=1)
-                
-                buy_indices_1m = [i for i, val in enumerate(df_1min_tail['Buy_Signal']) if val]
-                if buy_indices_1m:
-                    buy_prices_1m = df_1min_tail.loc[buy_indices_1m, 'Close'].tolist()
-                    buy_lows_1m = df_1min_tail.loc[buy_indices_1m, 'Low'].tolist()
-                    hover_texts_1m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_1m]
-                    
-                    fig_1m.add_trace(go.Scatter(
-                        x=buy_indices_1m,
-                        y=[l * 0.998 for l in buy_lows_1m],
-                        mode='markers',
-                        name='매수 신호',
-                        marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
-                        text=hover_texts_1m,
-                        hovertemplate="%{text}<extra></extra>",
-                        showlegend=False
-                    ), row=1, col=1)
-                    
-            # 나의 매수단가선 그리기
-            portfolio = load_portfolio()
-            my_entry_price = 0
-            if code_disp in portfolio:
-                my_entry_price = portfolio[code_disp]["entry_price"]
-                fig_1m.add_trace(go.Scatter(
-                    x=tick_vals_1m, y=[my_entry_price] * len(tick_vals_1m),
-                    name='나의 매수단가', mode='lines',
-                    line=dict(color='#ffd700', width=2.0, dash='dashdot')
-                ), row=1, col=1)
-                
-            vol_colors_1m = [
-                '#ff6b6b' if c >= o else '#4e9ff5'
-                for c, o in zip(df_1min_tail['Close'], df_1min_tail['Open'])
-            ]
-            fig_1m.add_trace(go.Bar(
-                x=tick_vals_1m, y=df_1min_tail['Volume'] // 1000,
-                name='거래량(K)', marker_color=vol_colors_1m,
-                showlegend=False, opacity=0.8
-            ), row=2, col=1)
-
-            # 1분봉 가격 범위(y_range) 수동 계산
-            try:
-                min_val_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].min().min()
-                max_val_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].max().max()
-                for col in ['MA5', 'MA20', 'Stop_Loss']:
-                    if col in df_1min_tail.columns:
-                        min_val_1m = min(min_val_1m, df_1min_tail[col].min(skipna=True))
-                        max_val_1m = max(max_val_1m, df_1min_tail[col].max(skipna=True))
-                margin_1m = (max_val_1m - min_val_1m) * 0.05 if max_val_1m > min_val_1m else 100
-                y_range_1m = [min_val_1m - margin_1m, max_val_1m + margin_1m]
-            except Exception:
-                y_range_1m = None
-
-            # 우측 Y축 눈금(yaxis3)을 활성화하기 위한 더미 투명 트레이스 주입 (row/col 생략하여 layout y3 매핑)
-            fig_1m.add_trace(go.Scatter(
-                x=tick_vals_1m,
-                y=df_1min_tail['Close'],
-                yaxis='y3',
-                showlegend=False,
-                hoverinfo='skip',
-                mode='markers',
-                marker=dict(opacity=0)
-            ))
-
-            last_1m_close = df_1min_tail['Close'].iloc[-1]
-            fig_1m.update_layout(
-                template='plotly_dark',
-                height=650,
-                margin=dict(t=20, l=10, r=55, b=40), # X축 레이블 짤림 방지 및 우측 눈금 여백
-                xaxis_rangeslider_visible=False,
-                legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
-                font=dict(family='malgun gothic, nanum gothic, sans-serif'),
-                plot_bgcolor='#0d1b2a',
-                paper_bgcolor='#0d1b2a',
-                # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
-                yaxis3=dict(
-                    overlaying='y',
-                    side='right',
-                    showgrid=False,
+                # 거래량 Y축 스케일 조정 (장 시작 첫 봉의 비정상적인 거래량으로 인해 나머지 막대가 안 보이는 현상 방지)
+                vol_s_5m = df_5min_tail['Volume'] // 1000
+                vol_max_5m = vol_s_5m.quantile(0.98) * 1.5 if not vol_s_5m.empty else 100
+                if vol_max_5m <= 0 or pd.isna(vol_max_5m): vol_max_5m = vol_s_5m.max()
+                fig_5m.update_yaxes(
+                    tickformat=',d', 
+                    ticksuffix='K', 
                     tickfont=dict(size=10, color='#888'),
-                    anchor='x',
-                    tickformat=',d',
-                    showticklabels=True,
-                    range=y_range_1m,
-                    nticks=18 # 눈금을 더 촘촘히 표시
+                    gridcolor='rgba(255,255,255,0.06)', 
+                    range=[0, vol_max_5m], 
+                    row=2, col=1
                 )
-            )
-            price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
-            fig_1m.add_hline(y=last_1m_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
-            fig_1m.add_annotation(
-                xref='paper', yref='y',
-                x=1.002, y=last_1m_close,
-                text=f" <b>{int(last_1m_close):,}</b> ",
-                showarrow=False,
-                font=dict(color="#ffffff", size=9, family="malgun gothic"),
-                bgcolor=price_color,
-                bordercolor=price_color,
-                borderwidth=1,
-                borderpad=3,
-                xanchor='left'
-            )
-            fig_1m.update_yaxes(
-                tickformat=',d',
-                gridcolor='rgba(255,255,255,0.06)',
-                ticks='outside',
-                showticklabels=True,
-                tickfont=dict(size=10, color='#888'),
-                range=y_range_1m,
-                nticks=18,             # 눈금을 더 촘촘히 표시
-                row=1, col=1
-            )
-            # 거래량 Y축 스케일 조정 (장 시작 첫 봉의 비정상적인 거래량으로 인해 나머지 막대가 안 보이는 현상 방지)
-            vol_s_1m = df_1min_tail['Volume'] // 1000
-            vol_max_1m = vol_s_1m.quantile(0.98) * 2.0 if not vol_s_1m.empty else 100
-            if vol_max_1m <= 0 or pd.isna(vol_max_1m): vol_max_1m = vol_s_1m.max()
-            fig_1m.update_yaxes(
-                tickformat=',d', 
-                ticksuffix='K', 
-                tickfont=dict(size=10, color='#888'),
-                gridcolor='rgba(255,255,255,0.06)', 
-                range=[0, vol_max_1m], 
-                row=2, col=1
-            )
-            
-            fig_1m.update_xaxes(
-                type='category',
-                gridcolor='rgba(255,255,255,0.04)',
-                showticklabels=False,
-                row=1, col=1
-            )
-            fig_1m.update_xaxes(
-                type='category',
-                gridcolor='rgba(255,255,255,0.04)',
-                tickangle=0,
-                tickmode='array',
-                tickvals=display_tick_vals_1m,
-                ticktext=display_tick_texts_1m,
-                row=2, col=1
-            )
-
-        # ── 탭 레이아웃 렌더링 ─────────────────────────────
-        tab_day, tab_5m, tab_1m = st.tabs(["📅 일봉 차트", "⏱️ 5분봉 (캔들)", "⚡ 1분봉 (캔들)"])
-        with tab_day:
-            st.plotly_chart(fig_c, use_container_width=True, config={'displayModeBar': False})
-        with tab_5m:
-            if not df_5min.empty:
+                
+                fig_5m.update_xaxes(
+                    type='category',
+                    gridcolor='rgba(255,255,255,0.04)',
+                    showticklabels=False,
+                    row=1, col=1
+                )
+                fig_5m.update_xaxes(
+                    type='category',
+                    gridcolor='rgba(255,255,255,0.04)',
+                    tickangle=0,
+                    tickmode='array',
+                    tickvals=display_tick_vals_5m,
+                    ticktext=display_tick_texts_5m,
+                    row=2, col=1
+                )
+                
                 st.plotly_chart(fig_5m, use_container_width=True, config={'displayModeBar': False})
             else:
                 st.info("⚠️ 5분봉 데이터를 불러올 수 없거나 휴장일입니다.")
-        with tab_1m:
+
+        elif chart_type == "⚡ 1분봉 (캔들)":
+            # ── 1분봉 차트 생성 ─────────────────────────────
+            fig_1m = make_subplots(
+                rows=2, cols=1,
+                row_heights=[0.85, 0.15],
+                vertical_spacing=0.03,
+                shared_xaxes=True
+            )
             if not df_1min.empty:
+                # 1분봉: 당일 전체(약 390봉) 데이터 유지하여 캔들 가시성 확보
+                df_1min_tail = df_1min.tail(400).copy().reset_index(drop=True)
+                
+                tick_vals_1m = list(range(len(df_1min_tail)))
+                tick_texts_1m = df_1min_tail['DateTime'].dt.strftime('%H:%M').tolist()
+                
+                # 1분봉: 약 12개 내외의 라벨만 표시되도록 다운샘플링 (x축 텍스트 겹침 방지)
+                step_1m = max(1, len(tick_vals_1m) // 12)
+                display_tick_vals_1m = tick_vals_1m[::step_1m]
+                display_tick_texts_1m = tick_texts_1m[::step_1m]
+                
+                fig_1m.add_trace(go.Candlestick(
+                    x=tick_vals_1m,
+                    open=df_1min_tail['Open'],
+                    high=df_1min_tail['High'],
+                    low=df_1min_tail['Low'],
+                    close=df_1min_tail['Close'],
+                    increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
+                    decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
+                    name='1분봉 캔들', showlegend=False
+                ), row=1, col=1)
+                
+                # MA5, MA20 그리기
+                fig_1m.add_trace(go.Scattergl(
+                    x=tick_vals_1m, y=df_1min_tail['MA5'],
+                    name='MA5', mode='lines',
+                    line=dict(color='#ffd43b', width=1.5)
+                ), row=1, col=1)
+                
+                fig_1m.add_trace(go.Scattergl(
+                    x=tick_vals_1m, y=df_1min_tail['MA20'],
+                    name='MA20', mode='lines',
+                    line=dict(color='#ff922b', width=1.5)
+                ), row=1, col=1)
+                
+                # ATR 손절선 그리기
+                if 'Stop_Loss' in df_1min_tail.columns:
+                    fig_1m.add_trace(go.Scattergl(
+                        x=tick_vals_1m, y=df_1min_tail['Stop_Loss'],
+                        name='ATR 손절선', mode='lines',
+                        line=dict(color='#e74c3c', width=1.5, dash='dash')
+                    ), row=1, col=1)
+                    
+                # 매도 신호 그리기
+                if 'Exit_Signal' in df_1min_tail.columns:
+                    fig_1m.add_trace(go.Scattergl(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='매도 신호',
+                        marker=dict(symbol='triangle-down', size=10, color='#00e5ff'),
+                        showlegend=True
+                    ), row=1, col=1)
+                    
+                    exit_indices_1m = [i for i, val in enumerate(df_1min_tail['Exit_Signal']) if val]
+                    if exit_indices_1m:
+                        exit_prices_1m = df_1min_tail.loc[exit_indices_1m, 'Close'].tolist()
+                        exit_highs_1m = df_1min_tail.loc[exit_indices_1m, 'High'].tolist()
+                        hover_texts_1m = [f"<b>⚠️ 매도</b><br>{int(p):,}원" if p >= 100 else f"<b>⚠️ 매도</b><br>{p:,.2f}" for p in exit_prices_1m]
+                        
+                        fig_1m.add_trace(go.Scattergl(
+                            x=exit_indices_1m,
+                            y=[h * 1.002 for h in exit_highs_1m],
+                            mode='markers',
+                            name='매도 신호',
+                            marker=dict(symbol='arrow-down', size=14, color='#00e5ff'),
+                            text=hover_texts_1m,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+                        
+                # 매수 신호 그리기
+                if 'Buy_Signal' in df_1min_tail.columns:
+                    fig_1m.add_trace(go.Scattergl(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='매수 신호',
+                        marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
+                        showlegend=True
+                    ), row=1, col=1)
+                    
+                    buy_indices_1m = [i for i, val in enumerate(df_1min_tail['Buy_Signal']) if val]
+                    if buy_indices_1m:
+                        buy_prices_1m = df_1min_tail.loc[buy_indices_1m, 'Close'].tolist()
+                        buy_lows_1m = df_1min_tail.loc[buy_indices_1m, 'Low'].tolist()
+                        hover_texts_1m = [f"<b>🟢 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>🟢 매수</b><br>{p:,.2f}" for p in buy_prices_1m]
+                        
+                        fig_1m.add_trace(go.Scattergl(
+                            x=buy_indices_1m,
+                            y=[l * 0.998 for l in buy_lows_1m],
+                            mode='markers',
+                            name='매수 신호',
+                            marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
+                            text=hover_texts_1m,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+                        
+                # 나의 매수단가선 그리기
+                portfolio = load_portfolio()
+                my_entry_price = 0
+                if code_disp in portfolio:
+                    my_entry_price = portfolio[code_disp]["entry_price"]
+                    fig_1m.add_trace(go.Scattergl(
+                        x=tick_vals_1m, y=[my_entry_price] * len(tick_vals_1m),
+                        name='나의 매수단가', mode='lines',
+                        line=dict(color='#ffd700', width=2.0, dash='dashdot')
+                    ), row=1, col=1)
+                    
+                vol_colors_1m = [
+                    '#ff6b6b' if c >= o else '#4e9ff5'
+                    for c, o in zip(df_1min_tail['Close'], df_1min_tail['Open'])
+                ]
+                fig_1m.add_trace(go.Bar(
+                    x=tick_vals_1m, y=df_1min_tail['Volume'] // 1000,
+                    name='거래량(K)', marker_color=vol_colors_1m,
+                    showlegend=False, opacity=0.8
+                ), row=2, col=1)
+
+                # 1분봉 가격 범위(y_range) 수동 계산
+                try:
+                    min_val_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].min().min()
+                    max_val_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].max().max()
+                    for col in ['MA5', 'MA20', 'Stop_Loss']:
+                        if col in df_1min_tail.columns:
+                            min_val_1m = min(min_val_1m, df_1min_tail[col].min(skipna=True))
+                            max_val_1m = max(max_val_1m, df_1min_tail[col].max(skipna=True))
+                    margin_1m = (max_val_1m - min_val_1m) * 0.05 if max_val_1m > min_val_1m else 100
+                    y_range_1m = [min_val_1m - margin_1m, max_val_1m + margin_1m]
+                except Exception:
+                    y_range_1m = None
+
+                # 우측 Y축 눈금(yaxis3)을 활성화하기 위한 더미 투명 트레이스 주입 (row/col 생략하여 layout y3 매핑)
+                fig_1m.add_trace(go.Scattergl(
+                    x=tick_vals_1m,
+                    y=df_1min_tail['Close'],
+                    yaxis='y3',
+                    showlegend=False,
+                    hoverinfo='skip',
+                    mode='markers',
+                    marker=dict(opacity=0)
+                ))
+
+                last_1m_close = df_1min_tail['Close'].iloc[-1]
+                fig_1m.update_layout(
+                    template='plotly_dark',
+                    height=650,
+                    margin=dict(t=20, l=10, r=55, b=40), # X축 레이블 짤림 방지 및 우측 눈금 여백
+                    xaxis_rangeslider_visible=False,
+                    legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
+                    font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+                    plot_bgcolor='#0d1b2a',
+                    paper_bgcolor='#0d1b2a',
+                    # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
+                    yaxis3=dict(
+                        overlaying='y',
+                        side='right',
+                        showgrid=False,
+                        tickfont=dict(size=10, color='#888'),
+                        anchor='x',
+                        tickformat=',d',
+                        showticklabels=True,
+                        range=y_range_1m,
+                        nticks=18 # 눈금을 더 촘촘히 표시
+                    )
+                )
+                price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
+                fig_1m.add_hline(y=last_1m_close, line_dash="dot", line_color=price_color, line_width=1.5, opacity=0.6, row=1, col=1)
+                fig_1m.add_annotation(
+                    xref='paper', yref='y',
+                    x=1.002, y=last_1m_close,
+                    text=f" <b>{int(last_1m_close):,}</b> ",
+                    showarrow=False,
+                    font=dict(color="#ffffff", size=9, family="malgun gothic"),
+                    bgcolor=price_color,
+                    bordercolor=price_color,
+                    borderwidth=1,
+                    borderpad=3,
+                    xanchor='left'
+                )
+                fig_1m.update_yaxes(
+                    tickformat=',d',
+                    gridcolor='rgba(255,255,255,0.06)',
+                    ticks='outside',
+                    showticklabels=True,
+                    tickfont=dict(size=10, color='#888'),
+                    range=y_range_1m,
+                    nticks=18,             # 눈금을 더 촘촘히 표시
+                    row=1, col=1
+                )
+                # 거래량 Y축 스케일 조정 (장 시작 첫 봉의 비정상적인 거래량으로 인해 나머지 막대가 안 보이는 현상 방지)
+                vol_s_1m = df_1min_tail['Volume'] // 1000
+                vol_max_1m = vol_s_1m.quantile(0.98) * 2.0 if not vol_s_1m.empty else 100
+                if vol_max_1m <= 0 or pd.isna(vol_max_1m): vol_max_1m = vol_s_1m.max()
+                fig_1m.update_yaxes(
+                    tickformat=',d', 
+                    ticksuffix='K', 
+                    tickfont=dict(size=10, color='#888'),
+                    gridcolor='rgba(255,255,255,0.06)', 
+                    range=[0, vol_max_1m], 
+                    row=2, col=1
+                )
+                
+                fig_1m.update_xaxes(
+                    type='category',
+                    gridcolor='rgba(255,255,255,0.04)',
+                    showticklabels=False,
+                    row=1, col=1
+                )
+                fig_1m.update_xaxes(
+                    type='category',
+                    gridcolor='rgba(255,255,255,0.04)',
+                    tickangle=0,
+                    tickmode='array',
+                    tickvals=display_tick_vals_1m,
+                    ticktext=display_tick_texts_1m,
+                    row=2, col=1
+                )
+                
                 st.plotly_chart(fig_1m, use_container_width=True, config={'displayModeBar': False})
             else:
                 st.info("⚠️ 1분봉 데이터를 불러올 수 없거나 휴장일입니다.")
