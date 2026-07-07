@@ -3522,9 +3522,9 @@ if st.session_state.sel_code:
                     # 정상적인 결과일 때 캐싱 (is_error = False)
                     st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, False)
                 except RuntimeWarning as e:
-                    err_msg = str(e)
+                    # API 호출 실패 시 에러 문구 노출 없이 로컬 퀀트 리스크 조언으로 자연스럽게 대체
                     fallback_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
-                    ai_comment = f"{err_msg}<br/><br/><strong>[대체 로컬 퀀트 리스크 조언]</strong><br/>{fallback_comment}"
+                    ai_comment = fallback_comment
                     # 속도 제한 등 임시 오류 시 30초 동안 쿨다운 상태 캐싱 (is_error = True)
                     st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, True)
                 except Exception as e:
