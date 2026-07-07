@@ -1963,14 +1963,14 @@ st.sidebar.caption('대시보드 동작에 문제가 있거나 질문이 있는 
 
 # 1. API Key 불러오기 및 입력창
 import os
-gemini_api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
-if not gemini_api_key:
-    gemini_api_key = st.sidebar.text_input(
-        "Gemini API Key 입력",
-        type="password",
-        placeholder="AIzaSy...",
-        help="Google AI Studio에서 발급받은 API Key를 입력하세요."
-    )
+default_gemini_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+gemini_api_key = st.sidebar.text_input(
+    "Gemini API Key",
+    value=default_gemini_key,
+    type="password",
+    placeholder="AIzaSy...",
+    help="기본으로 공용 API Key가 사용되지만, 한도 초과 시 본인의 Gemini API Key를 입력할 수 있습니다."
+)
 
 # 2. 대시보드 상태 로그 첨부 여부
 attach_status = st.sidebar.checkbox("대시보드 상태 데이터 첨부", value=True, help="체크하면 대시보드 파일 크기, 시간대, 데이터 로드 상태 등의 디버깅 힌트가 질문과 함께 전송됩니다.")
@@ -3522,7 +3522,9 @@ if st.session_state.sel_code:
                     # 정상적인 결과일 때 캐싱 (is_error = False)
                     st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, False)
                 except RuntimeWarning as e:
-                    ai_comment = str(e)
+                    err_msg = str(e)
+                    fallback_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
+                    ai_comment = f"{err_msg}<br/><br/><strong>[대체 로컬 퀀트 리스크 조언]</strong><br/>{fallback_comment}"
                     # 속도 제한 등 임시 오류 시 30초 동안 쿨다운 상태 캐싱 (is_error = True)
                     st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, True)
                 except Exception as e:
