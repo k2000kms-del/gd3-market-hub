@@ -129,10 +129,9 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
             else:
                 last_err = f"API 응답 코드: {r.status_code} ({r.text[:100]})"
                 
-                # 429 (속도 제한)인 경우 즉시 다른 모델 시도 중단 (불필요한 중복 요청 최소화)
+                # 429 (속도 제한)인 경우 쿼터 제한을 기록하되, 모델별 쿼터가 다를 수 있으므로 루프를 중단하지 않고 다른 모델로 폴백 시도
                 if r.status_code == 429:
                     is_quota_limit = True
-                    break
                 # 400 (잘못된 API 키)인 경우 즉시 중단
                 elif r.status_code == 400:
                     is_invalid_key = True
@@ -141,7 +140,6 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
             last_err = str(e)
             if "429" in last_err or "Quota" in last_err:
                 is_quota_limit = True
-                break
             elif "400" in last_err or "API key" in last_err:
                 is_invalid_key = True
                 break
