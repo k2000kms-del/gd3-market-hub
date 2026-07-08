@@ -917,6 +917,7 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
         entry_idx   = 0
         current_sl  = np.nan
         add_count   = 0        # 추가 매수 횟수 (1회 제한)
+        actual_position_cleared = False
 
         # 포트폴리오 보유 중인 경우 초기 상태 연동
         if my_entry_price > 0:
@@ -977,12 +978,20 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
                     in_position = False
                     current_sl  = np.nan
                     add_count   = 0
+                    if my_entry_price > 0:
+                        actual_position_cleared = True
                 else:
                     exit_signal_list.append(False)
             else:
                 exit_signal_list.append(False)
                 add_signal_list.append(False)
                 stop_loss_series.append(raw_sl)
+
+                # 실제 보유 포지션이 이미 청산된 후라면 신규 가상 진입을 완전히 차단
+                if actual_position_cleared:
+                    buy_signal_list.append(False)
+                    fall_signal_list.append(False)
+                    continue
 
                 # ── [방안 B] 낙폭과대 반등 매수(FALL_BUY) 조건 검사 ──
                 cond_fall_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30)
@@ -4085,14 +4094,14 @@ if st.session_state.sel_code:
                 shared_xaxes=True
             )
             if not df_5min.empty:
-                # 5분봉: 최근 1.5일(약 120봉) 데이터만 유지하여 캔들 가시성 확보
-                df_5min_tail = df_5min.tail(120).copy().reset_index(drop=True)
+                # 5분봉: 최근 3~4일(약 250봉) 데이터를 유지하여 캔들 가시성 및 히스토리 확보
+                df_5min_tail = df_5min.tail(250).copy().reset_index(drop=True)
                 
                 tick_vals_5m = list(range(len(df_5min_tail)))
-                tick_texts_5m = df_5min_tail['DateTime'].dt.strftime('%H:%M').tolist()
+                tick_texts_5m = df_5min_tail['DateTime'].dt.strftime('%m/%d %H:%M').tolist()
                 
-                # 5분봉: 약 10개 내외의 라벨만 표시되도록 다운샘플링 (x축 텍스트 겹침 방지)
-                step_5m = max(1, len(tick_vals_5m) // 10)
+                # 5분봉: 약 12개 내외의 라벨만 표시되도록 다운샘플링 (x축 텍스트 겹침 방지)
+                step_5m = max(1, len(tick_vals_5m) // 12)
                 display_tick_vals_5m = tick_vals_5m[::step_5m]
                 display_tick_texts_5m = tick_texts_5m[::step_5m]
                 
@@ -4294,7 +4303,7 @@ if st.session_state.sel_code:
                 fig_5m.update_xaxes(
                     type='category',
                     gridcolor='rgba(255,255,255,0.04)',
-                    tickangle=0,
+                    tickangle=-15,
                     tickmode='array',
                     tickvals=display_tick_vals_5m,
                     ticktext=display_tick_texts_5m,
