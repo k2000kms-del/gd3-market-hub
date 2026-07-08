@@ -726,10 +726,12 @@ def _get_minute_history_raw(code: str, count: int = 800):
                 df['Volume'] = df['Volume'].fillna(0)
                 
                 # Naver API returns null for Open, High, Low in 1-min data for past days, but real values for today.
-                # Synthesize them using previous Close so Candlestick chart can render.
+                # 캔들 차트의 꼬리가 정상적으로 렌더링되고 지표 왜곡을 막기 위해 결정론적 버퍼를 추가하여 꼬리 생성.
                 df['Open'] = df['Open'].fillna(df['Close'].shift(1).fillna(df['Close']))
-                df['High'] = df['High'].fillna(df[['Open', 'Close']].max(axis=1))
-                df['Low'] = df['Low'].fillna(df[['Open', 'Close']].min(axis=1))
+                price_buffer = df['Close'] * 0.0005
+                df['High'] = df['High'].fillna(df[['Open', 'Close']].max(axis=1) + price_buffer)
+                df['Low'] = df['Low'].fillna((df[['Open', 'Close']].min(axis=1) - price_buffer).clip(lower=0))
+
                 
                 # '202606261530' -> datetime 변환
                 df['DateTime'] = pd.to_datetime(df['Time'], format='%Y%m%d%H%M', errors='coerce')
@@ -761,20 +763,21 @@ def resample_to_5min(df_1min):
         df = df_1min.copy()
         df.set_index('DateTime', inplace=True)
         
-        # 5분 단위 resample (1분봉 종가 흐름으로 OHLC 구성)
-        ohlc = df['Close'].resample('5min', closed='left', label='left').ohlc()
-        volume = df['Volume'].resample('5min', closed='left', label='left').sum()
+        # 5분 단위 resample (1분봉의 시가/고가/저가/종가/거래량을 적절히 집계)
+        resampled_open = df['Open'].resample('5min', closed='left', label='left').first()
+        resampled_high = df['High'].resample('5min', closed='left', label='left').max()
+        resampled_low = df['Low'].resample('5min', closed='left', label='left').min()
+        resampled_close = df['Close'].resample('5min', closed='left', label='left').last()
+        resampled_volume = df['Volume'].resample('5min', closed='left', label='left').sum()
         
-        resampled = pd.concat([ohlc, volume], axis=1)
+        resampled = pd.DataFrame({
+            'Open': resampled_open,
+            'High': resampled_high,
+            'Low': resampled_low,
+            'Close': resampled_close,
+            'Volume': resampled_volume
+        })
         resampled.reset_index(inplace=True)
-        
-        resampled.rename(columns={
-            'open': 'Open',
-            'high': 'High',
-            'low': 'Low',
-            'close': 'Close',
-            'volume': 'Volume'
-        }, inplace=True)
         
         resampled = resampled.dropna(subset=['Close'])
         return resampled
@@ -3735,7 +3738,8 @@ if st.session_state.sel_code:
                 low=df_candle['Low'],   close=df_candle['Close'],
                 increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
                 decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
-                name='캔들', showlegend=False
+                name='캔들', showlegend=False,
+                hovertemplate="<b>%{x}</b><br>시가: %{open:,}원<br>고가: %{high:,}원<br>저가: %{low:,}원<br>종가: %{close:,}원<extra></extra>"
             ), row=1, col=1)
 
             # MA5
@@ -3976,7 +3980,9 @@ if st.session_state.sel_code:
                     low=df_5min_tail['Low'], close=df_5min_tail['Close'],
                     increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
                     decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
-                    name='5분봉 캔들', showlegend=False
+                    name='5분봉 캔들', showlegend=False,
+                    text=tick_texts_5m,
+                    hovertemplate="<b>%{text}</b><br>시가: %{open:,}원<br>고가: %{high:,}원<br>저가: %{low:,}원<br>종가: %{close:,}원<extra></extra>"
                 ), row=1, col=1)
                 
                 # MA5, MA20 그리기
@@ -4205,7 +4211,9 @@ if st.session_state.sel_code:
                     close=df_1min_tail['Close'],
                     increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
                     decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
-                    name='1분봉 캔들', showlegend=False
+                    name='1분봉 캔들', showlegend=False,
+                    text=tick_texts_1m,
+                    hovertemplate="<b>%{text}</b><br>시가: %{open:,}원<br>고가: %{high:,}원<br>저가: %{low:,}원<br>종가: %{close:,}원<extra></extra>"
                 ), row=1, col=1)
                 
                 # MA5, MA20 그리기
