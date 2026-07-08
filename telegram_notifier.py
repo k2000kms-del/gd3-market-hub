@@ -174,6 +174,68 @@ def notify_exit_signal(
     return _send(token, chat_id, text)
 
 
+def notify_add_signal(
+    token: str,
+    chat_id: str,
+    ticker: str,
+    name: str,
+    price: float,
+    timestamp: datetime,
+    rsi: float = None,
+    vwap: float = None,
+) -> bool:
+    """추가 매수 신호(ADD_SIGNAL) 발생 시 텔레그램 알림 전송."""
+    time_str = timestamp.strftime("%H:%M")
+    extra_lines = ""
+    if rsi is not None:
+        extra_lines += f"\n├ RSI(14): <b>{rsi:.1f}</b>"
+    if vwap is not None:
+        extra_lines += f"\n└ VWAP: <b>{vwap:,.0f}원</b>"
+
+    text = (
+        f"🟠 <b>[추가 매수]</b> {name} ({ticker})\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 추가 매수가: <b>{price:,.0f}원</b>\n"
+        f"⏰ 발생 시각: {time_str}"
+        f"{extra_lines}\n"
+        f"⚠️ 스마트 추매: 평단가 조정 및 30봉 대기 연장\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"<i>GD 3.0 Market Hub 스캘핑 신호</i>"
+    )
+    return _send(token, chat_id, text)
+
+
+def notify_fall_buy_signal(
+    token: str,
+    chat_id: str,
+    ticker: str,
+    name: str,
+    price: float,
+    timestamp: datetime,
+    rsi: float = None,
+    vwap: float = None,
+) -> bool:
+    """낙주 매수 신호(FALL_BUY_SIGNAL) 발생 시 텔레그램 알림 전송."""
+    time_str = timestamp.strftime("%H:%M")
+    extra_lines = ""
+    if rsi is not None:
+        extra_lines += f"\n├ RSI(14): <b>{rsi:.1f}</b>"
+    if vwap is not None:
+        extra_lines += f"\n└ VWAP: <b>{vwap:,.0f}원</b>"
+
+    text = (
+        f"🔵 <b>[낙주 반등 매수]</b> {name} ({ticker})\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 낙주 매수가: <b>{price:,.0f}원</b>\n"
+        f"⏰ 발생 시각: {time_str}"
+        f"{extra_lines}\n"
+        f"📊 RSI 과매도 구간(30 이하) 탈출 확인 타점\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"<i>GD 3.0 Market Hub 스캘핑 신호</i>"
+    )
+    return _send(token, chat_id, text)
+
+
 def notify_custom(token: str, chat_id: str, message: str) -> bool:
     """임의 텍스트 메시지를 텔레그램으로 전송.
     

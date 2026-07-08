@@ -909,11 +909,14 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
         stop_loss_series = []
         exit_signal_list = []
         buy_signal_list  = []
+        add_signal_list  = []  # 스마트 추가 매수 신호
+        fall_signal_list = []  # 낙주 매수 신호
 
         in_position = False
         entry_price = 0.0
         entry_idx   = 0
         current_sl  = np.nan
+        add_count   = 0        # 추가 매수 횟수 (1회 제한)
 
         # 포트폴리오 보유 중인 경우 초기 상태 연동
         if my_entry_price > 0:
@@ -927,14 +930,20 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
             raw_buy   = df['Raw_Buy'].iloc[i]
             raw_sl    = dynamic_raw_sl.iloc[i]
 
+            prev_rsi = df['RSI_14'].iloc[i-1] if i > 0 else np.nan
+            curr_rsi = df['RSI_14'].iloc[i]
+
             if pd.isna(raw_sl):
                 stop_loss_series.append(np.nan)
                 exit_signal_list.append(False)
                 buy_signal_list.append(False)
+                add_signal_list.append(False)
+                fall_signal_list.append(False)
                 continue
 
             if in_position:
                 buy_signal_list.append(False)
+                fall_signal_list.append(False)
 
                 # 손절선 래칫 (올라간 손절선은 내려오지 않음)
                 current_sl = raw_sl if pd.isna(current_sl) else max(current_sl, raw_sl)
@@ -946,6 +955,18 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
 
                 pnl_pct = (close_val - entry_price) / entry_price * 100 if entry_price > 0 else 0
 
+                # ── [방안 A] 스마트 추가 매수(ADD) 조건 검사 ──
+                cond_add_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30) or \
+                                     (close_val > df['VWAP'].iloc[i] and df['Vol_Surge'].iloc[i])
+                
+                if pnl_pct <= -3.0 and cond_add_indicator and add_count == 0:
+                    add_signal_list.append(True)
+                    add_count = 1
+                    entry_price = (entry_price + close_val) / 2
+                    entry_idx = i # 시간 컷오프 리셋
+                else:
+                    add_signal_list.append(False)
+
                 # 청산 트리거
                 hit_stop = (open_val < prev_sl) or (close_val < current_sl)   # 트레일링 스탑
                 hit_tp   = pnl_pct >= tp_pct                                   # 익절 (타임프레임별)
@@ -955,24 +976,42 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
                     exit_signal_list.append(True)
                     in_position = False
                     current_sl  = np.nan
+                    add_count   = 0
                 else:
                     exit_signal_list.append(False)
             else:
                 exit_signal_list.append(False)
+                add_signal_list.append(False)
                 stop_loss_series.append(raw_sl)
 
-                if raw_buy:
-                    buy_signal_list.append(True)
+                # ── [방안 B] 낙주 매수(FALL_BUY) 조건 검사 ──
+                cond_fall_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30)
+
+                if cond_fall_indicator:
+                    fall_signal_list.append(True)
+                    buy_signal_list.append(False)
                     in_position = True
                     entry_price = close_val
                     entry_idx   = i
                     current_sl  = raw_sl
+                    add_count   = 0
+                elif raw_buy:
+                    buy_signal_list.append(True)
+                    fall_signal_list.append(False)
+                    in_position = True
+                    entry_price = close_val
+                    entry_idx   = i
+                    current_sl  = raw_sl
+                    add_count   = 0
                 else:
                     buy_signal_list.append(False)
+                    fall_signal_list.append(False)
 
         df['Stop_Loss']   = stop_loss_series
         df['Exit_Signal'] = exit_signal_list
         df['Buy_Signal']  = buy_signal_list
+        df['Add_Signal']  = add_signal_list
+        df['Fall_Signal'] = fall_signal_list
         df.drop(columns=['ATR_Scalp', 'Raw_Buy'], inplace=True, errors='ignore')
 
     except Exception as e:
@@ -1077,6 +1116,20 @@ def run_portfolio_background_scanner():
                                 vwap_v = float(last_row['VWAP']) if 'VWAP' in last_row and pd.notna(last_row.get('VWAP')) else None
                                 if last_row.get('Buy_Signal') == True:
                                     live_logger.log_buy_signal(
+                                        ticker=code, price=float(last_row['Close']),
+                                        timestamp=last_row['DateTime'], name=name,
+                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
+                                        rsi=rsi_v, vwap=vwap_v
+                                    )
+                                elif last_row.get('Add_Signal') == True:
+                                    live_logger.log_add_signal(
+                                        ticker=code, price=float(last_row['Close']),
+                                        timestamp=last_row['DateTime'], name=name,
+                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
+                                        rsi=rsi_v, vwap=vwap_v
+                                    )
+                                elif last_row.get('Fall_Signal') == True:
+                                    live_logger.log_fall_buy_signal(
                                         ticker=code, price=float(last_row['Close']),
                                         timestamp=last_row['DateTime'], name=name,
                                         tg_token=tg_token, tg_chat_id=tg_chat_id,
@@ -1981,7 +2034,36 @@ with col_btn2:
     else:
         portfolio_sidebar_container.button("🗑️ 삭제", use_container_width=True, disabled=True, key="btn_port_del_dis")
 
+portfolio_sidebar_container.markdown('---')
+portfolio_sidebar_container.markdown('### 📊 포트폴리오 추세 진단')
+if not portfolio:
+    portfolio_sidebar_container.caption('보유 중인 종목이 없습니다.')
+else:
+    for p_code, p_info in portfolio.items():
+        p_name = p_info.get('name', p_code)
+        try:
+            p_df = _get_stock_history_raw(p_code)
+            if not p_df.empty and len(p_df) >= 5:
+                p_close = p_df['Close'].iloc[-1]
+                p_ma5 = p_df['Close'].rolling(5).mean().iloc[-1]
+                if p_close >= p_ma5:
+                    portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}):  \n`🟢 상승 추세 유지 (보유)`")
+                else:
+                    portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}):  \n`⚠️ 추세 이탈 (교체 검토)`")
+            else:
+                portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}):  \n`⚠️ 데이터 부족 (대기)`")
+        except Exception:
+            portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}): `N/A` (조회 대기)")
 
+portfolio_sidebar_container.markdown('---')
+portfolio_sidebar_container.markdown('### 💡 4.5개년 최적화 추천 주도주')
+portfolio_sidebar_container.info(
+    "**[추천 포트폴리오 후보군]**  \n"
+    "• **한화에어로스페이스** (012450)  \n"
+    "• **알테오젠** (196170)  \n"
+    "• **삼성전자** (005930)  \n\n"
+    "💡 *4.5개년 백테스트 최적 조건(RSI 35~65, ATR 2.0x, 익절 0.7%) 적용 시 우수한 승률이 입증된 종목입니다.*"
+)
 
 # ── 사이드바 맨 아래: Gemini AI 헬프 센터 ───────────────────
 st.sidebar.markdown('---')
@@ -3094,6 +3176,28 @@ if st.session_state.sel_code:
                     _vwap_val = float(last_row['VWAP'])   if 'VWAP'    in last_row and pd.notna(last_row.get('VWAP'))    else None
                     if last_row.get('Buy_Signal') == True:
                         live_logger.log_buy_signal(
+                            ticker=code_disp,
+                            price=float(last_row['Close']),
+                            timestamp=last_row['DateTime'],
+                            name=name_disp,
+                            tg_token=tg_token,
+                            tg_chat_id=tg_chat_id,
+                            rsi=_rsi_val,
+                            vwap=_vwap_val,
+                        )
+                    elif last_row.get('Add_Signal') == True:
+                        live_logger.log_add_signal(
+                            ticker=code_disp,
+                            price=float(last_row['Close']),
+                            timestamp=last_row['DateTime'],
+                            name=name_disp,
+                            tg_token=tg_token,
+                            tg_chat_id=tg_chat_id,
+                            rsi=_rsi_val,
+                            vwap=_vwap_val,
+                        )
+                    elif last_row.get('Fall_Signal') == True:
+                        live_logger.log_fall_buy_signal(
                             ticker=code_disp,
                             price=float(last_row['Close']),
                             timestamp=last_row['DateTime'],
