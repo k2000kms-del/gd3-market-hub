@@ -215,7 +215,7 @@ def notify_fall_buy_signal(
     rsi: float = None,
     vwap: float = None,
 ) -> bool:
-    """낙주 매수 신호(FALL_BUY_SIGNAL) 발생 시 텔레그램 알림 전송."""
+    """낙폭과대 반등 매수 신호(FALL_BUY_SIGNAL) 발생 시 텔레그램 알림 전송."""
     time_str = timestamp.strftime("%H:%M")
     extra_lines = ""
     if rsi is not None:
@@ -224,9 +224,9 @@ def notify_fall_buy_signal(
         extra_lines += f"\n└ VWAP: <b>{vwap:,.0f}원</b>"
 
     text = (
-        f"🔵 <b>[낙주 반등 매수]</b> {name} ({ticker})\n"
+        f"🔵 <b>[낙폭과대 반등 매수]</b> {name} ({ticker})\n"
         f"━━━━━━━━━━━━━━\n"
-        f"💰 낙주 매수가: <b>{price:,.0f}원</b>\n"
+        f"💰 낙폭과대 매수가: <b>{price:,.0f}원</b>\n"
         f"⏰ 발생 시각: {time_str}"
         f"{extra_lines}\n"
         f"📊 RSI 과매도 구간(30 이하) 탈출 확인 타점\n"

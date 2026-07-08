@@ -984,7 +984,7 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
                 add_signal_list.append(False)
                 stop_loss_series.append(raw_sl)
 
-                # ── [방안 B] 낙주 매수(FALL_BUY) 조건 검사 ──
+                # ── [방안 B] 낙폭과대 반등 매수(FALL_BUY) 조건 검사 ──
                 cond_fall_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30)
 
                 if cond_fall_indicator:

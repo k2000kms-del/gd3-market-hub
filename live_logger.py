@@ -176,7 +176,7 @@ def log_fall_buy_signal(
     rsi: float = None,
     vwap: float = None,
 ):
-    """낙주 매수 신호를 CSV에 기록하고 텔레그램 알림을 전송"""
+    """낙폭과대 반등 매수 신호를 CSV에 기록하고 텔레그램 알림을 전송"""
     _ensure_log_file()
     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:00')
     
@@ -202,7 +202,7 @@ def log_fall_buy_signal(
                 vwap=vwap,
             )
         except Exception as e:
-            print(f"DEBUG: 텔레그램 낙주매수 알림 전송 실패: {e}")
+            print(f"DEBUG: 텔레그램 낙폭과대매수 알림 전송 실패: {e}")
 
 def log_exit_signal(
     ticker: str,
