@@ -820,7 +820,7 @@ def detect_volume_surge(df: pd.DataFrame, lookback: int = 10, multiplier: float 
     df['Vol_Surge'] = df['Volume'] > (avg_vol * multiplier)
     return df
 
-def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min'):
+def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=None):
     """
     분봉(1분/5분) 스캘핑 신호 계산 — 백테스트 최적 파라미터 반영
 
@@ -853,6 +853,21 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min'):
         return df
 
     try:
+        # 일봉 MA5 대추세 필터 판정
+        is_daily_bullish = True
+        if code:
+            try:
+                df_daily = get_stock_history(code)
+                if not df_daily.empty and len(df_daily) >= 5:
+                    df_daily = df_daily.copy()
+                    df_daily['MA5_Daily'] = df_daily['Close'].rolling(5).mean()
+                    last_close = df_daily['Close'].iloc[-1]
+                    last_ma5 = df_daily['MA5_Daily'].iloc[-1]
+                    is_daily_bullish = last_close >= last_ma5
+            except Exception as e:
+                print(f"DEBUG: calculate_intraday_signals daily filter error: {e}")
+                is_daily_bullish = True
+
         # MA 계산 (차트 표시용으로만 유지, 신호 조건에서는 제외)
         df['MA5']  = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
@@ -882,7 +897,10 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min'):
         cond_rsi  = df['RSI_14'].between(35, 65)
         cond_vol  = df['Vol_Surge']
 
-        raw_buy_signal = cond_vwap & cond_rsi & cond_vol
+        if is_daily_bullish:
+            raw_buy_signal = cond_vwap & cond_rsi & cond_vol
+        else:
+            raw_buy_signal = pd.Series(False, index=df.index)
         df['Raw_Buy']  = raw_buy_signal
 
         # ATR 트레일링 손절선 (1.5배로 상향 — 손절 완충)
@@ -1046,10 +1064,10 @@ def run_portfolio_background_scanner():
                     if kis_key and kis_sec:
                         df_scan = _get_kis_minute_history_raw(kis_key, kis_sec, code)
                     if df_scan.empty:
-                        df_scan = _get_minute_history_raw(code, count=800)
+                        df_scan = _get_minute_history_raw(code, count=2000)
                         
                     if not df_scan.empty and len(df_scan) >= 20:
-                        df_scan = calculate_intraday_signals(df_scan, my_entry_price=entry_price)
+                        df_scan = calculate_intraday_signals(df_scan, my_entry_price=entry_price, code=code)
                         last_row = df_scan.iloc[-1]
                         if 'DateTime' in df_scan.columns and not pd.isna(last_row.get('DateTime')):
                             # UTC/KST 차이를 감안한 시간차 체크
@@ -3047,7 +3065,7 @@ if st.session_state.sel_code:
         if kis_key and kis_sec:
             df_1min = get_kis_minute_history(kis_key, kis_sec, code_disp)
             
-        df_naver = get_minute_history(code_disp, count=800)
+        df_naver = get_minute_history(code_disp, count=2000)
         
         if not df_1min.empty and not df_naver.empty:
             df_1min = pd.concat([df_1min, df_naver], ignore_index=True)
@@ -3062,8 +3080,8 @@ if st.session_state.sel_code:
         if code_disp in portfolio:
             my_entry_price = portfolio[code_disp].get('entry_price', 0.0)
             
-        df_1min = calculate_intraday_signals(df_1min, my_entry_price=my_entry_price, timeframe='1min')
-        df_5min = calculate_intraday_signals(df_5min, my_entry_price=my_entry_price, timeframe='5min')
+        df_1min = calculate_intraday_signals(df_1min, my_entry_price=my_entry_price, timeframe='1min', code=code_disp)
+        df_5min = calculate_intraday_signals(df_5min, my_entry_price=my_entry_price, timeframe='5min', code=code_disp)
         
         # --- 라이브 신호 로거 연동 (최근 1분봉 캔들의 신호 감지) ---
         if not df_1min.empty and len(df_1min) > 1:
