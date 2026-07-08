@@ -16,6 +16,27 @@ _TG_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
 # 내부 헬퍼 함수
 # ─────────────────────────────────────────────────────────────
 
+def is_krx_market_hours() -> bool:
+    """KST 기준 현재 시각이 KRX 정규장 운영 시간(평일 09:00 ~ 15:30)에 해당하는지 판별"""
+    try:
+        import datetime as dt
+        # 내장 timezone을 활용하여 KST(UTC+9) 타임존 객체 생성
+        kst_tz = dt.timezone(dt.timedelta(hours=9))
+        now = dt.datetime.now(kst_tz)
+        
+        # 주말(토: 5, 일: 6) 제외
+        if now.weekday() >= 5:
+            return False
+            
+        current_time = now.time()
+        start_time = dt.time(9, 0, 0)
+        end_time = dt.time(15, 30, 0)
+        
+        return start_time <= current_time <= end_time
+    except Exception as e:
+        print(f"DEBUG: is_krx_market_hours error: {e}")
+        return True # 예외 발생 시 알림 유실 방지용 폴백
+
 def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML") -> bool:
     """텔레그램 Bot API로 메시지를 전송하는 내부 함수.
     
@@ -24,6 +45,11 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML") -> bool
     """
     if not token or not chat_id:
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
+        return False
+
+    # KRX 정규장 시간 외에는 알림 전송 차단
+    if not is_krx_market_hours():
+        print("DEBUG: 현재 시각이 KRX 정규장 시간(평일 09:00~15:30) 외의 시간대이므로 텔레그램 알림 전송을 차단합니다.")
         return False
     try:
         url = _TG_API_BASE.format(token=token)
