@@ -2043,26 +2043,7 @@ with col_btn2:
     else:
         portfolio_sidebar_container.button("🗑️ 삭제", use_container_width=True, disabled=True, key="btn_port_del_dis")
 
-portfolio_sidebar_container.markdown('---')
-portfolio_sidebar_container.markdown('### 📊 포트폴리오 추세 진단')
-if not portfolio:
-    portfolio_sidebar_container.caption('보유 중인 종목이 없습니다.')
-else:
-    for p_code, p_info in portfolio.items():
-        p_name = p_info.get('name', p_code)
-        try:
-            p_df = _get_stock_history_raw(p_code)
-            if not p_df.empty and len(p_df) >= 5:
-                p_close = p_df['Close'].iloc[-1]
-                p_ma5 = p_df['Close'].rolling(5).mean().iloc[-1]
-                if p_close >= p_ma5:
-                    portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}):  \n`🟢 상승 추세 유지 (보유)`")
-                else:
-                    portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}):  \n`⚠️ 추세 이탈 (교체 검토)`")
-            else:
-                portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}):  \n`⚠️ 데이터 부족 (대기)`")
-        except Exception:
-            portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}): `N/A` (조회 대기)")
+
 
 # ── 사이드바 맨 아래: Gemini AI 헬프 센터 ───────────────────
 st.sidebar.markdown('---')
