@@ -2064,16 +2064,6 @@ else:
         except Exception:
             portfolio_sidebar_container.markdown(f"**{p_name}** ({p_code}): `N/A` (조회 대기)")
 
-portfolio_sidebar_container.markdown('---')
-portfolio_sidebar_container.markdown('### 💡 4.5개년 최적화 추천 주도주')
-portfolio_sidebar_container.info(
-    "**[추천 포트폴리오 후보군]**  \n"
-    "• **한화에어로스페이스** (012450)  \n"
-    "• **알테오젠** (196170)  \n"
-    "• **삼성전자** (005930)  \n\n"
-    "💡 *4.5개년 백테스트 최적 조건(RSI 35~65, ATR 2.0x, 익절 0.7%) 적용 시 우수한 승률이 입증된 종목입니다.*"
-)
-
 # ── 사이드바 맨 아래: Gemini AI 헬프 센터 ───────────────────
 st.sidebar.markdown('---')
 st.sidebar.markdown('### 🤖 Gemini AI 헬프 센터')
@@ -3891,6 +3881,15 @@ if st.session_state.sel_code:
                     st.html(table_html)
                 else:
                     st.info("등록된 포트폴리오 종목이 없습니다.")
+                
+                # 우측 포트폴리오 하단 추천 포트폴리오 후보군 노출
+                st.info(
+                    "**[추천 포트폴리오 후보군]**  \n"
+                    "• **한화에어로스페이스** (012450)  \n"
+                    "• **알테오젠** (196170)  \n"
+                    "• **삼성전자** (005930)  \n\n"
+                    "💡 *4.5개년 백테스트 최적 조건(RSI 35~65, ATR 2.0x, 익절 0.7%) 적용 시 우수한 승률이 입증된 종목입니다.*"
+                )
                 
 
 
