@@ -3315,10 +3315,18 @@ if st.session_state.sel_code:
             stop_loss_series = []
             exit_signal_list = []
             buy_signal_list = []
+            add_signal_list = []   # 추가 매수 신호 리스트
+            fall_signal_list = []  # 낙폭과대 매수 신호 리스트
             
-            in_position = False  # 항상 미보유 상태로 시뮬레이션 시작
+            # 포트폴리오 보유 중인 경우 초기 상태 연동
+            in_position = False
             entry_price = 0.0
-            max_price_since_entry = 0.0
+            add_count = 0
+            if my_entry_price > 0:
+                in_position = True
+                entry_price = my_entry_price
+            
+            max_price_since_entry = entry_price
             current_sl = np.nan
             
             for i in range(len(df_candle)):
@@ -3328,14 +3336,22 @@ if st.session_state.sel_code:
                 ma20_val = df_candle['MA20'].iloc[i] if 'MA20' in df_candle.columns else close_val
                 raw_sl = dynamic_raw_sl.iloc[i]
                 
+                prev_rsi = df_candle['RSI'].iloc[i-1] if (i > 0 and 'RSI' in df_candle.columns) else np.nan
+                curr_rsi = df_candle['RSI'].iloc[i] if 'RSI' in df_candle.columns else np.nan
+                
                 if pd.isna(raw_sl) or pd.isna(ma5_val) or pd.isna(ma20_val):
                     stop_loss_series.append(np.nan)
                     exit_signal_list.append(False)
                     buy_signal_list.append(False)
+                    add_signal_list.append(None)
+                    fall_signal_list.append(False)
                     continue
-                    
+                
+                cond_add_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30) or                                      (close_val > ma5_val and close_val > ma20_val)
+                
                 if in_position:
                     buy_signal_list.append(False)
+                    fall_signal_list.append(False)
                     max_price_since_entry = max(max_price_since_entry, close_val)
                     
                     # 손절선 래칫 (위로만 이동)
@@ -3353,38 +3369,76 @@ if st.session_state.sel_code:
                     # 전일 기준 손절선 파악 (시가 갭하락 판정용)
                     prev_sl = stop_loss_series[-2] if len(stop_loss_series) > 1 and not pd.isna(stop_loss_series[-2]) else current_sl
                     
+                    # 추가 매수 판정 (물타기/불타기)
+                    pnl_pct = (close_val - entry_price) / entry_price * 100 if entry_price > 0 else 0
+                    
+                    # 물타기: 손실 -5% 이하에서 추가 매수 지표 만족 시
+                    is_mul = (pnl_pct <= -5.0) and cond_add_indicator
+                    # 불타기: 수익 +5% 이상에서 추가 매수 지표 만족 시
+                    is_bul = (pnl_pct >= 5.0) and cond_add_indicator
+                    
+                    if is_mul and add_count < 2:
+                        add_signal_list.append('물타기')
+                        add_count += 1
+                        entry_price = (entry_price + close_val) / 2
+                    elif is_bul and add_count < 2:
+                        add_signal_list.append('불타기')
+                        add_count += 1
+                        entry_price = (entry_price + close_val) / 2
+                    else:
+                        add_signal_list.append(None)
+                        
                     # 매도 판단
                     if open_val < prev_sl:
                         # 1) 시가 갭하락 손절: 시가가 전일 기준 손절선을 하회하여 급락 출발 시 청산
                         exit_signal_list.append(True)
                         in_position = False
                         current_sl = np.nan
+                        add_count = 0
                     elif close_val < current_sl:
                         # 2) 일반 종가 이탈 손절
                         exit_signal_list.append(True)
                         in_position = False
                         current_sl = np.nan
+                        add_count = 0
                     else:
                         exit_signal_list.append(False)
                         
                 else:
                     exit_signal_list.append(False)
+                    add_signal_list.append(None)
                     # 미보유 상태: 차트 시각화를 위해 raw_sl 표시 (래칫 없이 위아래 변동)
                     stop_loss_series.append(raw_sl)
                     
-                    # 매수 판단: 과거 백테스트 시각화를 위해 상승 추세(MA5 및 MA20 상회) 진입 시 매수
-                    if close_val > ma5_val and close_val > ma20_val:
+                    # 낙폭과대 매수 판단 (RSI 과매도 30 이하 탈출)
+                    cond_fall_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30)
+                    
+                    if cond_fall_indicator:
+                        fall_signal_list.append(True)
+                        buy_signal_list.append(False)
+                        in_position = True
+                        entry_price = close_val
+                        max_price_since_entry = close_val
+                        current_sl = raw_sl
+                        add_count = 0
+                    # 일반 매수 판단: 상승 추세(MA5 및 MA20 상회) 진입 시 매수
+                    elif close_val > ma5_val and close_val > ma20_val:
                         buy_signal_list.append(True)
+                        fall_signal_list.append(False)
                         in_position = True
                         entry_price = close_val
                         max_price_since_entry = close_val
                         current_sl = raw_sl  # 진입 시 손절선 초기화
+                        add_count = 0
                     else:
                         buy_signal_list.append(False)
-
+                        fall_signal_list.append(False)
+ 
             df_candle['Stop_Loss'] = stop_loss_series
             df_candle['Exit_Signal'] = exit_signal_list
             df_candle['Buy_Signal'] = buy_signal_list
+            df_candle['Add_Signal'] = add_signal_list
+            df_candle['Fall_Signal'] = fall_signal_list
 
         except Exception as atr_err:
             st.error(f"ATR 계산 오류: {atr_err}")
@@ -3947,6 +4001,70 @@ if st.session_state.sel_code:
                             name='매수 신호',
                             marker=dict(symbol='arrow-up', size=14, color='#2ecc71'),
                             text=hover_texts,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+
+                # 낙폭과대 매수 신호 (Plotly Marker + Hover Tooltip)
+                if 'Fall_Signal' in df_candle.columns:
+                    fall_signals = df_candle[df_candle['Fall_Signal'] == True]
+                    if not fall_signals.empty:
+                        fall_dates = fall_signals.index.strftime('%Y-%m-%d').tolist()
+                        fall_prices = fall_signals['Close'].tolist()
+                        hover_texts_fall = [f"<b>📉 낙폭과대 매수</b><br>{int(p):,}원" if p >= 100 else f"<b>📉 낙폭과대 매수</b><br>{p:,.2f}" for p in fall_prices]
+                        
+                        # 범례(Legend) 표시용 더미 트레이스
+                        fig_c.add_trace(go.Scattergl(
+                            x=[None], y=[None],
+                            mode='markers',
+                            name='낙폭과대 매수',
+                            marker=dict(symbol='triangle-up', size=10, color='#94d82d'),
+                            showlegend=True
+                        ), row=1, col=1)
+                        
+                        fig_c.add_trace(go.Scattergl(
+                            x=fall_dates,
+                            y=fall_signals['Low'] * 0.985,
+                            mode='markers',
+                            name='낙폭과대 매수',
+                            marker=dict(symbol='arrow-up', size=14, color='#94d82d'),
+                            text=hover_texts_fall,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+
+                # 추가 매수 신호 (Plotly Marker + Hover Tooltip)
+                if 'Add_Signal' in df_candle.columns:
+                    add_signals = df_candle[df_candle['Add_Signal'].notna()]
+                    if not add_signals.empty:
+                        add_dates = add_signals.index.strftime('%Y-%m-%d').tolist()
+                        add_prices = add_signals['Close'].tolist()
+                        add_types = add_signals['Add_Signal'].tolist()
+                        
+                        hover_texts_add = []
+                        for p, t in zip(add_prices, add_types):
+                            price_str = f"{int(p):,}원" if p >= 100 else f"{p:,.2f}"
+                            if t == '물타기':
+                                hover_texts_add.append(f"<b>🟡 추가 매수 (물타기)</b><br>평단 조절용<br>{price_str}")
+                            else:
+                                hover_texts_add.append(f"<b>🔥 추가 매수 (불타기)</b><br>수익 극대화용<br>{price_str}")
+                        
+                        # 범례(Legend) 표시용 더미 트레이스
+                        fig_c.add_trace(go.Scattergl(
+                            x=[None], y=[None],
+                            mode='markers',
+                            name='추가 매수',
+                            marker=dict(symbol='triangle-up', size=10, color='#fcc419'),
+                            showlegend=True
+                        ), row=1, col=1)
+                        
+                        fig_c.add_trace(go.Scattergl(
+                            x=add_dates,
+                            y=add_signals['Low'] * 0.985,
+                            mode='markers',
+                            name='추가 매수',
+                            marker=dict(symbol='arrow-up', size=14, color='#fcc419'),
+                            text=hover_texts_add,
                             hovertemplate="%{text}<extra></extra>",
                             showlegend=False
                         ), row=1, col=1)
