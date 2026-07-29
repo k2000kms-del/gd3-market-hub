@@ -43,5 +43,10 @@
     "name": "LS머트리얼즈",
     "entry_price": 33236.0,
     "qty": 489.0
+  },
+  "010120": {
+    "name": "LS ELECTRIC",
+    "entry_price": 190333.0,
+    "qty": 10.0
   }
 }
