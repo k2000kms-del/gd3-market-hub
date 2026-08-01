@@ -6,6 +6,9 @@ import pandas as pd
 import numpy as np
 import FinanceDataReader as fdr
 import requests
+import re
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import os
 from datetime import datetime
@@ -27,7 +30,7 @@ from datetime import timedelta
 def get_kospi_ma20():
     """실시간 KOSPI 지수와 20일 이동평균선(MA20) 계산"""
     try:
-        # 최근 60일 코스피 지수 데이터 수집
+        # 최근 90일 코스피 지수 데이터 수집
         df_ks = fdr.DataReader('KS11', (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d'))
         if not df_ks.empty:
             df_ks['MA20'] = df_ks['Close'].rolling(20).mean()
@@ -39,7 +42,6 @@ def get_kospi_ma20():
     return 0.0, 0.0, False
 
 
-@st.cache_data(ttl=1200)
 def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None, current_price=None, stop_loss_price=None, recent_high_price=None, rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None, supply_trend=None, recent_news=None):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
@@ -96,27 +98,33 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         "systemInstruction": {"parts": [{"text": system_instruction}]}
     }
     
-    # 2026-06 공식 문서(ai.google.dev/gemini-api/docs/models) 기준 검증된 모델 목록
-    # gemini-3.5-flash = gemini-flash-latest 의 실체 (Stable GA)
-    models_to_try = [
-        "gemini-3.5-flash",           # ★ 최신 3.5세대 기본 고성능/가성비 모델 (검증 완료)
-        "gemini-2.5-flash",           # ★ 2.5세대 기본 고성능/가성비 모델
-        "gemini-1.5-flash",           # ★ 안정적인 1.5세대 표준 모델
-        "gemini-2.5-pro",             # 고난도 추론용 2.5세대 프로 모델
-        "gemini-1.5-pro",             # 안정적인 1.5세대 프로 모델
-        "gemini-2.0-flash",           # 2.0세대 플래시 모델
-        "gemini-2.0-flash-lite",      # 2.0세대 플래시 라이트 모델
-        "gemini-flash-latest"         # 최후 폴백용 닉네임 엔드포인트
+    # Google API 서버(v1beta/models) 실시간 조회 결과 검증된 실존 모델 목록
+    all_models = [
+        "gemini-3.6-flash",           # ★ 구글 3.6세대 메인 플래시 모델
+        "gemini-3.5-flash",           # ★ 구글 3.5세대 플래시 모델
+        "gemini-2.5-flash",           # ★ 구글 2.5세대 메인 플래시 모델
+        "gemini-2.5-pro",             # 구글 2.5세대 프로 모델
+        "gemini-2.0-flash",           # 구글 2.0세대 플래시 모델
+        "gemini-2.0-flash-lite",      # 구글 2.0세대 플래시 라이트 모델
+        "gemini-flash-latest",        # 구글 최신 플래시 엔드포인트
     ]
+    
+    # ── 속도 최적화: 성공 모델 우선 시도 ──
+    last_success = getattr(get_gemini_commentary, '_last_success_model', None)
+    if last_success and last_success in all_models:
+        models_to_try = [last_success] + [m for m in all_models if m != last_success]
+    else:
+        models_to_try = all_models[:]
     
     last_err = None
     is_quota_limit = False
     is_invalid_key = False
     
-    for model_name in models_to_try:
+    for attempt_idx, model_name in enumerate(models_to_try):
+        req_timeout = 7 if attempt_idx == 0 else 5
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
-            r = requests.post(url, json=payload, headers=headers, timeout=5)
+            r = requests.post(url, json=payload, headers=headers, timeout=req_timeout)
             if r.status_code == 200:
                 res_json = r.json()
                 candidates = res_json.get('candidates', [])
@@ -124,25 +132,25 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
                     content = candidates[0].get('content', {})
                     parts = content.get('parts', [])
                     if parts:
+                        # 성공한 모델을 기억하여 다음 호출 시 우선 사용
+                        get_gemini_commentary._last_success_model = model_name
                         return parts[0].get('text', '').strip()
                 last_err = "API 응답 본문에 텍스트 데이터가 누락되었습니다."
             else:
                 last_err = f"API 응답 코드: {r.status_code} ({r.text[:100]})"
-                
-                # 429 (속도 제한)인 경우 쿼터 제한을 기록하되, 모델별 쿼터가 다를 수 있으므로 루프를 중단하지 않고 다른 모델로 폴백 시도
                 if r.status_code == 429:
                     is_quota_limit = True
-                # 400 (잘못된 API 키)인 경우 즉시 중단
+                    # 429 속도제한이더라도 다음 모델로 폴백 진행
+                    continue
                 elif r.status_code == 400:
                     is_invalid_key = True
                     break
         except Exception as e:
             last_err = str(e)
-            if "429" in last_err or "Quota" in last_err:
-                is_quota_limit = True
-            elif "400" in last_err or "API key" in last_err:
+            if "400" in last_err or "API key" in last_err:
                 is_invalid_key = True
                 break
+            continue
         time.sleep(0.1)
             
     # 에러 메시지 한글 정제
@@ -249,7 +257,7 @@ def get_local_fallback_commentary(name, t_score_adj, s_score, market_cond):
 
 
 
-@st.cache_data(ttl=30)  # 30초 캐시 (실시간이지만 너무 잦은 호출 방지)
+@st.cache_data(ttl=60)  # 60초 캐시 (너무 잦은 호출 방지)
 def fetch_naver_realtime_indices():
     """네이버 금융 API로 코스피/코스닥 실시간 지수 조회"""
     try:
@@ -543,11 +551,27 @@ st.set_page_config(
     initial_sidebar_state='collapsed'
 )
 
-# Plotly 차트 마우스 커서 강제 고정 (손가락, 십자선 -> 기본 화살표)
+# ── ⚡ 5초 스캘핑 모드: set_page_config 직후 최상단에서 선언해야 정상 작동 ──
+# st_autorefresh()는 Streamlit 렌더링 파이프라인 최상단에 위치해야 합니다.
+# 사이드바 toggle 상태는 세션 스테이트로 전달받습니다.
+if st.session_state.get('auto_refresh_enabled', False):
+    st_autorefresh(interval=5000, key="data_refresh")
+
+# Plotly 차트 마우스 커서 강제 고정 및 태블릿 좌우 뷰포트 여백 최소화
 st.markdown("""
 <style>
 .js-plotly-plot .plotly .cursor-crosshair { cursor: default !important; }
 .js-plotly-plot .plotly .cursor-pointer { cursor: default !important; }
+
+@media (max-width: 1024px) {
+    /* 태블릿/모바일 좌우 여백 최소화하여 차트 시인성 극대화 */
+    .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+        padding-top: 1.5rem !important;
+        padding-bottom: 1.5rem !important;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -560,6 +584,33 @@ DATA_FILES = [
     'df_market_summary.csv',
     'df_supply_intraday.csv',
 ]
+
+# ── ETF/스팩/파생상품 필터 공통 키워드 (패널 1·2·3·6 공유) ──────────
+EXCLUDE_KEYWORDS = [
+    'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩',
+    'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef',
+    'plus', 'rise', 'woori', 'arirang', '곱버스'
+]
+
+
+def _relative_time(dt_str: str) -> str:
+    """'2026-07-11 10:30:00' 형식의 시간 문자열을 '7분 전' 형식으로 변환"""
+    try:
+        from datetime import datetime, timezone, timedelta
+        _KST = timezone(timedelta(hours=9))
+        dt = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
+        now = datetime.now(_KST).replace(tzinfo=None)
+        diff = int((now - dt).total_seconds())
+        if diff < 60:
+            return '방금 전'
+        elif diff < 3600:
+            return f'{diff // 60}분 전'
+        elif diff < 86400:
+            return f'{diff // 3600}시간 전'
+        else:
+            return f'{diff // 86400}일 전'
+    except Exception:
+        return ''
 
 def _get_stock_history_raw(code: str):
     """종목 일봉 데이터 조회 (90일) - 캐시 없는 내부 함수"""
@@ -598,13 +649,31 @@ def _get_kis_access_token_raw(app_key: str, app_secret: str) -> str:
 def get_kis_access_token(app_key: str, app_secret: str) -> str:
     return _get_kis_access_token_raw(app_key, app_secret)
 
+def _fetch_kis_page(url: str, headers: dict, code: str, target_time: str):
+    """KIS API 단일 페이지 요청 (병렬 호출용)"""
+    params = {
+        "FID_ETC_CLS_CODE": "",
+        "FID_COND_MRKT_DIV_CODE": "J",
+        "FID_INPUT_ISCD": code,
+        "FID_INPUT_HOUR_1": target_time,
+        "FID_PW_DATA_INCU_YN": "Y"
+    }
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=5)
+        if res.status_code == 200:
+            return res.json().get('output2', [])
+    except Exception:
+        pass
+    return []
+
+
 def _get_kis_minute_history_raw(app_key: str, app_secret: str, code: str):
-    """KIS API 당일 1분봉 데이터 조회 (캐시 없는 내부 함수)"""
+    """KIS API 당일 1분봉 데이터 조회 — 시간 구간별 병렬 호출로 속도 최적화"""
     try:
         token = _get_kis_access_token_raw(app_key, app_secret)
         if not token:
             return pd.DataFrame()
-            
+
         url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
         headers = {
             "content-type": "application/json; charset=utf-8",
@@ -614,60 +683,39 @@ def _get_kis_minute_history_raw(app_key: str, app_secret: str, code: str):
             "tr_id": "FHKST03010200",
             "custtype": "P"
         }
-        
-        all_data = []
-        target_time = "153000"
-        
-        import time
-        # 최대 13페이지(약 390분 = 6시간 30분) 조회
+
+        # ── 병렬 호출: 정규장(09:00~15:30)을 30분 단위로 13개 구간 분할 ──
+        # KIS API는 한 번 호출로 약 30분치 데이터를 반환함
+        # 시간 구간: 153000, 150000, 120000, 090000 ... 순으로 미리 계산
+        time_slots = []
+        h, m = 15, 30
         for _ in range(13):
-            params = {
-                "FID_ETC_CLS_CODE": "",
-                "FID_COND_MRKT_DIV_CODE": "J",
-                "FID_INPUT_ISCD": code,
-                "FID_INPUT_HOUR_1": target_time,
-                "FID_PW_DATA_INCU_YN": "Y"
-            }
-            res = requests.get(url, headers=headers, params=params, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                output2 = data.get('output2', [])
-                if not output2:
-                    break
-                
-                all_data.extend(output2)
-                last_time = output2[-1]['stck_cntg_hour']
-                
-                if last_time < "090000":
-                    break
-                    
-                # 다음 페이지 조회를 위해 1초 차감
-                h = int(last_time[:2])
-                m = int(last_time[2:4])
-                s = int(last_time[4:])
-                if s > 0: s -= 1
-                else:
-                    s = 59
-                    if m > 0: m -= 1
-                    else:
-                        m = 59
-                        h -= 1
-                target_time = f"{h:02d}{m:02d}{s:02d}"
-                time.sleep(0.05)
-            else:
+            time_slots.append(f"{h:02d}{m:02d}00")
+            m -= 30
+            if m < 0:
+                m = 30
+                h -= 1
+            if h < 9:
                 break
-                
+
+        all_data = []
+        # 최대 6개 스레드로 동시 호출 (KIS API 부하 방지)
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {
+                executor.submit(_fetch_kis_page, url, headers, code, t): t
+                for t in time_slots
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    all_data.extend(result)
+
         if not all_data:
             return pd.DataFrame()
-            
-        # KIS 데이터는 최신 시간부터 내림차순으로 오므로 시간순 정렬을 위해 뒤집음
-        all_data.reverse()
-        
+
         df = pd.DataFrame(all_data)
-        # 중복 제거 (정확히 동일한 시간 틱 방지)
         df = df.drop_duplicates(subset=['stck_bsop_date', 'stck_cntg_hour'], keep='first')
-        
-        # stck_bsop_date (영업일자), stck_cntg_hour (시간), stck_prpr (종가), stck_oprc (시가), stck_hgpr (고가), stck_lwpr (저가), cntg_vol (거래량)
+
         df.rename(columns={
             'stck_bsop_date': 'Date',
             'stck_cntg_hour': 'TimeStr',
@@ -677,15 +725,13 @@ def _get_kis_minute_history_raw(app_key: str, app_secret: str, code: str):
             'stck_prpr': 'Close',
             'cntg_vol': 'Volume'
         }, inplace=True)
-        
-        # 숫자형 변환
+
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-        # DateTime 생성 (예: 20260630 + 153000)
+
         df['DateTimeStr'] = df['Date'] + df['TimeStr']
         df['DateTime'] = pd.to_datetime(df['DateTimeStr'], format='%Y%m%d%H%M%S', errors='coerce')
-        
+
         df = df.dropna(subset=['DateTime', 'Close'])
         df = df.sort_values('DateTime').reset_index(drop=True)
         return df
@@ -693,7 +739,7 @@ def _get_kis_minute_history_raw(app_key: str, app_secret: str, code: str):
         print(f"DEBUG: KIS minute history error: {e}")
     return pd.DataFrame()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)  # 120초 캐시 — 분봉 데이터는 매 1분 갱신이지만 60초는 과잉 호출
 def get_kis_minute_history(app_key: str, app_secret: str, code: str):
     """KIS API 당일 1분봉 데이터 조회 (OHLCV 완벽 지원, 캐싱 지원)"""
     return _get_kis_minute_history_raw(app_key, app_secret, code)
@@ -749,7 +795,7 @@ def _get_minute_history_raw(code: str, count: int = 800):
         print(f"DEBUG: Failed to get minute history: {e}")
     return pd.DataFrame()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)  # 120초 캐시 — 네이버 1분봉은 실시간이지만 120초 캐시로도 충분
 def get_minute_history(code: str, count: int = 800):
     """네이버 실시간 1분봉 데이터 조회 (캐싱 지원)"""
     return _get_minute_history_raw(code, count)
@@ -820,7 +866,7 @@ def detect_volume_surge(df: pd.DataFrame, lookback: int = 10, multiplier: float 
     df['Vol_Surge'] = df['Volume'] > (avg_vol * multiplier)
     return df
 
-def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=None):
+def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=None, is_portfolio=False, marcap=0.0):
     """
     분봉(1분/5분) 스캘핑 신호 계산 — 백테스트 최적 파라미터 반영
 
@@ -833,16 +879,51 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
     - VWAP 조건    : 유지 (신뢰도 높음)
     - MA 조건      : 제거 (분봉 MA 노이즈 높아 신뢰도 낮음)
     """
-    # 타임프레임별 익절 목표 및 거래량 서지 임계치 설정
-    if timeframe == '5min':
-        tp_pct = 1.0        # 5분봉 익절 1.0%
-        vol_mult = 1.5      # 5분봉 거래량 서지는 1.5배로 완화하여 신뢰도 유지하며 검출력 보완
-    else:
-        tp_pct = 0.7        # 1분봉 익절 0.7%
-        vol_mult = 2.0      # 1분봉 거래량 서지는 2.0배 유지
+    # ── [방안 F 적용] 대형주/중대형주/소형주별 동적 파라미터 튜닝 ──
+    STOCK_STYLE = {
+        '005930': 'LARGE',     # 삼성전자
+        '000660': 'LARGE',     # SK하이닉스
+        '005380': 'LARGE',     # 현대차
+        '035420': 'LARGE',     # NAVER
+        '009150': 'LARGE',     # 삼성전기
+        '079550': 'MID_LARGE', # LIG넥스원 / LIG디펜스앤에어로스페이스 대응
+        '027740': 'MID_LARGE', # 한미반도체
+        '004990': 'SMALL',     # 티엠씨
+        '010170': 'SMALL'      # 대한광통신 (소형주)
+    }
+    
+    style = STOCK_STYLE.get(code)
+    if not style:
+        if marcap >= 5e12:          # 시가총액 5조 원 이상: 대형주
+            style = 'LARGE'
+        elif marcap > 0 and marcap <= 5e11:  # 시가총액 5천억 원 이하: 소형주
+            style = 'SMALL'
+        else:                       # 5천억 ~ 5조 원 또는 정보 미수집: 중대형주
+            style = 'MID_LARGE'
 
-    time_cut = 30                                    # 30봉 시간 컷오프
-    atr_mult = 1.5                                   # ATR 트레일링 승수
+    time_cut = 30  # 30봉 시간 컷오프
+    
+    if style == 'LARGE':
+        vol_mult = 1.2 if timeframe == '5min' else 1.5
+        tp_pct = 0.5 if timeframe == '1min' else 0.7
+        atr_mult = 1.2
+        fall_rsi_limit = 30
+    elif style == 'SMALL':
+        vol_mult = 2.5 if timeframe == '5min' else 3.5
+        tp_pct = 1.5 if timeframe == '1min' else 2.0
+        atr_mult = 2.0
+        fall_rsi_limit = 25
+    else:  # MID_LARGE
+        vol_mult = 1.5 if timeframe == '5min' else 2.0
+        tp_pct = 0.7 if timeframe == '1min' else 1.0
+        atr_mult = 1.5
+        fall_rsi_limit = 30
+        
+    # ── [보유/관심 포트폴리오 종목 자동 최적화] ──
+    # 포트폴리오 종목은 단타 신호가 너무 막히지 않도록 자동 완화 적용 (수급 감도 40% 완화, 낙폭 기준 5 상향)
+    if is_portfolio:
+        vol_mult = vol_mult * 0.6
+        fall_rsi_limit = fall_rsi_limit + 5
 
     if df.empty or len(df) < 20:
         df['MA5'] = df['Close'] if not df.empty else np.nan
@@ -874,8 +955,27 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
 
         # 핵심 지표 계산
         df = calculate_vwap(df)
-        df = calculate_rsi(df, period=14)
+        df = calculate_rsi(df, period=9)
+        df['RSI_14'] = df['RSI_9']  # 방안 D: 기존 RSI_14 참조 부위 호환을 위해 기간 9의 값을 대입
         df = detect_volume_surge(df, lookback=10, multiplier=vol_mult)
+
+        # ── [방안 H 적용] 캔들 형태학적 지표 연산 (13, 16, 19번 패턴 수식화) ──
+        df['Body'] = (df['Close'] - df['Open']).abs()
+        df['Lower_Tail'] = df[['Open', 'Close']].min(axis=1) - df['Low']
+        df['Upper_Tail'] = df['High'] - df[['Open', 'Close']].max(axis=1)
+        
+        # 망치형 (바닥 지지 패턴): 아래꼬리가 몸통의 1.8배 이상, 윗꼬리는 몸통의 0.6배 이하
+        df['Is_Hammer'] = (df['Lower_Tail'] >= df['Body'] * 1.8) & (df['Upper_Tail'] <= df['Body'] * 0.6) & (df['Body'] > 0)
+        
+        # 상승장악형 (상승 반전 패턴): 직전 음봉 몸통을 현재 양봉 몸통이 덮어씌움
+        prev_close = df['Close'].shift(1)
+        prev_open = df['Open'].shift(1)
+        df['Is_Engulfing'] = (prev_close < prev_open) & (df['Close'] > df['Open']) & \
+                             (df['Close'] >= prev_open) & (df['Open'] <= prev_close)
+                             
+        # 장대음봉 (하락 칼날 회피): 현재 몸통이 이전 5봉 평균 몸통의 2.5배 이상 긴 음봉
+        avg_body_5 = df['Body'].rolling(5).mean().shift(1)
+        df['Is_Long_Blue'] = (df['Close'] < df['Open']) & (df['Body'] >= avg_body_5 * 2.5)
 
         # ATR (반응성 높은 기간 7)
         high  = df['High'].values
@@ -890,17 +990,16 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
 
         # ── 매수 조건 (3개 AND, 백테스트 최적)
         # 1. 종가 > VWAP  — 상승 모멘텀 확인
-        # 2. RSI 35~65   — 과매도/과매수 아닌 구간 (노이즈 축소)
+        # 2. RSI 30~70   — 과매도/과매수 아닌 구간 (낙폭 초입 진입 허용)
         # 3. 거래량 서지 2.0배 이상 — 강한 수급 확인
         # (MA 조건 제거: 분봉 MA는 노이즈가 많아 오히려 신호 감소)
+        # ※ RSI 30 이하 반등 진입은 아래 Fall_Signal이 별도 처리
         cond_vwap = df['Close'] > df['VWAP']
-        cond_rsi  = df['RSI_14'].between(35, 65)
+        cond_rsi  = df['RSI_14'].between(30, 70)
         cond_vol  = df['Vol_Surge']
 
-        if is_daily_bullish:
-            raw_buy_signal = cond_vwap & cond_rsi & cond_vol
-        else:
-            raw_buy_signal = pd.Series(False, index=df.index)
+        # 방안 B 적용: 일봉 대추세 필터를 해제하여 하락세 종목도 분봉 수급 및 VWAP 돌파 시 일반 매수 허용
+        raw_buy_signal = cond_vwap & cond_rsi & cond_vol
         df['Raw_Buy']  = raw_buy_signal
 
         # ATR 트레일링 손절선 (1.5배로 상향 — 손절 완충)
@@ -916,6 +1015,7 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
         entry_price = 0.0
         entry_idx   = 0
         current_sl  = np.nan
+        entry_tp_pct = tp_pct  # 동적 ATR 익절용 초기값 선언
         add_count   = 0        # 추가 매수 횟수 (1회 제한)
         actual_position_cleared = False
 
@@ -924,15 +1024,97 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
             in_position = True
             entry_price = my_entry_price
             entry_idx   = 0
+            entry_tp_pct = tp_pct
 
         for i in range(len(df)):
             close_val = df['Close'].iloc[i]
             open_val  = df['Open'].iloc[i]
-            raw_buy   = df['Raw_Buy'].iloc[i]
             raw_sl    = dynamic_raw_sl.iloc[i]
 
             prev_rsi = df['RSI_14'].iloc[i-1] if i > 0 else np.nan
             curr_rsi = df['RSI_14'].iloc[i]
+
+            # ── [아이디어 1 적용] 시간 파싱 및 시간대별 변동성 필터 ──
+            timestamp = df.index[i]
+            if not isinstance(timestamp, pd.Timestamp):
+                dt_val = pd.to_datetime(timestamp)
+            else:
+                dt_val = timestamp
+            time_val = dt_val.hour * 100 + dt_val.minute
+
+            if time_val <= 1015:
+                local_vol_mult = vol_mult * 0.8
+            elif time_val <= 1429:
+                local_vol_mult = vol_mult * 1.6
+            else:
+                local_vol_mult = vol_mult * 2.0
+            
+            # 동적 볼륨 서지 판정
+            is_vol_surge_dynamic = False
+            if i >= 10:
+                avg_vol_10 = np.mean(df['Volume'].values[i-10:i])
+                if avg_vol_10 > 0:
+                    is_vol_surge_dynamic = df['Volume'].iloc[i] >= (avg_vol_10 * local_vol_mult)
+            
+            # 오후 14:30 이후 신규 진입 제한 스위치
+            is_afternoon_cutoff = time_val >= 1430
+
+            # ── [아이디어 3 적용] 중기 이평선(MA20) 기울기(Slope) 필터 ──
+            is_ma20_slope_down = False
+            if i >= 25:
+                ma20_curr = df['MA20'].iloc[i]
+                ma20_prev = df['MA20'].iloc[i-5]
+                if ma20_prev > 0:
+                    ma20_slope = (ma20_curr - ma20_prev) / ma20_prev * 100
+                    if ma20_slope < -0.15:
+                        is_ma20_slope_down = True
+
+            # 동적 볼륨 서지를 반영한 실시간 일반 매수 조건 조합 (포트폴리오 종목은 강력 돌파 시 RSI 상한 78.0으로 완화)
+            cond_vwap = close_val > df['VWAP'].iloc[i]
+            rsi_upper_limit = 78.0 if (is_vol_surge_dynamic and cond_vwap and is_portfolio) else 70.0
+            cond_rsi  = df['RSI_14'].iloc[i] >= 30 and df['RSI_14'].iloc[i] <= rsi_upper_limit
+            raw_buy_dynamic = cond_vwap and cond_rsi and is_vol_surge_dynamic
+
+            # ── [방안 G 적용] 쌍바닥(Double Bottom) 감지 로직 ──
+            is_double_bottom = False
+            if i >= 30:
+                low_prices = df['Low'].values
+                local_minima = []
+                
+                # 로컬 저점 탐색 (좌우 2봉 기준 최소값)
+                for j in range(i - 28, i - 1):
+                    if low_prices[j] <= low_prices[j-1] and low_prices[j] <= low_prices[j-2] and \
+                       low_prices[j] <= low_prices[j+1] and low_prices[j] <= low_prices[j+2]:
+                        if not local_minima or local_minima[-1][0] < j - 2:
+                            local_minima.append((j, low_prices[j]))
+                
+                if len(local_minima) >= 2:
+                    idx1, val1 = local_minima[-2]
+                    idx2, val2 = local_minima[-1]
+                    
+                    # 조건 A: 두 저점 간의 거리가 5봉 이상 20봉 이하로 적당히 떨어져 있어야 함
+                    # 조건 B: 두 저점의 가격 괴리율이 1.5% 이내여야 함
+                    # 조건 C: 현재 시점이 두 번째 저점 발생 후 8봉 이내의 반등 구간이어야 함
+                    dist_ok = 5 <= (idx2 - idx1) <= 20
+                    price_ok = abs(val1 - val2) / val1 * 100 <= 1.5
+                    recency_ok = (i - idx2) <= 8
+                    
+                    if dist_ok and price_ok and recency_ok:
+                        is_double_bottom = True
+
+            # 쌍바닥 돌파 조건: 5분봉에서만 작동 + 종가가 VWAP 위 + MA5 > MA20 골든크로스/정배열 + RSI 안정권
+            cond_db_buy = False
+            if is_double_bottom and timeframe == '5min':
+                cond_db_vwap = close_val > df['VWAP'].iloc[i]
+                cond_db_ma = df['MA5'].iloc[i] > df['MA20'].iloc[i]
+                cond_db_rsi = df['RSI_14'].iloc[i] >= 30 and df['RSI_14'].iloc[i] <= 70
+                
+                # ── [방안 H 적용] 상승반전 캔들패턴 결합: 최근 2봉 내 망치형 또는 상승장악형 출현 ──
+                db_pattern_ok = df['Is_Hammer'].iloc[i] or (df['Is_Hammer'].iloc[i-1] if i > 0 else False) or \
+                                df['Is_Engulfing'].iloc[i] or (df['Is_Engulfing'].iloc[i-1] if i > 0 else False)
+                                
+                if cond_db_vwap and cond_db_ma and cond_db_rsi and db_pattern_ok:
+                    cond_db_buy = True
 
             if pd.isna(raw_sl):
                 stop_loss_series.append(np.nan)
@@ -956,11 +1138,17 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
 
                 pnl_pct = (close_val - entry_price) / entry_price * 100 if entry_price > 0 else 0
 
-                # ── [방안 A] 스마트 추가 매수(ADD) 조건 검사 ──
-                cond_add_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30) or \
+                # ── [방안 A & D 적용] 스마트 추가 매수(ADD) 조건 검사 ──
+                # RSI 과매도 반등(fall_rsi_limit 이하→초과) AND VWAP 돌파 AND 거래량 서지 모두 충족 시
+                cond_add_indicator = (not pd.isna(prev_rsi) and prev_rsi <= fall_rsi_limit and curr_rsi > fall_rsi_limit) and \
                                      (close_val > df['VWAP'].iloc[i] and df['Vol_Surge'].iloc[i])
                 
-                if pnl_pct <= -3.0 and cond_add_indicator and add_count == 0:
+                # [방안 E 적용] ATR 기반 동적 추가 매수 기준선 설정 (ATR의 2.0배 수준을 비율%로 환산)
+                # 단, 안전을 위해 최소 -1.5% ~ 최대 -5.0% 사이로 범위 클램핑
+                atr_ratio = (df['ATR_Scalp'].iloc[i] / entry_price) * 100 if entry_price > 0 else 0.0
+                add_threshold_pct = - max(1.5, min(5.0, 2.0 * atr_ratio))
+                
+                if pnl_pct <= add_threshold_pct and cond_add_indicator and add_count == 0:
                     add_signal_list.append(True)
                     add_count = 1
                     entry_price = (entry_price + close_val) / 2
@@ -970,7 +1158,7 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
 
                 # 청산 트리거
                 hit_stop = (open_val < prev_sl) or (close_val < current_sl)   # 트레일링 스탑
-                hit_tp   = pnl_pct >= tp_pct                                   # 익절 (타임프레임별)
+                hit_tp   = pnl_pct >= entry_tp_pct                             # [아이디어 2 적용] 동적 ATR 익절선 적용
                 hit_time = (i - entry_idx) >= time_cut if entry_idx > 0 else False  # 30봉 컷오프
 
                 if hit_stop or hit_tp or hit_time:
@@ -993,24 +1181,50 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
                     fall_signal_list.append(False)
                     continue
 
-                # ── [방안 B] 낙폭과대 반등 매수(FALL_BUY) 조건 검사 ──
-                cond_fall_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30)
+                # ── [방안 A, D, H & 아이디어 3 적용] 낙폭과대 반등 매수(FALL_BUY) 조건 강화 (상승반전 캔들 + 이평선 기울기 결합) ──
+                # RSI 과매도 탈출 기본 조건 (동적 볼륨 서지 반영)
+                cond_fall_base = (not pd.isna(prev_rsi) and prev_rsi <= fall_rsi_limit and curr_rsi > fall_rsi_limit) and \
+                                 (is_vol_surge_dynamic and close_val > df['VWAP'].iloc[i])
+                                 
+                # 1) 최근 2봉 내에 망치형(바닥 지지)이 발생했거나, 혹은 현재 양봉이 이전 음봉을 장악(Is_Engulfing)했어야 함
+                recent_hammer = df['Is_Hammer'].iloc[i] or (df['Is_Hammer'].iloc[i-1] if i > 0 else False)
+                recent_engulfing = df['Is_Engulfing'].iloc[i]
+                
+                # 2) [13번 패턴 적용] 장대음봉 회피 장치: 직전 1봉 내에 긴 장대음봉이 떨어지지 않았어야 함
+                no_long_blue = not (df['Is_Long_Blue'].iloc[i] or (df['Is_Long_Blue'].iloc[i-1] if i > 0 else False))
+                
+                # 낙폭과대 최종 시그널: 기본조건 AND 패턴충족 AND 장대음봉회피 AND 이평선기울기각도 안정화
+                cond_fall_indicator = cond_fall_base and (recent_hammer or recent_engulfing) and no_long_blue and (not is_ma20_slope_down)
 
-                if cond_fall_indicator:
+                if cond_fall_indicator and not is_afternoon_cutoff:
                     fall_signal_list.append(True)
                     buy_signal_list.append(False)
                     in_position = True
                     entry_price = close_val
                     entry_idx   = i
                     current_sl  = raw_sl
+                    # [아이디어 2 적용] 동적 ATR 익절선 계산 (1분봉 전용, 5분봉은 기본값 사용)
+                    if timeframe == '1min':
+                        entry_atr   = df['ATR_Scalp'].iloc[i]
+                        atr_ratio   = (entry_atr / close_val) * 100 if close_val > 0 else 0.0
+                        entry_tp_pct = max(0.4, min(3.0, 1.8 * atr_ratio))
+                    else:
+                        entry_tp_pct = tp_pct
                     add_count   = 0
-                elif raw_buy:
+                elif (raw_buy_dynamic or cond_db_buy) and not is_afternoon_cutoff:
                     buy_signal_list.append(True)
                     fall_signal_list.append(False)
                     in_position = True
                     entry_price = close_val
                     entry_idx   = i
                     current_sl  = raw_sl
+                    # [아이디어 2 적용] 동적 ATR 익절선 계산 (1분봉 전용, 5분봉은 기본값 사용)
+                    if timeframe == '1min':
+                        entry_atr   = df['ATR_Scalp'].iloc[i]
+                        atr_ratio   = (entry_atr / close_val) * 100 if close_val > 0 else 0.0
+                        entry_tp_pct = max(0.4, min(3.0, 1.8 * atr_ratio))
+                    else:
+                        entry_tp_pct = tp_pct
                     add_count   = 0
                 else:
                     buy_signal_list.append(False)
@@ -1263,7 +1477,15 @@ def start_background_portfolio_scanner():
     return t
 
 
-@st.cache_data(ttl=60)  # 60초 캐시 — rerun마다 전체 시장 다운로드 방지 (핵심 병목)
+def _get_market_ttl():
+    """장중(09:00~15:30 평일)이면 120초, 장외이면 600초 캐시 TTL 반환"""
+    from datetime import timezone, timedelta as _td
+    _now = datetime.now(timezone(_td(hours=9)))
+    h_m = _now.hour * 100 + _now.minute
+    is_market_hours = _now.weekday() < 5 and 900 <= h_m <= 1540
+    return 120 if is_market_hours else 600
+
+@st.cache_data(ttl=120)  # 기본 120초 캐시 — 장중 2분, 장외에는 load_data 내 30분 동기화 로직이 별도 관리
 def fetch_live_stock_listing():
     """코스피/코스닥 전체 시세 조회.
     1순위: FDR (로컬 환경)
@@ -1300,27 +1522,37 @@ def fetch_live_stock_listing():
     return pd.DataFrame()
 
 
-@st.cache_data(ttl=60)  # 60초 캐시 — 지수/환율 FDR 호출
+@st.cache_data(ttl=120)  # 120초 캐시 — 지수/환율은 실시간 모니터링에 중요 (병렬 호출로 부하 없음)
 def fetch_live_indices():
     """코스피/코스닥/환율/나스닥 최근 데이터 조회.
-    1순위: FDR (로컬 환경)
+    1순위: FDR 병렬 호출 (로컬 환경) — ThreadPoolExecutor로 4개 동시 조회
     2순위: 네이버 실시간 API (Streamlit Cloud — KRX 차단 환경)
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     start_date = (pd.Timestamp.now() - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
     result = {}
 
-    # 1순위: FDR 시도
+    # 1순위: FDR 병렬 시도 (KS11, KQ11, USD/KRW, NQ=F 동시 요청)
     fdr_ok = False
+    fdr_targets = ['KS11', 'KQ11', 'USD/KRW', 'NQ=F']
+    fdr_results = {}
+
+    def _fdr_fetch(symbol):
+        try:
+            df = fdr.DataReader(symbol, start_date)
+            return symbol, df if not df.empty else pd.DataFrame()
+        except Exception:
+            return symbol, pd.DataFrame()
+
     try:
-        ks = fdr.DataReader('KS11', start_date)
-        if not ks.empty:
-            result['KS11'] = ks
-            result['KQ11'] = fdr.DataReader('KQ11', start_date)
-            result['USD/KRW'] = fdr.DataReader('USD/KRW', start_date)
-            try:
-                result['NQ=F'] = fdr.DataReader('NQ=F', start_date)
-            except Exception:
-                result['NQ=F'] = pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_fdr_fetch, sym): sym for sym in fdr_targets}
+            for future in as_completed(futures, timeout=8):
+                sym, df = future.result()
+                fdr_results[sym] = df
+
+        if not fdr_results.get('KS11', pd.DataFrame()).empty:
+            result = fdr_results
             fdr_ok = True
     except Exception:
         pass
@@ -1365,108 +1597,107 @@ def fetch_live_indices():
     return result
 
 
-@st.cache_data(ttl=60)  # 1분 캐시 — 로컬 우선 로드 및 원격 폴백 지원
+@st.cache_data(ttl=300)  # 5분 캐시 — GitHub Actions가 30분 주기 수집이므로 5분 간격 충분
 def load_data():
     """
-    로컬 파일과 원격(GitHub Raw) 파일의 Last-Modified 시간을 체크하여
-    원격 파일이 로컬 파일보다 더 최신이거나 로컬 파일이 없는 경우 자동으로 원격에서 최신 데이터를 다운로드하여 덮어씁니다.
+    로컬 파일 수정 시각(mtime)을 기준으로 30분 이상 경과한 경우에만
+    원격(GitHub Raw)에서 최신 CSV를 다운로드하여 동기화합니다.
+    HTTP HEAD 요청을 제거하여 초기 로딩 속도를 크게 개선합니다.
     """
     import os
     import urllib.request
     from datetime import datetime, timezone, timedelta
-    from email.utils import parsedate_to_datetime
-    
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     dfs = {}
     update_times = {}
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    for fname in DATA_FILES:
+    now_kst = datetime.now(timezone(timedelta(hours=9)))
+
+    def _sync_and_load(fname):
+        """단일 파일의 동기화 및 로드를 처리하는 내부 함수 (병렬 실행용)"""
         local_path = os.path.join(base_dir, 'data', fname)
         url = f'{GITHUB_RAW_BASE}/{fname}'
-        
-        # ── (1) 원격 파일 최종 수정 시각 확인 (HTTP HEAD) ──
-        remote_mtime = None
-        try:
-            req = urllib.request.Request(url, method='HEAD')
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                last_mod = resp.info().get('Last-Modified')
-                if last_mod:
-                    dt = parsedate_to_datetime(last_mod)
-                    remote_mtime = dt.astimezone(timezone(timedelta(hours=9))) # KST
-        except Exception as e:
-            print(f"DEBUG: 원격 {fname} 헤더 조회 실패: {e}")
-            
-        # ── (2) 로컬 파일 수정 시각 확인 ──
+
+        # ── (1) 로컬 파일 수정 시각 확인 ──
         local_mtime = None
         if os.path.exists(local_path):
             try:
                 mtime_ts = os.path.getmtime(local_path)
-                local_mtime = datetime.fromtimestamp(mtime_ts).astimezone(timezone(timedelta(hours=9)))
+                local_mtime = datetime.fromtimestamp(mtime_ts, tz=timezone(timedelta(hours=9)))
             except Exception:
                 pass
-                
-        # ── (3) 자동 동기화 여부 판단: 원격이 더 최신이거나 로컬 파일이 없으면 다운로드 ──
+
+        # ── (2) 동기화 여부 판단: 로컬 파일 없거나 30분 이상 경과한 경우 다운로드 ──
+        # HTTP HEAD 요청 없이 로컬 mtime만으로 판단하여 네트워크 왕복 5회를 제거
         should_download = False
         if not os.path.exists(local_path):
             should_download = True
-        elif remote_mtime and local_mtime:
-            # 원격 수정 시간이 로컬 수정 시간보다 10초 이상 최신일 때
-            if remote_mtime > local_mtime + timedelta(seconds=10):
-                should_download = True
-            # 또는 로컬 데이터가 현재 시간보다 30분 이상 낡았고 원격 데이터가 더 최신일 때
-            elif datetime.now(timezone(timedelta(hours=9))) - local_mtime > timedelta(minutes=30):
-                if remote_mtime > local_mtime:
-                    should_download = True
-                    
-        # ── (4) 동기화 실행 (원격 -> 로컬 다운로드) ──
+        elif local_mtime and (now_kst - local_mtime) > timedelta(minutes=30):
+            should_download = True
+
+        # ── (3) 동기화 실행 (원격 → 로컬 다운로드) ──
         if should_download:
             try:
                 print(f"DEBUG: {fname} 최신 데이터 원격 자동 동기화 실행 중...")
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
                 urllib.request.urlretrieve(url, local_path)
-                # 다운로드 직후 로컬 시간 갱신
                 mtime_ts = os.path.getmtime(local_path)
-                local_mtime = datetime.fromtimestamp(mtime_ts).astimezone(timezone(timedelta(hours=9)))
+                local_mtime = datetime.fromtimestamp(mtime_ts, tz=timezone(timedelta(hours=9)))
             except Exception as download_err:
                 print(f"DEBUG: {fname} 자동 동기화 실패 (기존 로컬 데이터로 Fallback): {download_err}")
-                
-        # ── (5) 최종 데이터 로드 ──
+
+        # ── (4) 최종 데이터 로드 ──
         loaded = False
         final_mtime_str = None
-        
+
         # 로컬 우선 로드
         if os.path.exists(local_path):
             for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
                 try:
-                    dfs[fname] = pd.read_csv(local_path, encoding=enc)
+                    df = pd.read_csv(local_path, encoding=enc)
                     loaded = True
                     mtime_ts = os.path.getmtime(local_path)
                     final_mtime_str = datetime.fromtimestamp(mtime_ts).strftime('%Y-%m-%d %H:%M:%S')
-                    break
+                    return fname, df, final_mtime_str
                 except Exception:
                     continue
-                    
+
         # 원격 Fallback 로드 (임시 메모리 적재)
         if not loaded:
             try:
                 for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
                     try:
-                        dfs[fname] = pd.read_csv(url, encoding=enc)
-                        loaded = True
-                        break
+                        df = pd.read_csv(url, encoding=enc)
+                        final_mtime_str = now_kst.strftime('%Y-%m-%d %H:%M:%S')
+                        return fname, df, final_mtime_str
                     except Exception:
                         continue
-                if loaded and remote_mtime:
-                    final_mtime_str = remote_mtime.strftime('%Y-%m-%d %H:%M:%S')
             except Exception:
                 pass
-                
-        if not loaded:
+
+        return fname, pd.DataFrame(), "데이터 없음"
+
+    # ── 5개 CSV 파일 병렬 로드 ──
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_sync_and_load, fname): fname for fname in DATA_FILES}
+        for future in as_completed(futures, timeout=15):
+            try:
+                fname, df, mtime_str = future.result()
+                dfs[fname] = df
+                update_times[fname] = mtime_str
+            except Exception as e:
+                fname = futures[future]
+                print(f"DEBUG: {fname} 병렬 로드 실패: {e}")
+                dfs[fname] = pd.DataFrame()
+                update_times[fname] = "데이터 없음"
+
+    # 누락된 파일 보완
+    for fname in DATA_FILES:
+        if fname not in dfs:
             dfs[fname] = pd.DataFrame()
-            final_mtime_str = "데이터 없음"
-            
-        update_times[fname] = final_mtime_str
-        
+            update_times[fname] = "데이터 없음"
+
     return dfs, update_times
 
 # ── 데이터 로드 ────────────────────────────────────────────────
@@ -1490,6 +1721,29 @@ if df_q is not None and not df_q.empty and 'Total_Score' in df_q.columns:
             df_q['Total_Score_Adj'] = df_q['Total_Score']
     except Exception as z_err:
         df_q['Total_Score_Adj'] = df_q['Total_Score']
+
+# ── Quant 점수 세션 내 히스토리 스냅샷 (▲▼ 델타 표시용) ─────────────────
+try:
+    if df_q is not None and not df_q.empty and 'Total_Score_Adj' in df_q.columns:
+        snapshot_scores = dict(zip(
+            df_q['Code'].astype(str).str.zfill(6),
+            df_q['Total_Score_Adj']
+        ))
+        snapshot_entry = {
+            'time': datetime.now(timezone(timedelta(hours=9))).strftime('%H:%M:%S'),
+            'scores': snapshot_scores
+        }
+        if 'quant_score_history' not in st.session_state:
+            st.session_state.quant_score_history = []
+        # 이전 스냅샷과 현재 스냅샷이 다를 때만 추가 (중복 방지)
+        if (not st.session_state.quant_score_history or
+                st.session_state.quant_score_history[-1]['scores'] != snapshot_scores):
+            st.session_state.quant_score_history.append(snapshot_entry)
+            # 최근 10개 스냅샷만 유지 (메모리 관리)
+            if len(st.session_state.quant_score_history) > 10:
+                st.session_state.quant_score_history = st.session_state.quant_score_history[-10:]
+except Exception:
+    pass
 
 # ── df_summary 컬럼명 정규화 (GitHub CSV 인코딩 깨짐 방지) ───────
 # utf-8-sig로 저장되어도 GitHub raw 다운로드 시 cp949 환경에서 깨질 수 있음
@@ -1878,7 +2132,6 @@ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_
 
 
 # ── 사이드바 정렬 옵션 ──
-# ── 사이드바 정렬 옵션 ──
 st.sidebar.title("🎛️ 대시보드 설정")
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
 q_sort_by = st.sidebar.radio(
@@ -1888,58 +2141,21 @@ q_sort_by = st.sidebar.radio(
     help="Quant Buy TOP 10 종목을 정렬하는 기준을 선택합니다."
 )
 
-# ── 실시간 관심 종목 리스트 생성 (사이드바 드롭다운용) ──
-top_stocks = []
-try:
-    if not df_hd.empty:
-        exclude_keywords = ['etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef']
-        df_hd_filtered = df_hd[~df_hd['Name'].fillna('').astype(str).str.lower().apply(lambda x: any(kw in x for kw in exclude_keywords))]
-        top_stocks.extend(df_hd_filtered.sort_values('Total_Combined_Net', ascending=False).head(10)[['Code', 'Name']].values.tolist())
-
-    if not df_q.empty:
-        exclude_keywords = ['etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef']
-        df_q_filtered = df_q[~df_q['Name'].fillna('').astype(str).str.lower().apply(lambda x: any(kw in x for kw in exclude_keywords))]
-        if q_sort_by == "거래대금 순" and 'Amount' in df_q_filtered.columns:
-            df_q_sub = df_q_filtered.sort_values('Amount', ascending=False).head(10)
-        else:
-            df_q_sub = df_q_filtered.sort_values('Total_Score_Adj', ascending=False).head(10)
-        top_stocks.extend(df_q_sub[['Code', 'Name']].values.tolist())
-
-    if not df_m.empty:
-        exclude_keywords = ['etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef']
-        df_m_filtered = df_m[~df_m['Name'].fillna('').astype(str).str.lower().apply(lambda x: any(kw in x for kw in exclude_keywords))]
-        top_stocks.extend(df_m_filtered.sort_values('Amount', ascending=False).head(10)[['Code', 'Name']].values.tolist())
-except Exception as list_err:
-    print(f"DEBUG: Failed to extract top stocks: {list_err}")
-
-unique_stocks = []
-seen_codes = set()
-for item in top_stocks:
-    code = str(item[0]).strip().zfill(6)
-    name = str(item[1]).strip()
-    if code not in seen_codes:
-        seen_codes.add(code)
-        unique_stocks.append((code, name))
-
-unique_stocks = sorted(unique_stocks, key=lambda x: x[1])
-
-options_list = ["선택 안 함 (검색 사용)"]
-code_to_name_map = {}
-for code, name in unique_stocks:
-    label = f"{name} ({code})"
-    options_list.append(label)
-    code_to_name_map[label] = (code, name)
-
-# 좌측 관심 종목 바로가기 기능 제거됨
+# ── 사이드바 관심 종목 검색 초기화 ──
 options_list = ["선택 안 함 (검색 사용)"]
 code_to_name_map = {}
 default_idx = 0
 
 st.sidebar.markdown('### ⚡ 실시간 스캘핑 모드')
-auto_refresh = st.sidebar.toggle('5초마다 실시간 차트 갱신', value=False, help="차트와 시그널을 자동으로 새로고침합니다.")
-if auto_refresh:
-    st_autorefresh(interval=5000, key="data_refresh")
-
+auto_refresh = st.sidebar.toggle(
+    '5초마다 실시간 차트 갱신',
+    value=st.session_state.get('auto_refresh_enabled', False),
+    help="차트와 시그널을 자동으로 새로고침합니다."
+)
+# toggle 상태를 세션 스테이트에 저장 → 다음 rerun 시 최상단에서 st_autorefresh 활성화
+if auto_refresh != st.session_state.get('auto_refresh_enabled', False):
+    st.session_state['auto_refresh_enabled'] = auto_refresh
+    st.rerun()
 st.sidebar.markdown('---')
 st.sidebar.markdown('### 🔍 종목 검색')
 st.sidebar.caption('종목명 또는 코드로 검색하면 대시보드 아래에 일봉 차트가 표시됩니다.')
@@ -2029,7 +2245,7 @@ with col_btn1:
                 "qty": input_qty
             }
             save_portfolio(portfolio)
-            portfolio_sidebar_container.toast(f"💼 {_port_name_disp} 포트폴리오 저장 완료!", icon="✅")
+            st.toast(f"💼 {_port_name_disp} 포트폴리오 저장 완료!", icon="✅")
             st.rerun()
         else:
             portfolio_sidebar_container.warning("가격과 수량을 입력해주세요.")
@@ -2038,7 +2254,7 @@ with col_btn2:
         if portfolio_sidebar_container.button("🗑️ 삭제", use_container_width=True, key="btn_port_del"):
             del portfolio[_port_code_disp]
             save_portfolio(portfolio)
-            portfolio_sidebar_container.toast(f"🗑️ {_port_name_disp} 포트폴리오 삭제 완료", icon="ℹ️")
+            st.toast(f"🗑️ {_port_name_disp} 포트폴리오 삭제 완료", icon="ℹ️")
             st.rerun()
     else:
         portfolio_sidebar_container.button("🗑️ 삭제", use_container_width=True, disabled=True, key="btn_port_del_dis")
@@ -2101,6 +2317,7 @@ if st.sidebar.button("Gemini에게 질문하기", use_container_width=True):
 
 # 헬프 센터 다중 모델 순차 폴백 호출
             models_to_try = [
+                "gemini-3.6-flash",
                 "gemini-3.5-flash",
                 "gemini-2.5-flash",
                 "gemini-1.5-flash",
@@ -2169,14 +2386,10 @@ if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_w
                 for mkt_name in ['코스피', '코스닥']:
                     if mkt_name in nv_supply:
                         m_sup = nv_supply[mkt_name]
-                        def clean_sup(val_str):
-                            try:
-                                return int(str(val_str).replace(',', '').replace('+', '').strip())
-                            except:
-                                return 0
-                        f_val = clean_sup(m_sup.get('외국인', 0))
-                        p_val = clean_sup(m_sup.get('개인', 0))
-                        i_val = clean_sup(m_sup.get('기관', 0))
+                        # 전역 _clean_sup() 재사용 (중복 함수 선언 제거)
+                        f_val = _clean_sup(m_sup.get('외국인', 0))
+                        p_val = _clean_sup(m_sup.get('개인', 0))
+                        i_val = _clean_sup(m_sup.get('기관', 0))
 
 # Supabase에 강제 upsert (중복 시 무시하도록 예외 처리)
                         if supabase:
@@ -2352,8 +2565,6 @@ def handle_chart_click(event_data):
         return
         
 
-    print(f"DEBUG: handle_chart_click raw_data: {event_data}")
-        
     pt = points[0]
     
     clicked_name = ''
@@ -2469,7 +2680,9 @@ else:
 title_col_left, title_col_right = st.columns([7, 5])
 
 with title_col_left:
-    st.markdown(f"### 📊 실시간 시장 종합 대시보드 <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time})</span>", unsafe_allow_html=True)
+    rel_t = _relative_time(quant_time)
+    rel_t_str = f" ({rel_t})" if rel_t else ""
+    st.markdown(f"### 📊 실시간 시장 종합 대시보드 <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time}{rel_t_str})</span>", unsafe_allow_html=True)
     st.caption("💡 왼쪽 사이드바의 '종목 검색'을 통해 종목을 선택하시면, 하단 일봉 차트가 실시간으로 비동기 갱신됩니다.")
 
 with title_col_right:
@@ -2489,25 +2702,18 @@ with title_col_right:
     st.markdown(regime_html, unsafe_allow_html=True)
 
 # ── 3열(Column) 그리드 레이아웃 정의 (세로 연속 배치로 공백 제거) ──
-col1, col2, col3 = st.columns(3)
+col_left, col_mid, col_right = st.columns(3)
 
 # ── [Panel 1] 실시간 수급 (Treemap) ─────────────────────────
-with col2:
+with col_mid:
     st.markdown("##### 📊 실시간 수급 (외/기/프)")
     if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
         df_hd_clean = df_hd.copy()
         
-        # ── 1번 패널 이중 안전장치: ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
-        exclude_keywords = [
-            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
-            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
-            'plus', 'rise', 'woori', 'arirang', '곱버스'
-        ]
-        
         df_hd_clean['Name_lower'] = df_hd_clean['Name'].fillna('').astype(str).str.lower()
         df_hd_clean['Sector_lower'] = df_hd_clean['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_hd_clean.columns else ''
         
-        is_fund = df_hd_clean['Name_lower'].apply(lambda x: any(kw in x for kw in exclude_keywords))
+        is_fund = df_hd_clean['Name_lower'].apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
         if 'Sector' in df_hd_clean.columns:
             is_fund = is_fund | df_hd_clean['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
             
@@ -2632,24 +2838,17 @@ with col2:
         )
         handle_chart_click(ev_p1)
 # ── [Panel 2] Quant Buy TOP 10 (Horizontal Bar) ─────────────
-with col2:
+with col_mid:
     st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
     fig_p2 = go.Figure()
     x_val = pd.Series(dtype=float)  # NameError 방지: df_q 비어있을 때 기본값
     if not df_q.empty and 'Total_Score' in df_q.columns:
         df2 = df_q.copy()
         
-        # ── 대시보드 화면 이중 안전장치: ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
-        exclude_keywords = [
-            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
-            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
-            'plus', 'rise', 'woori', 'arirang', '곱버스'
-        ]
-        
         df2['Name_lower'] = df2['Name'].fillna('').astype(str).str.lower()
         df2['Sector_lower'] = df2['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df2.columns else ''
         
-        is_fund = df2['Name_lower'].apply(lambda x: any(kw in x for kw in exclude_keywords))
+        is_fund = df2['Name_lower'].apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
         if 'Sector' in df2.columns:
             is_fund = is_fund | df2['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
             
@@ -2681,7 +2880,24 @@ with col2:
             df2['Visual_Val'] = df2['Total_Score_Adj']
             x_val = df2['Visual_Val']
             hover_label = '보정 Quant 점수: <b>%{x:.1f}점</b>'
-            text_labels = df2['Total_Score_Adj'].apply(lambda x: f" {x:.1f}")
+            
+            # 이전 스냅샷과 현재 스냅샷을 비교하여 점수 변동(▲▼ 델타) 계산
+            prev_scores = {}
+            if 'quant_score_history' in st.session_state and len(st.session_state.quant_score_history) >= 2:
+                prev_scores = st.session_state.quant_score_history[-2]['scores']
+            
+            def get_delta_str(row):
+                code = str(row['Code']).zfill(6)
+                curr = float(row.get('Total_Score_Adj', 0))
+                if code in prev_scores:
+                    diff = round(curr - prev_scores[code], 1)
+                    if diff > 0:
+                        return f" (▲{diff:.1f})"
+                    elif diff < 0:
+                        return f" (▼{abs(diff):.1f})"
+                return ""
+            
+            text_labels = df2.apply(lambda r: f" {r['Total_Score_Adj']:.1f}{get_delta_str(r)}", axis=1)
 
         fig_p2.add_trace(go.Bar(
             y=df2['Name'],
@@ -2728,24 +2944,17 @@ with col2:
     handle_chart_click(ev_p2)
 
 # ── [Panel 3] 거래대금 리더 (Horizontal Bar) ─────────────────
-with col3:
+with col_right:
     st.markdown("##### 🔥 거래대금 리더 (12)")
     fig_p3 = go.Figure()
     df3 = pd.DataFrame()  # NameError 방지: df_m 비어있을 때 기본값
     if not df_m.empty and 'Amount' in df_m.columns:
         df_m_clean3 = df_m.copy()
         
-        # ── 3번 패널 이중 안전장치: ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
-        exclude_keywords = [
-            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
-            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
-            'plus', 'rise', 'woori', 'arirang', '곱버스'
-        ]
-        
         df_m_clean3['Name_lower'] = df_m_clean3['Name'].fillna('').astype(str).str.lower()
         df_m_clean3['Sector_lower'] = df_m_clean3['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_m_clean3.columns else ''
         
-        is_fund = df_m_clean3['Name_lower'].apply(lambda x: any(kw in x for kw in exclude_keywords))
+        is_fund = df_m_clean3['Name_lower'].apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
         if 'Sector' in df_m_clean3.columns:
             is_fund = is_fund | df_m_clean3['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
             
@@ -2854,7 +3063,7 @@ with col3:
     handle_chart_click(ev_p3)
 
 # ── [Panel 4] 시장 요약 테이블 ──────────────────────────────
-with col1:
+with col_left:
     st.markdown("##### 📉 시장 요약")
     fig_p4 = go.Figure()
     if not df_summary.empty:
@@ -2904,7 +3113,7 @@ with col1:
         row_fill = row_fill[:len(df_summary)]
 
         fig_p4.add_trace(go.Table(
-            columnwidth=[1.5, 1.5, 1.5, 0.8, 1.2, 1.2, 1.2],
+            columnwidth=[1.4, 1.2, 1.2, 0.6, 1.6, 1.6, 1.6],
             header=dict(
                 values=[f'<b>{c}</b>' for c in df_summary.columns],
                 fill_color='#1e3a5f',
@@ -2930,7 +3139,7 @@ with col1:
     st.plotly_chart(fig_p4, use_container_width=True)
 
 # ── [Panel 5] 코스피/코스닥 수급 (Line) ───────────────────────
-with col1:
+with col_left:
     st.markdown("##### 📈 수급 현황 (일중 추이)")
     market_tab = st.radio("수급 구분", ["코스피 수급", "코스닥 수급"], horizontal=True, label_visibility="collapsed", key="p5_market_tab")
     target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
@@ -3031,24 +3240,17 @@ with col1:
     st.plotly_chart(fig_p5, use_container_width=True, config={'displayModeBar': False})
 
 # ── [Panel 6] 상승률 리더 (Horizontal Bar) ───────────────────
-with col3:
+with col_right:
     st.markdown("##### 🚀 상승률 리더 (12)")
     fig_p6 = go.Figure()
     df6 = pd.DataFrame()  # NameError 방지: df_m 비어있을 때 기본값
     if not df_m.empty and 'ChagesRatio' in df_m.columns:
         df_m_clean6 = df_m.copy()
         
-        # ── 6번 패널 이중 안전장치: ETF, ETN, 커버드콜, 선물, 인버스, 레버리지, 스팩 등 파생 및 펀드 상품 필터링 제외 ──
-        exclude_keywords = [
-            'etf', 'etn', '선물', '인버스', '레버리지', '커버드콜', '스팩', 
-            'kodex', 'tiger', 'kbstar', 'ace', 'sol', 'hanaro', 'kosef', 
-            'plus', 'rise', 'woori', 'arirang', '곱버스'
-        ]
-        
         df_m_clean6['Name_lower'] = df_m_clean6['Name'].fillna('').astype(str).str.lower()
         df_m_clean6['Sector_lower'] = df_m_clean6['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_m_clean6.columns else ''
         
-        is_fund = df_m_clean6['Name_lower'].apply(lambda x: any(kw in x for kw in exclude_keywords))
+        is_fund = df_m_clean6['Name_lower'].apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
         if 'Sector' in df_m_clean6.columns:
             is_fund = is_fund | df_m_clean6['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
             
@@ -3072,9 +3274,9 @@ with col3:
             customdata=df6[['Code', 'Close', 'Volume']].values,
             hovertemplate=(
                 '<b>%{y}</b> (%{customdata[0]})<br>'
-                '등락률: <b>%{x:+.2f}%</b><br>'
-                '현재가: %{customdata[1]:,}원<br>'
-                '거래량: %{customdata[2]:,}주'
+                '등락률: <b>%{text}</b><br>'
+                '현재가: %{customdata[1]:,d}원<br>'
+                '거래량: %{customdata[2]:,d}주'
                 '<extra></extra>'
             )
         ))
@@ -3104,10 +3306,103 @@ with col3:
 
 
 
-# ── 종목 일봉 차트 (선택 시 표시) ─────────────────────────────
-if st.session_state.sel_code:
-    code_disp = st.session_state.sel_code
+# ── Gemini AI 분석 비동기 독립 Fragment (최상위 스코프 정의) ───────────
+@st.fragment
+def render_gemini_commentary(params):
+    """Gemini AI 코멘터리를 별도 fragment로 렌더링 (비동기 로딩 & 버튼클릭 시 전역 새로고침 방지)"""
+    _code = params['code_disp']
+    _name = params['name_disp']
+
+    # ── Gemini AI 분석 세션 캐싱 및 속도 제한 방지 ──
+    if 'gemini_cache' not in st.session_state:
+        st.session_state.gemini_cache = {}
+
+    now_ts = time.time()
+    cached_val = st.session_state.gemini_cache.get(_code)
+    force_refresh = st.session_state.get(f"force_refresh_gemini_{_code}", False)
+
+    use_cache = False
+    if cached_val and not force_refresh:
+        cached_comment, cached_ts, is_error = cached_val
+        cache_duration = 30 if is_error else 600
+        if now_ts - cached_ts < cache_duration:
+            use_cache = True
+
+    if use_cache:
+        ai_comment = cached_comment
+        is_ai_fallback = is_error
+    else:
+        is_ai_fallback = False
+        with st.spinner("🤖 Gemini AI 퀀트 리스크 조언 분석 중..."):
+            try:
+                ai_comment = get_gemini_commentary(
+                    _code, _name, params['t_score'], params['t_score_adj'], params['s_score'], params['daily_chg'], params['market_cond'], params['rec_cash'], params['rec_stock'], params['gemini_api_key'], params['avg_price_for_gemini'], params['recent_prices_str'], params['current_price_for_gemini'], params['stop_loss_for_gemini'], params['recent_high_for_gemini'], params['rsi_for_gemini'], params['macd_for_gemini'], params['macd_sig_for_gemini'], params['bb_upper_for_gemini'], params['bb_middle_for_gemini'], params['bb_lower_for_gemini'], params['supply_trend_prompt'], params['recent_news_prompt']
+                )
+                st.session_state.gemini_cache[_code] = (ai_comment, now_ts, False)
+            except RuntimeWarning as e:
+                fallback_comment = get_local_fallback_commentary(_name, params['t_score_adj'], params['s_score'], params['market_cond'])
+                ai_comment = fallback_comment
+                is_ai_fallback = True
+                st.session_state.gemini_cache[_code] = (ai_comment, now_ts, True)
+            except Exception as e:
+                ai_comment = get_local_fallback_commentary(_name, params['t_score_adj'], params['s_score'], params['market_cond'])
+                is_ai_fallback = True
+                st.session_state.gemini_cache[_code] = (ai_comment, now_ts, True)
+        
+        if force_refresh:
+            st.session_state[f"force_refresh_gemini_{_code}"] = False
+
+    ai_comment_cleaned = ai_comment
+    ai_comment_cleaned = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', ai_comment_cleaned)
+    tag_patterns = [r'</ul>', r'<ul>', r'</ol>', r'<ol>', r'</li>', r'<li>', r'<br\s*/?>', r'</strong>', r'<strong>']
+    for pat in tag_patterns:
+        ai_comment_cleaned = re.sub(rf'\s*\n\s*({pat})', r'\1', ai_comment_cleaned)
+        ai_comment_cleaned = re.sub(rf'({pat})\s*\n\s*', r'\1', ai_comment_cleaned)
     
+    ai_comment_escaped = ai_comment_cleaned.replace('\n', '<br/>')
+    ai_comment_escaped = re.sub(r'(<br\s*/?>\s*){2,}', '<br/>', ai_comment_escaped)
+
+    ai_label_text = "📍 로컬 퀀트 룰 기반 조언 (AI 일시 대기 중)" if is_ai_fallback else "🤖 AI 퀀트 리스크 조언 (Gemini 3.6 ver.)"
+    ai_label_border = "#888888" if is_ai_fallback else "#ff922b"
+
+    # ── [단 1개의 통 container(border=True) 내부에 전체 퀀트 매매 의견 카드 렌더링] ──
+    with st.container(border=True):
+        # 1. 상단 헤더 행 (통 박스 내부의 1자 헤더 & 1px 점선 구분선)
+        opinion_hdr_html = f"""<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255, 255, 255, 0.15); margin-bottom: 12px;">
+    <div style="display: flex; align-items: center; gap: 15px;">
+        <h4 style="margin: 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
+        <span style="font-size: 14px; font-family: 'malgun gothic', sans-serif; color: #ccc;">
+            보정 평가 등급: <strong style="color: {params['grade_color']}; font-size: 15px;">{params['quant_grade']}</strong>
+        </span>
+    </div>
+    <div style="text-align: right; min-width: 140px;">
+        <span style="font-size: 13px; color: #2ecc71; font-family: 'malgun gothic', sans-serif;">매수 보정 점수: <strong>{params['t_score_str']}</strong> <span style="font-size: 11px; color: #888;">{params['t_score_raw_str']}</span></span><br/>
+        <span style="font-size: 13px; color: #e74c3c; font-family: 'malgun gothic', sans-serif;">매도 퀀트 점수: <strong>{params['s_score_str']}</strong></span>
+    </div>
+</div>"""
+        st.markdown(re.sub(r'\s+', ' ', opinion_hdr_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
+
+        # 2. 중간 행: 좌측 라벨, 우측 AI 분석 다시 받기 버튼
+        col_label, col_btn = st.columns([6.5, 3.5])
+        with col_label:
+            st.markdown(f"""<div style="padding-top: 4px;"><strong style="color: {ai_label_border}; font-size: 14px; font-family: 'malgun gothic', sans-serif;">{ai_label_text}:</strong></div>""", unsafe_allow_html=True)
+        with col_btn:
+            if st.button("🔄 AI 분석 다시 받기", key=f"btn_refresh_gemini_{_code}", use_container_width=True):
+                st.session_state[f"force_refresh_gemini_{_code}"] = True
+                st.rerun(scope="fragment")
+
+        # 3. 하단 행: 조언 코멘터리 박스
+        body_html = f"""<div style="margin-top: 8px;">
+    <div style="background-color: rgba(255, 255, 255, 0.03); padding: 14px; border-radius: 6px; border-left: 4px solid {ai_label_border}; font-size: 13px; line-height: 1.5; color: #eee; font-family: 'malgun gothic', sans-serif;">
+        {ai_comment_escaped}
+    </div>
+</div>"""
+        st.markdown(re.sub(r'\s+', ' ', body_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
+
+
+# ── 종목 일봉 차트 (선택 시 표시) ─────────────────────────────
+@st.fragment
+def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol_mult_adjust=1.0, rsi_range_adjust=78):
     # 확실하게 종목명을 역맵핑 보정
     if not df_m.empty:
         target_code = str(code_disp).strip().zfill(6)
@@ -3119,84 +3414,126 @@ if st.session_state.sel_code:
 
     st.markdown(f"### 📈 {name_disp} ({code_disp}) 일봉 차트")
 
-    with st.spinner(f'📡 {name_disp} 주가 데이터 조회 중...'):
-        df_candle = get_stock_history(code_disp)
-        
-        # 1분봉 데이터 획득 (KIS 데이터에 네이버 과거 800봉 데이터를 결합하여 장 개시 직후에도 안정적인 지표 수렴 보장)
-        df_1min = pd.DataFrame()
-        if kis_key and kis_sec:
-            df_1min = get_kis_minute_history(kis_key, kis_sec, code_disp)
-            
-        df_naver = get_minute_history(code_disp, count=2000)
-        
-        if not df_1min.empty and not df_naver.empty:
-            df_1min = pd.concat([df_1min, df_naver], ignore_index=True)
-            df_1min = df_1min.drop_duplicates(subset=['DateTime']).sort_values('DateTime').reset_index(drop=True)
-        elif df_1min.empty:
-            df_1min = df_naver
-            
-        df_5min = resample_to_5min(df_1min)
-        
-        my_entry_price = 0.0
-        portfolio = load_portfolio()
-        if code_disp in portfolio:
-            my_entry_price = portfolio[code_disp].get('entry_price', 0.0)
-            
-        df_1min = calculate_intraday_signals(df_1min, my_entry_price=my_entry_price, timeframe='1min', code=code_disp)
-        df_5min = calculate_intraday_signals(df_5min, my_entry_price=my_entry_price, timeframe='5min', code=code_disp)
-        
-        # --- 라이브 신호 로거 연동 (최근 1분봉 캔들의 신호 감지) ---
-        if not df_1min.empty and len(df_1min) > 1:
-            last_row = df_1min.iloc[-1]
-            # 이미 지난 과거가 아닌 최근 1~2분 이내의 신호만 로깅 (실시간성 확보)
-            if 'DateTime' in df_1min.columns and pd.notna(last_row.get('DateTime')):
-                time_diff = (pd.Timestamp.now() - pd.to_datetime(last_row['DateTime'])).total_seconds()
-                if time_diff < 300:  # 5분 이내의 최신 신호만 로깅 허용
-                    _rsi_val  = float(last_row['RSI_14']) if 'RSI_14'  in last_row and pd.notna(last_row.get('RSI_14'))  else None
-                    _vwap_val = float(last_row['VWAP'])   if 'VWAP'    in last_row and pd.notna(last_row.get('VWAP'))    else None
-                    if last_row.get('Buy_Signal') == True:
-                        live_logger.log_buy_signal(
-                            ticker=code_disp,
-                            price=float(last_row['Close']),
-                            timestamp=last_row['DateTime'],
-                            name=name_disp,
-                            tg_token=tg_token,
-                            tg_chat_id=tg_chat_id,
-                            rsi=_rsi_val,
-                            vwap=_vwap_val,
-                        )
-                    elif last_row.get('Add_Signal') == True:
-                        live_logger.log_add_signal(
-                            ticker=code_disp,
-                            price=float(last_row['Close']),
-                            timestamp=last_row['DateTime'],
-                            name=name_disp,
-                            tg_token=tg_token,
-                            tg_chat_id=tg_chat_id,
-                            rsi=_rsi_val,
-                            vwap=_vwap_val,
-                        )
-                    elif last_row.get('Fall_Signal') == True:
-                        live_logger.log_fall_buy_signal(
-                            ticker=code_disp,
-                            price=float(last_row['Close']),
-                            timestamp=last_row['DateTime'],
-                            name=name_disp,
-                            tg_token=tg_token,
-                            tg_chat_id=tg_chat_id,
-                            rsi=_rsi_val,
-                            vwap=_vwap_val,
-                        )
-                    elif last_row.get('Exit_Signal') == True:
-                        live_logger.log_exit_signal(
-                            ticker=code_disp,
-                            price=float(last_row['Close']),
-                            timestamp=last_row['DateTime'],
-                            name=name_disp,
-                            tg_token=tg_token,
-                            tg_chat_id=tg_chat_id,
-                        )
-        # -------------------------------------------------------------
+    # ── 세션 스테이트 캐시 키 생성 (종목코드 + 2분 단위 시간 버킷) ──
+    # 같은 종목을 2분 내에 재클릭하면 API 호출 없이 즉각 반응
+    from datetime import timezone, timedelta as _td
+    _now_bucket = datetime.now(timezone(timedelta(hours=9))).strftime('%Y%m%d%H%M')[:-1]  # 분 끝자리 제거 → 2분 버킷
+    _cache_key = f"_signal_cache_{code_disp}_{_now_bucket}"
+
+    # ── 포트폴리오 보유 단가 조회 (로컬 파일 읽기) — if/else 블록 전에 반드시 정의 ──
+    # Python 스코핑 규칙: 함수 내 어디서든 대입되는 변수는 함수 전체에서 로컬 취급됨
+    # → else 블록 안에서 참조하기 전에 미리 정의해야 UnboundLocalError 방지
+    my_entry_price = 0.0
+    portfolio = load_portfolio()
+    is_portfolio = code_disp in portfolio
+    if is_portfolio:
+        my_entry_price = portfolio[code_disp].get('entry_price', 0.0)
+
+    if _cache_key in st.session_state:
+        # ── 캐시 히트: API/연산 없이 즉각 반환 ──
+        _cached = st.session_state[_cache_key]
+        df_candle = _cached['df_candle']
+        df_1min   = _cached['df_1min']
+        df_5min   = _cached['df_5min']
+    else:
+        # ── 캐시 미스: API 호출 및 시그널 연산 수행 ──
+        with st.spinner(f'📡 {name_disp} 주가 데이터 조회 중...'):
+            # 일봉 + KIS 분봉 + 네이버 분봉을 병렬로 동시 요청
+            with ThreadPoolExecutor(max_workers=3) as _exec:
+                _f_candle = _exec.submit(get_stock_history, code_disp)
+                _f_kis    = _exec.submit(
+                    get_kis_minute_history, kis_key, kis_sec, code_disp
+                ) if kis_key and kis_sec else None
+                _f_naver  = _exec.submit(get_minute_history, code_disp, 2000)
+
+                df_candle = _f_candle.result()
+                df_1min   = _f_kis.result() if _f_kis else pd.DataFrame()
+                df_naver  = _f_naver.result()
+
+            # 1분봉 병합
+            if not df_1min.empty and not df_naver.empty:
+                df_1min = pd.concat([df_1min, df_naver], ignore_index=True)
+                df_1min = df_1min.drop_duplicates(subset=['DateTime']).sort_values('DateTime').reset_index(drop=True)
+            elif df_1min.empty:
+                df_1min = df_naver
+
+            # 종목 시가총액(Marcap) 정보 추출
+            marcap_val = 0.0
+            if df_m is not None and not df_m.empty:
+                m_match = df_m[df_m['Code'].astype(str).str.zfill(6) == str(code_disp).strip().zfill(6)]
+                if not m_match.empty and 'Marcap' in m_match.columns:
+                    marcap_val = float(m_match.iloc[0]['Marcap'])
+
+            df_5min = resample_to_5min(df_1min)
+
+            df_1min = calculate_intraday_signals(df_1min, my_entry_price=0.0, timeframe='1min', code=code_disp, is_portfolio=is_portfolio, marcap=marcap_val)
+            df_5min = calculate_intraday_signals(df_5min, my_entry_price=0.0, timeframe='5min', code=code_disp, is_portfolio=is_portfolio, marcap=marcap_val)
+
+            # 이전 종목 캐시 정리 (메모리 절약: 현재 종목 외 나머지 삭제)
+            for k in list(st.session_state.keys()):
+                if k.startswith('_signal_cache_') and k != _cache_key:
+                    del st.session_state[k]
+
+            # 결과 세션 스테이트에 저장
+            st.session_state[_cache_key] = {
+                'df_candle': df_candle,
+                'df_1min':   df_1min,
+                'df_5min':   df_5min,
+            }
+
+    # --- 라이브 신호 로거 연동 (최근 1분봉 캔들의 신호 감지, 캐시 히트/미스 모두 실행) ---
+    if not df_1min.empty and len(df_1min) > 1:
+        last_row = df_1min.iloc[-1]
+        # 이미 지난 과거가 아닌 최근 1~2분 이내의 신호만 로깅 (실시간성 확보)
+
+        if 'DateTime' in df_1min.columns and pd.notna(last_row.get('DateTime')):
+            time_diff = (pd.Timestamp.now() - pd.to_datetime(last_row['DateTime'])).total_seconds()
+            if time_diff < 300:  # 5분 이내의 최신 신호만 로깅 허용
+                _rsi_val  = float(last_row['RSI_14']) if 'RSI_14'  in last_row and pd.notna(last_row.get('RSI_14'))  else None
+                _vwap_val = float(last_row['VWAP'])   if 'VWAP'    in last_row and pd.notna(last_row.get('VWAP'))    else None
+                if last_row.get('Buy_Signal') == True:
+                    live_logger.log_buy_signal(
+                        ticker=code_disp,
+                        price=float(last_row['Close']),
+                        timestamp=last_row['DateTime'],
+                        name=name_disp,
+                        tg_token=tg_token,
+                        tg_chat_id=tg_chat_id,
+                        rsi=_rsi_val,
+                        vwap=_vwap_val,
+                    )
+                elif last_row.get('Add_Signal') == True:
+                    live_logger.log_add_signal(
+                        ticker=code_disp,
+                        price=float(last_row['Close']),
+                        timestamp=last_row['DateTime'],
+                        name=name_disp,
+                        tg_token=tg_token,
+                        tg_chat_id=tg_chat_id,
+                        rsi=_rsi_val,
+                        vwap=_vwap_val,
+                    )
+                elif last_row.get('Fall_Signal') == True:
+                    live_logger.log_fall_buy_signal(
+                        ticker=code_disp,
+                        price=float(last_row['Close']),
+                        timestamp=last_row['DateTime'],
+                        name=name_disp,
+                        tg_token=tg_token,
+                        tg_chat_id=tg_chat_id,
+                        rsi=_rsi_val,
+                        vwap=_vwap_val,
+                    )
+                elif last_row.get('Exit_Signal') == True:
+                    live_logger.log_exit_signal(
+                        ticker=code_disp,
+                        price=float(last_row['Close']),
+                        timestamp=last_row['DateTime'],
+                        name=name_disp,
+                        tg_token=tg_token,
+                        tg_chat_id=tg_chat_id,
+                    )
+    # -------------------------------------------------------------
 
     if df_candle.empty:
         st.warning('⚠️ 차트 데이터를 불러올 수 없습니다.')
@@ -3282,6 +3619,11 @@ if st.session_state.sel_code:
             # 7. 매수/매도 신호 판정 및 동기화된 손절선 계산 (상태 머신)
             # 동적 ATR 손절폭 기준선 (대량거래 발생 시 타이트하게 보정됨)
             dynamic_raw_sl = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
+            # ── 손절선 현재가 상한 클리핑 ─────────────────────────────────────
+            # 급락 후 rolling(20) 최고가가 과거 고점을 참조할 경우 손절선이 현재가 위에
+            # 그려지는 버그 방지. 샹들리에 손절선은 항상 현재 종가 아래에 위치해야 함.
+            # (0.5% 마진 = 손절선이 현재 종가에 너무 밀착하지 않도록 최소 여유 확보)
+            dynamic_raw_sl = dynamic_raw_sl.clip(upper=df_candle['Close'] * 0.995)
             
             stop_loss_series = []
             exit_signal_list = []
@@ -3318,7 +3660,7 @@ if st.session_state.sel_code:
                     fall_signal_list.append(False)
                     continue
                 
-                cond_add_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30) or                                      (close_val > ma5_val and close_val > ma20_val)
+                cond_add_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30) or (close_val > ma5_val and close_val > ma20_val)
                 
                 if in_position:
                     buy_signal_list.append(False)
@@ -3431,8 +3773,8 @@ if st.session_state.sel_code:
         # 지표 요약 (상단 메트릭 - 프리미엄 HTML 가로 스탯 바)
         ma5_val = f"{int(df_candle['MA5'].iloc[-1]):,}원" if pd.notna(df_candle['MA5'].iloc[-1]) else '-'
         ma20_val = f"{int(df_candle['MA20'].iloc[-1]):,}원" if pd.notna(df_candle['MA20'].iloc[-1]) else '-'
-        high_52 = f"{int(df_candle['High'].max()):,}원"
-        low_52 = f"{int(df_candle['Low'].min()):,}원"
+        high_90 = f"{int(df_candle['High'].max()):,}원"   # .tail(90) 이후 범위 = 최근 90일 고점
+        low_90 = f"{int(df_candle['Low'].min()):,}원"    # .tail(90) 이후 범위 = 최근 90일 저점
         
         # 등락 부호 색상
         chg_color_html = "#ff6b6b" if daily_chg >= 0 else "#4e9ff5"
@@ -3446,13 +3788,13 @@ if st.session_state.sel_code:
           </div>
           <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
           <div style="text-align: center; min-width: 120px;">
-            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">52주 최고</span><br>
-            <strong style="font-size: 1.25rem; color: #ff6b6b; font-family: 'malgun gothic', sans-serif;">{high_52}</strong>
+            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">90일 최고</span><br>
+            <strong style="font-size: 1.25rem; color: #ff6b6b; font-family: 'malgun gothic', sans-serif;">{high_90}</strong>
           </div>
           <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
           <div style="text-align: center; min-width: 120px;">
-            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">52주 최저</span><br>
-            <strong style="font-size: 1.25rem; color: #4e9ff5; font-family: 'malgun gothic', sans-serif;">{low_52}</strong>
+            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">90일 최저</span><br>
+            <strong style="font-size: 1.25rem; color: #4e9ff5; font-family: 'malgun gothic', sans-serif;">{low_90}</strong>
           </div>
           <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
           <div style="text-align: center; min-width: 120px;">
@@ -3484,29 +3826,11 @@ if st.session_state.sel_code:
             t_score_str = "평가 대상 아님 (N/A)"
             t_score_raw_str = ""
             s_score_str = "평가 대상 아님 (N/A)"
-            
+
         if True:
-            # KOSPI 20일선 기반 실시간 자산배분 판단
-            kospi_close, kospi_ma20, success = get_kospi_ma20()
-            if success:
-                if kospi_close >= kospi_ma20:
-                    market_regime = "상승/횡보 국면 (KOSPI 20일선 상회)"
-                    rec_cash = 20.0
-                    rec_stock = 80.0
-                    regime_desc = "시장 단기 추세가 견고하여 적극적인 개별 종목 매수 전략이 유효합니다."
-                    regime_color = "#2ecc71"
-                else:
-                    market_regime = "약세/보수 국면 (KOSPI 20일선 하회)"
-                    rec_cash = 70.0
-                    rec_stock = 30.0
-                    regime_desc = "시장 단기 추세가 약화되었습니다. 신규 매수를 자제하고 현금 비중을 대폭 늘려 리스크를 방어하십시오."
-                    regime_color = "#e74c3c"
-            else:
-                market_regime = "판단 유보 (지수 수집 실패)"
-                rec_cash = 30.0
-                rec_stock = 70.0
-                regime_desc = "지수 수집 실패로 기본 자산배분 비중(현금 30% / 주식 70%)을 권장합니다."
-                regime_color = "#7f8c8d"
+            # KOSPI 시장 국면 변수 재사용 (상단에서 이미 계산 완료 — 이중 API 호출 방지)
+            # market_regime, rec_cash, rec_stock, regime_desc, regime_color 이미 설정됨
+
 
             # 최근 20거래일 종가 추이 및 현재가, 손절선 추출
             recent_prices_str = ""
@@ -3666,96 +3990,59 @@ if st.session_state.sel_code:
             if code_disp in current_portfolio:
                 avg_price_for_gemini = current_portfolio[code_disp].get('entry_price')
                 
-            # ── Gemini AI 분석 세션 캐싱 및 속도 제한 방지 (에러 상태 캐싱 포함) ──
-            if 'gemini_cache' not in st.session_state:
-                st.session_state.gemini_cache = {}
+            # ── secrets.toml 또는 환경 변수에서 Gemini API Key 자동 로드 ──
+            gemini_api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
 
-            now_ts = time.time()
-            cached_val = st.session_state.gemini_cache.get(code_disp)
-            force_refresh = st.session_state.get(f"force_refresh_gemini_{code_disp}", False)
+            # ── Gemini AI 분석을 별도 fragment로 분리하여 비동기 로딩 ──
+            # 차트·수급·뉴스·등급은 즉시 표시, AI 코멘터리만 독립적으로 로딩
+            _gemini_params = {
+                'code_disp': code_disp,
+                'name_disp': name_disp,
+                't_score': t_score,
+                't_score_adj': t_score_adj,
+                's_score': s_score,
+                'daily_chg': daily_chg,
+                'market_cond': market_cond,
+                'gemini_api_key': gemini_api_key,
+                'avg_price_for_gemini': avg_price_for_gemini,
+                'recent_prices_str': recent_prices_str,
+                'current_price_for_gemini': current_price_for_gemini,
+                'stop_loss_for_gemini': stop_loss_for_gemini,
+                'recent_high_for_gemini': recent_high_for_gemini,
+                'rsi_for_gemini': rsi_for_gemini,
+                'macd_for_gemini': macd_for_gemini,
+                'macd_sig_for_gemini': macd_sig_for_gemini,
+                'bb_upper_for_gemini': bb_upper_for_gemini,
+                'bb_middle_for_gemini': bb_middle_for_gemini,
+                'bb_lower_for_gemini': bb_lower_for_gemini,
+                'supply_trend_prompt': supply_trend_prompt,
+                'recent_news_prompt': recent_news_prompt,
+                'rec_cash': rec_cash,
+                'rec_stock': rec_stock,
+                'quant_grade': quant_grade,
+                'grade_color': grade_color,
+                't_score_str': t_score_str,
+                't_score_raw_str': t_score_raw_str,
+                's_score_str': s_score_str,
+            }
 
-            use_cache = False
-            if cached_val and not force_refresh:
-                cached_comment, cached_ts, is_error = cached_val
-                # 정상적인 답변은 10분(600초) 캐싱, 에러 답변(속도제한 등)은 API 쿨다운을 위해 30초 캐싱
-                cache_duration = 30 if is_error else 600
-                if now_ts - cached_ts < cache_duration:
-                    use_cache = True
-
-            if use_cache:
-                ai_comment = cached_comment
-            else:
-                try:
-                    ai_comment = get_gemini_commentary(
-                        code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini, supply_trend_prompt, recent_news_prompt
-                    )
-                    # 정상적인 결과일 때 캐싱 (is_error = False)
-                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, False)
-                except RuntimeWarning as e:
-                    # API 호출 실패 시 에러 문구 노출 없이 로컬 퀀트 리스크 조언으로 자연스럽게 대체
-                    fallback_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
-                    ai_comment = fallback_comment
-                    # 속도 제한 등 임시 오류 시 30초 동안 쿨다운 상태 캐싱 (is_error = True)
-                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, True)
-                except Exception as e:
-                    ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
-                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, True)
-                
-                # 강제 갱신 상태 초기화
-                if force_refresh:
-                    st.session_state[f"force_refresh_gemini_{code_disp}"] = False
-            # AI 코멘트 내부의 줄바꿈을 <br>로 변환하되, Gemini가 생성한 정상적인 HTML 태그(<strong>, <ul> 등)는 보존하기 위해 escape 하지 않음
-            import re
-            ai_comment_cleaned = ai_comment
-            # 마크다운 ** 기호가 혼용된 경우 <strong> 태그로 치환 보정
-            ai_comment_cleaned = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', ai_comment_cleaned)
-            # HTML 블록/리스트 태그 근처의 불필요한 줄바꿈(\n) 제거
-            tag_patterns = [r'</ul>', r'<ul>', r'</ol>', r'<ol>', r'</li>', r'<li>', r'<br\s*/?>', r'</strong>', r'<strong>']
-            for pat in tag_patterns:
-                ai_comment_cleaned = re.sub(rf'\s*\n\s*({pat})', r'\1', ai_comment_cleaned)
-                ai_comment_cleaned = re.sub(rf'({pat})\s*\n\s*', r'\1', ai_comment_cleaned)
-            
-            ai_comment_escaped = ai_comment_cleaned.replace('\n', '<br/>')
-            # 중복된 br 태그 단일화하여 지나친 공백 방지
-            ai_comment_escaped = re.sub(r'(<br\s*/?>\s*){2,}', '<br/>', ai_comment_escaped)
-            opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
-<h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
-<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
-    <div style="display: flex; align-items: center; gap: 15px;">
-        <div>
-            <span style="font-size: 14px; color: #aaa; font-family: 'malgun gothic', sans-serif;">보정 평가 등급:</span>
-            <strong style="font-size: 18px; color: {grade_color}; margin-left: 8px; font-family: 'malgun gothic', sans-serif;">{quant_grade}</strong>
-        </div>
-        <a href="?sel_code={code_disp}&sel_name={name_disp}&refresh_gemini=1" target="_self" style="text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background-color: #1a2333; color: #38bdf8; padding: 4.5px 12px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.4); font-size: 12px; font-family: 'malgun gothic', sans-serif; cursor: pointer; transition: all 0.2s; font-weight: 500;" onmouseover="this.style.backgroundColor='rgba(56, 189, 248, 0.15)'; this.style.borderColor='rgba(56, 189, 248, 0.7)';" onmouseout="this.style.backgroundColor='#1a2333'; this.style.borderColor='rgba(56, 189, 248, 0.4)';">
-            🔄 AI 분석 다시 받기
-        </a>
-    </div>
-    <div style="text-align: right; min-width: 140px;">
-        <span style="font-size: 13px; color: #2ecc71; font-family: 'malgun gothic', sans-serif;">매수 보정 점수: <strong>{t_score_str}</strong> <span style="font-size: 11px; color: #888;">{t_score_raw_str}</span></span><br/>
-        <span style="font-size: 13px; color: #e74c3c; font-family: 'malgun gothic', sans-serif;">매도 퀀트 점수: <strong>{s_score_str}</strong></span>
-    </div>
-</div>
-
-<div style="background-color: rgba(255, 255, 255, 0.03); padding: 10px; border-radius: 6px; border-left: 4px solid #ff922b; font-size: 13px; line-height: 1.5; color: #eee; font-family: 'malgun gothic', sans-serif; margin-bottom: 12px;">
-    <strong>🤖 AI 퀀트 리스크 조언:</strong><br/>
-    {ai_comment_escaped}
-</div>
-
-{supply_table_html}
-
-<div style="background-color: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: 6px; border-left: 4px solid #9c27b0; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif;">
-    <strong style="font-size: 13px;">📰 최근 주요 뉴스 헤드라인:</strong><br/>
-    {recent_news_html}
-</div>
-</div>"""
-            import re
             stats_html_clean = re.sub(r'\s+', ' ', stats_html.replace('\n', ' ')).strip()
-            opinion_html_clean = re.sub(r'\s+', ' ', opinion_html.replace('\n', ' ')).strip()
 
             col_op, col_rd = st.columns([7, 3.5])
             with col_op:
                 st.markdown(stats_html_clean, unsafe_allow_html=True)
-                st.markdown(opinion_html_clean, unsafe_allow_html=True)
+                # 퀀트 매매 의견 헤더 + AI 코멘터리 + AI 다시받기 버튼을 통합 비동기 fragment로 렌더링
+                render_gemini_commentary(_gemini_params)
+                # 수급 테이블 즉시 표시
+                _supply_clean = re.sub(r'\s+', ' ', supply_table_html.replace('\n', ' ')).strip()
+                st.markdown(_supply_clean, unsafe_allow_html=True)
+                # 뉴스 즉시 표시
+                _news_html = f"""<div style="background-color: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: 6px; border-left: 4px solid #9c27b0; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif;">
+    <strong style="font-size: 13px;">📰 최근 주요 뉴스 헤드라인:</strong><br/>
+    {recent_news_html}
+</div>"""
+                _news_clean = re.sub(r'\s+', ' ', _news_html.replace('\n', ' ')).strip()
+                st.markdown(_news_clean, unsafe_allow_html=True)
             with col_rd:
                 # 💼 실시간 포트폴리오 관리 패널 구현
                 portfolio = load_portfolio()
@@ -3765,7 +4052,7 @@ if st.session_state.sel_code:
                 # 포트폴리오 목록 및 바로가기
                 if portfolio:
 
-                    # 포트폴리오 테이블 렌더링
+                    # 포트폴리오 테이블 렌더링 (모든 보유 종목에 대해 퀀트 등급 색상 자동 하이라이트 일괄 적용)
                     port_rows = []
                     for p_code, p_data in portfolio.items():
                         p_close = 0.0
@@ -3782,14 +4069,72 @@ if st.session_state.sel_code:
                         rt_color = "#ff6b6b" if p_return > 0 else "#4e9ff5" if p_return < 0 else "#888888"
                         rt_sign = "+" if p_return > 0 else ""
                         
-                        import urllib.parse
+                        # 현재 선택하여 분석 중인 종목인지 여부 파악
+                        is_active_selected = (str(p_code).strip().zfill(6) == str(code_disp).strip().zfill(6))
+                        
+                        if is_active_selected:
+                            # 1) 현재 화면에서 상세 분석 중인 종목은 메인 카드의 grade_color를 100% 직접 적용
+                            p_grade_color = grade_color
+                        else:
+                            # 2) 다른 보유 종목도 메인 등급 카드와 100% 동일한 등급 및 색상 판단 규칙 적용 (점수 + 기술적 신호)
+                            p_t_score_adj = 0.0
+                            p_s_score = 0.0
+                            p_buy_signal = False
+
+                            if df_q is not None and not df_q.empty:
+                                # df_q에서 종목코드 매칭 (Code 컬럼이 '005930.KS' 형태일 수 있으므로 '.' 앞 부분만 추출)
+                                _q_codes = df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                                q_m = df_q[_q_codes == str(p_code).strip().zfill(6)]
+                                if not q_m.empty:
+                                    row_q = q_m.iloc[0]
+                                    if 'Total_Score_Adj' in row_q and pd.notna(row_q['Total_Score_Adj']):
+                                        p_t_score_adj = float(row_q['Total_Score_Adj'])
+                                    elif 'Total_Score' in row_q and pd.notna(row_q['Total_Score']):
+                                        p_t_score_adj = float(row_q['Total_Score'])
+                                    if 'Sell_Score' in row_q and pd.notna(row_q['Sell_Score']):
+                                        p_s_score = float(row_q['Sell_Score'])
+
+                            # 세션 내 시그널 캐시 존재 시 진짜 당일 buy_signal 여부만 판정
+                            _p_cache = [v for k, v in st.session_state.items() if k.startswith(f"_signal_cache_{p_code}_")]
+                            if _p_cache and 'df_candle' in _p_cache[-1] and not _p_cache[-1]['df_candle'].empty:
+                                _p_cand = _p_cache[-1]['df_candle']
+                                if 'Buy_Signal' in _p_cand.columns and _p_cand['Buy_Signal'].iloc[-1]:
+                                    p_buy_signal = True
+
+                            # 메인 카드(3868~3889 라인)와 100% 완벽히 일치하는 퀀트 등급 색상 분기
+                            if p_buy_signal:
+                                p_grade_color = "#2ecc71"  # 적극 매수 (추세 돌파) - 초록
+                            elif p_t_score_adj >= 80.0:
+                                p_grade_color = "#2ecc71"  # 적극 매수 (Strong Buy) - 초록
+                            elif p_t_score_adj >= 60.0:
+                                p_grade_color = "#3498db"  # 매수 (Buy) - 파랑
+                            elif p_s_score >= 70.0:
+                                p_grade_color = "#e74c3c"  # 적극 매도 (Strong Sell) - 레드
+                            elif p_s_score >= 50.0:
+                                p_grade_color = "#e67e22"  # 매도 (Sell) - 주황
+                            else:
+                                p_grade_color = "#7f8c8d"  # 관망/중립 (Hold) - 회색/어두운 톤
+
+                        # RGBA 반투명 음영(0.22) 계산
+                        _gc = p_grade_color.lstrip('#')
+                        try:
+                            _r, _g, _b = int(_gc[0:2], 16), int(_gc[2:4], 16), int(_gc[4:6], 16)
+                            bg_rgba = f"rgba({_r}, {_g}, {_b}, 0.22)"
+                        except Exception:
+                            bg_rgba = "rgba(127, 140, 141, 0.22)"
+
+                        # 현재 선택하여 차트를 조율 중인 종목인 경우 황금색(Gold) 테두리 강조 추가
+                        border_style = "outline: 2px solid #ffd700; outline-offset: -2px;" if is_active_selected else ""
+                        row_style = f"background-color: {bg_rgba}; {border_style}"
+
                         encoded_name = urllib.parse.quote(p_data["name"])
                         port_rows.append({
                             "종목명": f"<a href='/?sel_code={p_code}&sel_name={encoded_name}' target='_self' style='color: #ffffff; text-decoration: none; cursor: pointer;' onmouseover='this.style.color=\"#00e5ff\";' onmouseout='this.style.color=\"#ffffff\";'>{p_data['name']}</a>",
                             "매수가": f"{int(p_data['entry_price']):,}",
                             "수량": f"{int(p_data['qty']):,}",
                             "수익률": f"<span style='color:{rt_color}; font-weight:bold;'>{rt_sign}{p_return:.2f}%</span>",
-                            "평가손익": f"<span style='color:{rt_color}; font-weight:bold;'>{rt_sign}{int(eval_diff):,}원</span>"
+                            "평가손익": f"<span style='color:{rt_color}; font-weight:bold;'>{rt_sign}{int(eval_diff):,}원</span>",
+                            "row_style": row_style
                         })
                     
                     # 스타일이 적용된 고급 다크 테마 HTML 테이블 생성
@@ -3828,7 +4173,7 @@ if st.session_state.sel_code:
                         border-bottom: none;
                     }}
                     .port-table tr:hover {{
-                        background-color: rgba(255, 255, 255, 0.03);
+                        background-color: rgba(255, 255, 255, 0.12);
                     }}
                     </style>
                     <div class="port-table-container">
@@ -3845,8 +4190,10 @@ if st.session_state.sel_code:
                             <tbody>
                     """
                     for row in port_rows:
+                        r_style = row['row_style']
+                        tr_attr = f"style='{r_style}'" if r_style else ""
                         table_html += f"""
-                                <tr>
+                                <tr {tr_attr}>
                                     <td style="font-weight: bold; color: #ffffff;">{row['종목명']}</td>
                                     <td>{row['매수가']}</td>
                                     <td>{row['수량']}</td>
@@ -3896,8 +4243,9 @@ if st.session_state.sel_code:
                 low=df_candle['Low'],   close=df_candle['Close'],
                 increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
                 decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
-                name='캔들', showlegend=False,
-                hovertemplate="<b>%{x}</b><br>시가: %{open:,}원<br>고가: %{high:,}원<br>저가: %{low:,}원<br>종가: %{close:,}원<extra></extra>"
+                name='일봉 캔들', showlegend=False,
+                hoverlabel=dict(bgcolor='#0d1b2a', font_size=13, font_family='malgun gothic'),
+                hovertemplate="<b>📅 일자: %{x}</b><br>🔓 <b>시가</b>: %{open:,d}원<br>🔺 <b>고가</b>: %{high:,d}원<br>🔻 <b>저가</b>: %{low:,d}원<br>🔒 <b>종가</b>: %{close:,d}원<extra></extra>"
             ), row=1, col=1)
 
             # MA5
@@ -4043,10 +4391,10 @@ if st.session_state.sel_code:
                         ), row=1, col=1)
 
             # 나의 매수 단가선 (포트폴리오 등록 시 황금색 점선으로 표시)
-            portfolio = load_portfolio()
+            portfolio_cached = portfolio if 'portfolio' in locals() and portfolio else load_portfolio()
             my_entry_price = 0
-            if code_disp in portfolio:
-                my_entry_price = portfolio[code_disp]["entry_price"]
+            if code_disp in portfolio_cached:
+                my_entry_price = portfolio_cached[code_disp]["entry_price"]
                 fig_c.add_trace(go.Scattergl(
                     x=date_str_list, y=[my_entry_price] * len(date_str_list),
                     name='나의 매수단가', mode='lines',
@@ -4101,8 +4449,8 @@ if st.session_state.sel_code:
                 font=dict(family='malgun gothic, nanum gothic, sans-serif'),
                 plot_bgcolor='#0d1b2a',
                 paper_bgcolor='#0d1b2a',
-                dragmode=False, # 돋보기/십자선(Zoom) 커서 대신 기본 화살표 커서 사용
-                hovermode='closest', # 마우스 커서 위치에 가장 가까운 데이터를 하이라이트
+                hovermode='x unified', # 마우스 커서 위치의 캔들(시가,고가,저가,종가) 툴팁 표시
+                hoverlabel=dict(bgcolor='#0f172a', font_size=12, font_family='malgun gothic'),
                 # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
                 yaxis3=dict(
                     overlaying='y',
@@ -4204,7 +4552,8 @@ if st.session_state.sel_code:
                     decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
                     name='5분봉 캔들', showlegend=False,
                     text=tick_texts_5m,
-                    hovertemplate="<b>%{text}</b><br>시가: %{open:,}원<br>고가: %{high:,}원<br>저가: %{low:,}원<br>종가: %{close:,}원<extra></extra>"
+                    hoverlabel=dict(bgcolor='#0d1b2a', font_size=13, font_family='malgun gothic'),
+                    hovertemplate="<b>⏱️ 일시: %{text}</b><br>🔓 <b>시가</b>: %{open:,d}원<br>🔺 <b>고가</b>: %{high:,d}원<br>🔻 <b>저가</b>: %{low:,d}원<br>🔒 <b>종가</b>: %{close:,d}원<extra></extra>"
                 ), row=1, col=1)
                 
                 # MA5, MA20 그리기
@@ -4279,12 +4628,72 @@ if st.session_state.sel_code:
                             hovertemplate="%{text}<extra></extra>",
                             showlegend=False
                         ), row=1, col=1)
-                        
+
+                # 📉 낙폭과대 반등 신호 그리기
+                if 'Fall_Signal' in df_5min_tail.columns:
+                    fig_5m.add_trace(go.Scattergl(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='낙폭과대 반등',
+                        marker=dict(symbol='triangle-up', size=10, color='#a29bfe'),
+                        showlegend=True
+                    ), row=1, col=1)
+
+                    fall_indices_5m = [i for i, val in enumerate(df_5min_tail['Fall_Signal']) if val]
+                    if fall_indices_5m:
+                        fall_prices_5m = df_5min_tail.loc[fall_indices_5m, 'Close'].tolist()
+                        fall_lows_5m   = df_5min_tail.loc[fall_indices_5m, 'Low'].tolist()
+                        hover_texts_5m = [
+                            f"<b>📉 낙폭과대 반등</b><br>{int(p):,}원" if p >= 100
+                            else f"<b>📉 낙폭과대 반등</b><br>{p:,.2f}"
+                            for p in fall_prices_5m
+                        ]
+                        fig_5m.add_trace(go.Scattergl(
+                            x=fall_indices_5m,
+                            y=[l * 0.997 for l in fall_lows_5m],
+                            mode='markers',
+                            name='낙폭과대 반등',
+                            marker=dict(symbol='arrow-up', size=16, color='#a29bfe'),
+                            text=hover_texts_5m,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+
+                # 🟡 추가 매수 신호 그리기
+                if 'Add_Signal' in df_5min_tail.columns:
+                    fig_5m.add_trace(go.Scattergl(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='추가 매수',
+                        marker=dict(symbol='triangle-up', size=10, color='#ffd43b'),
+                        showlegend=True
+                    ), row=1, col=1)
+
+                    add_indices_5m = [i for i, val in enumerate(df_5min_tail['Add_Signal']) if val]
+                    if add_indices_5m:
+                        add_prices_5m = df_5min_tail.loc[add_indices_5m, 'Close'].tolist()
+                        add_lows_5m   = df_5min_tail.loc[add_indices_5m, 'Low'].tolist()
+                        hover_texts_5m = [
+                            f"<b>🟡 추가 매수</b><br>{int(p):,}원" if p >= 100
+                            else f"<b>🟡 추가 매수</b><br>{p:,.2f}"
+                            for p in add_prices_5m
+                        ]
+                        fig_5m.add_trace(go.Scattergl(
+                            x=add_indices_5m,
+                            y=[l * 0.996 for l in add_lows_5m],
+                            mode='markers',
+                            name='추가 매수',
+                            marker=dict(symbol='arrow-up', size=16, color='#ffd43b'),
+                            text=hover_texts_5m,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+
                 # 나의 매수단가선 그리기
-                portfolio = load_portfolio()
+                portfolio_cached = portfolio if 'portfolio' in locals() and portfolio else load_portfolio()
                 my_entry_price = 0
-                if code_disp in portfolio:
-                    my_entry_price = portfolio[code_disp]["entry_price"]
+                if code_disp in portfolio_cached:
+                    my_entry_price = portfolio_cached[code_disp]["entry_price"]
                     fig_5m.add_trace(go.Scattergl(
                         x=tick_vals_5m, y=[my_entry_price] * len(tick_vals_5m),
                         name='나의 매수단가', mode='lines',
@@ -4335,6 +4744,8 @@ if st.session_state.sel_code:
                     font=dict(family='malgun gothic, nanum gothic, sans-serif'),
                     plot_bgcolor='#0d1b2a',
                     paper_bgcolor='#0d1b2a',
+                    hovermode='x unified',
+                    hoverlabel=dict(bgcolor='#0f172a', font_size=12, font_family='malgun gothic'),
                     # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
                     yaxis3=dict(
                         overlaying='y',
@@ -4414,8 +4825,9 @@ if st.session_state.sel_code:
                 shared_xaxes=True
             )
             if not df_1min.empty:
-                # 1분봉: 당일 전체(약 390봉) 데이터 유지하여 캔들 가시성 확보
-                df_1min_tail = df_1min.tail(400).copy().reset_index(drop=True)
+                # 1분봉: 당일 전체(약 390봉) 데이터만 유지하여 캔들 가시성 확보 및 어제 데이터 혼입 방지
+                latest_date_1m = df_1min['DateTime'].dt.date.max()
+                df_1min_tail = df_1min[df_1min['DateTime'].dt.date == latest_date_1m].copy().reset_index(drop=True)
                 
                 tick_vals_1m = list(range(len(df_1min_tail)))
                 tick_texts_1m = df_1min_tail['DateTime'].dt.strftime('%H:%M').tolist()
@@ -4435,7 +4847,8 @@ if st.session_state.sel_code:
                     decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
                     name='1분봉 캔들', showlegend=False,
                     text=tick_texts_1m,
-                    hovertemplate="<b>%{text}</b><br>시가: %{open:,}원<br>고가: %{high:,}원<br>저가: %{low:,}원<br>종가: %{close:,}원<extra></extra>"
+                    hoverlabel=dict(bgcolor='#0d1b2a', font_size=13, font_family='malgun gothic'),
+                    hovertemplate="<b>⚡ 일시: %{text}</b><br>🔓 <b>시가</b>: %{open:,d}원<br>🔺 <b>고가</b>: %{high:,d}원<br>🔻 <b>저가</b>: %{low:,d}원<br>🔒 <b>종가</b>: %{close:,d}원<extra></extra>"
                 ), row=1, col=1)
                 
                 # MA5, MA20 그리기
@@ -4512,12 +4925,72 @@ if st.session_state.sel_code:
                             hovertemplate="%{text}<extra></extra>",
                             showlegend=False
                         ), row=1, col=1)
-                        
+
+                # 📉 낙폭과대 반등 신호 그리기
+                if 'Fall_Signal' in df_1min_tail.columns:
+                    fig_1m.add_trace(go.Scattergl(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='낙폭과대 반등',
+                        marker=dict(symbol='triangle-up', size=10, color='#a29bfe'),
+                        showlegend=True
+                    ), row=1, col=1)
+
+                    fall_indices_1m = [i for i, val in enumerate(df_1min_tail['Fall_Signal']) if val]
+                    if fall_indices_1m:
+                        fall_prices_1m = df_1min_tail.loc[fall_indices_1m, 'Close'].tolist()
+                        fall_lows_1m   = df_1min_tail.loc[fall_indices_1m, 'Low'].tolist()
+                        hover_texts_1m = [
+                            f"<b>📉 낙폭과대 반등</b><br>{int(p):,}원" if p >= 100
+                            else f"<b>📉 낙폭과대 반등</b><br>{p:,.2f}"
+                            for p in fall_prices_1m
+                        ]
+                        fig_1m.add_trace(go.Scattergl(
+                            x=fall_indices_1m,
+                            y=[l * 0.997 for l in fall_lows_1m],
+                            mode='markers',
+                            name='낙폭과대 반등',
+                            marker=dict(symbol='arrow-up', size=16, color='#a29bfe'),
+                            text=hover_texts_1m,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+
+                # 🟡 추가 매수 신호 그리기
+                if 'Add_Signal' in df_1min_tail.columns:
+                    fig_1m.add_trace(go.Scattergl(
+                        x=[None], y=[None],
+                        mode='markers',
+                        name='추가 매수',
+                        marker=dict(symbol='triangle-up', size=10, color='#ffd43b'),
+                        showlegend=True
+                    ), row=1, col=1)
+
+                    add_indices_1m = [i for i, val in enumerate(df_1min_tail['Add_Signal']) if val]
+                    if add_indices_1m:
+                        add_prices_1m = df_1min_tail.loc[add_indices_1m, 'Close'].tolist()
+                        add_lows_1m   = df_1min_tail.loc[add_indices_1m, 'Low'].tolist()
+                        hover_texts_1m = [
+                            f"<b>🟡 추가 매수</b><br>{int(p):,}원" if p >= 100
+                            else f"<b>🟡 추가 매수</b><br>{p:,.2f}"
+                            for p in add_prices_1m
+                        ]
+                        fig_1m.add_trace(go.Scattergl(
+                            x=add_indices_1m,
+                            y=[l * 0.996 for l in add_lows_1m],
+                            mode='markers',
+                            name='추가 매수',
+                            marker=dict(symbol='arrow-up', size=16, color='#ffd43b'),
+                            text=hover_texts_1m,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False
+                        ), row=1, col=1)
+
                 # 나의 매수단가선 그리기
-                portfolio = load_portfolio()
+                portfolio_cached = portfolio if 'portfolio' in locals() and portfolio else load_portfolio()
                 my_entry_price = 0
-                if code_disp in portfolio:
-                    my_entry_price = portfolio[code_disp]["entry_price"]
+                if code_disp in portfolio_cached:
+                    my_entry_price = portfolio_cached[code_disp]["entry_price"]
                     fig_1m.add_trace(go.Scattergl(
                         x=tick_vals_1m, y=[my_entry_price] * len(tick_vals_1m),
                         name='나의 매수단가', mode='lines',
@@ -4568,6 +5041,8 @@ if st.session_state.sel_code:
                     font=dict(family='malgun gothic, nanum gothic, sans-serif'),
                     plot_bgcolor='#0d1b2a',
                     paper_bgcolor='#0d1b2a',
+                    hovermode='x unified',
+                    hoverlabel=dict(bgcolor='#0f172a', font_size=12, font_family='malgun gothic'),
                     # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
                     yaxis3=dict(
                         overlaying='y',
@@ -4640,6 +5115,11 @@ if st.session_state.sel_code:
 
     st.divider()
 
+# ── 개별 종목 상세 분석 섹션 렌더링 호출 ───────────────────
+code_disp = st.session_state.get('sel_code', '005930')
+df_all = st.session_state.get('df_live_all', pd.DataFrame())
+render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec)
+
 # 하단 갱신 버튼 및 60초 자동 새로고침 JS
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
@@ -4647,37 +5127,86 @@ with col2:
         st.cache_data.clear()
         st.rerun()
 
-# 60초 주기 자동 새로고침 및 스크롤 실시간 복원 연동 (HTML 컴포넌트)
+# 60초 주기 자동 새로고침 및 스크롤 실시간 복원 연동 (태블릿/모바일 크로스오리진 완벽 대응 하이브리드 버전)
 html_script = """
     <script>
     (function() {
         var parentWin = window.parent || window;
         
-        // 1. 60초 자동 새로고침
-        setTimeout(function() {
-            parentWin.postMessage({type: 'streamlit:rerun'}, '*');
-        }, 60000);
+        function getScrollContainer() {
+            try {
+                // Streamlit 메인 스크롤 컨테이너 탐색
+                var container = parentWin.document.querySelector('div[data-testid="stAppViewContainer"]');
+                if (container) return container;
+            } catch(e) {}
+            return parentWin;
+        }
+
+        var target = getScrollContainer();
+
+        // 1. 60초 자동 새로고침 (5초 스캘핑 모드 활성화 시 2중 새로고침 충돌 방지)
+        var isAutoRefresh5s = {"true" if st.session_state.get('auto_refresh_enabled', False) else "false"};
+        if (!isAutoRefresh5s) {
+            setTimeout(function() {
+                try {
+                    parentWin.postMessage({type: 'streamlit:rerun'}, '*');
+                } catch(e) {}
+            }, 60000);
+        }
         
         // 2. 실시간 스크롤 위치 기록 리스너
+        function saveScroll() {
+            try {
+                var y = (target === parentWin) ? parentWin.scrollY : target.scrollTop;
+                localStorage.setItem('st_dashboard_scroll', y);
+            } catch (scrollErr) {}
+        }
+
         try {
-            parentWin.addEventListener('scroll', function() {
-                try {
-                    localStorage.setItem('st_dashboard_scroll', parentWin.scrollY);
-                } catch (scrollErr) {}
-            });
+            if (target.addEventListener) {
+                target.addEventListener('scroll', saveScroll, { passive: true });
+            }
         } catch (e) {
-            console.error("Scroll event listener binding failed:", e);
+            // parent 접근 불가 시 iframe 내부(window) 스크롤 리스너 추가
+            try {
+                window.addEventListener('scroll', function() {
+                    try {
+                        localStorage.setItem('st_dashboard_scroll', window.scrollY);
+                    } catch(err) {}
+                }, { passive: true });
+            } catch(err) {}
         }
         
         // 3. 페이지 로드 완료 시 스크롤 위치 복원
-        try {
-            var scrollPos = localStorage.getItem('st_dashboard_scroll');
-            if (scrollPos) {
-                parentWin.scrollTo(0, parseInt(scrollPos));
+        function restoreScroll() {
+            try {
+                var scrollPos = localStorage.getItem('st_dashboard_scroll');
+                if (scrollPos) {
+                    var y = parseInt(scrollPos);
+                    if (target === parentWin) {
+                        parentWin.scrollTo(0, y);
+                    } else {
+                        target.scrollTop = y;
+                    }
+                }
+            } catch (e) {
+                try {
+                    var scrollPos = localStorage.getItem('st_dashboard_scroll');
+                    if (scrollPos) {
+                        window.scrollTo(0, parseInt(scrollPos));
+                    }
+                } catch(err) {}
             }
-        } catch (e) {
-            console.error("Scroll restore failed:", e);
         }
+
+        // 복원 타이밍을 정밀하게 잡기 위해 다양한 시점에 복원 수행
+        if (document.readyState === 'complete') {
+            restoreScroll();
+        } else {
+            window.addEventListener('load', restoreScroll);
+        }
+        setTimeout(restoreScroll, 200);
+        setTimeout(restoreScroll, 500);
     })();
     </script>
 """
