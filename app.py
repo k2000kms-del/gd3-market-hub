@@ -1,4 +1,17 @@
 # -*- coding: utf-8 -*-
+import os
+import sys
+
+# ── UTF-8 인코딩 강제 설정 (Windows 콘솔/터미널 인코딩 오류 방지) ──
+os.environ["PYTHONUTF8"] = "1"
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -10,7 +23,6 @@ import re
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-import os
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 import live_logger  # 스캘핑 신호 CSV 로거 + 텔레그램 알림 연동
@@ -42,7 +54,7 @@ def get_kospi_ma20():
     return 0.0, 0.0, False
 
 
-def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None, current_price=None, stop_loss_price=None, recent_high_price=None, rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None, supply_trend=None, recent_news=None):
+def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key, avg_price=None, recent_prices_str=None, current_price=None, stop_loss_price=None, recent_high_price=None, rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None, supply_trend=None, recent_news=None, raw_market_cond=None, vol_penalty=1.0, market_penalty=1.0):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini AI 주식 리서치 코멘터리 생성 (다중 모델 자동 폴백 지원)"""
     if not api_key:
         raise RuntimeWarning("🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요.")
@@ -66,7 +78,8 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
         f"당일 등락률: {change:+.2f}%\n"
         f"매수 퀀트 점수: {t_score_adj}점 (원점수: {t_score}점)\n"
         f"매도 퀀트 점수: {s_score}점\n"
-        f"현재 시장 판단 국면: {market_cond}\n"
+        f"현재 시장 판단 국면: {raw_market_cond or market_cond} ({market_cond})\n"
+        f"퀀트 리스크 패널티 계수: 종목변동성계수 x{vol_penalty:.2f}, 시장패널티계수 x{market_penalty:.2f}\n"
     )
     if recent_prices_str:
         prompt += f"최근 20일 종가 추이: {recent_prices_str}\n"
@@ -121,7 +134,7 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
     is_invalid_key = False
     
     for attempt_idx, model_name in enumerate(models_to_try):
-        req_timeout = 7 if attempt_idx == 0 else 5
+        req_timeout = 15 if attempt_idx == 0 else 8
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
             r = requests.post(url, json=payload, headers=headers, timeout=req_timeout)
@@ -167,97 +180,202 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
             
 
 def clean_market_condition_korean(market_cond_str):
-    """'하락위기 (1d:-9.0% 3d:-10.2% 5d:-9.2%) | ⚡ 극단변동성(σ=4.1%) | 장중충격(범위 10.7%)'와 같이 
-    복잡하고 난해한 퀀트 수치 데이터를 자연스럽고 직관적인 한국어 해설 문장으로 정제합니다.
+    """'중립 (1d:2.2% 3d:-0.4% 5d:6.6%) | ⚡극단변동성(σ=6.7%)'와 같은 
+    로컬 퀀트 수치 데이터를 직관적이고 다채로운 한국어 설명 문장으로 정제합니다.
     """
     import re
-    if not market_cond_str or market_cond_str == 'N/A' or market_cond_str == 'None':
-        return "시장 지표 데이터가 누락된 일반"
-        
-    # 특수 수치 패턴(1d, σ, 범위)이 전혀 존재하지 않는 일반적인 국면 텍스트인 경우 그대로 반환
-    if "1d" not in market_cond_str and "σ" not in market_cond_str and "범위" not in market_cond_str:
+    if not market_cond_str or market_cond_str in ['N/A', 'None']:
+        return "단기 방향성이 팽팽한 중립 국면"
+
+    parts = [p.strip() for p in market_cond_str.split('|') if p.strip()]
+    if not parts:
         return market_cond_str.strip()
-        
-    descriptions = []
+
+    main_regime_part = parts[0]
     
-    # 1. 하락위기 파싱
-    down_match = re.search(r"하락위기\s*\((.*?)\)", market_cond_str)
-    if down_match:
-        items = down_match.group(1).split()
+    # 1. 메인 시장 방향성 국면 판단
+    regime_name = '중립'
+    for r in ['하락위기', '약세', '강세', '중립']:
+        if r in main_regime_part:
+            regime_name = r
+            break
+            
+    descriptions = []
+    if regime_name == '하락위기':
+        descriptions.append("단기 하락 리스크가 가중된 하락위기")
+    elif regime_name == '약세':
+        descriptions.append("단기 조정 압력이 존재하는 약세")
+    elif regime_name == '강세':
+        descriptions.append("상승 모멘텀이 유지되는 강세")
+    else:
+        descriptions.append("단기 방향성이 팽팽한 중립")
+
+    # 2. 1d/3d/5d 수익률 추세 파싱
+    regime_match = re.search(r"\((.*?)\)", main_regime_part)
+    if regime_match:
+        items = regime_match.group(1).split()
         rates = {}
         for item in items:
-            parts = item.split(':')
-            if len(parts) == 2:
-                val_str = re.sub(r"[^\d.-]", "", parts[1])
+            p_parts = item.split(':')
+            if len(p_parts) == 2:
+                val_str = re.sub(r"[^\d.-]", "", p_parts[1])
                 try:
-                    rates[parts[0]] = abs(float(val_str))
+                    rates[p_parts[0]] = float(val_str)
                 except ValueError:
                     pass
-        if rates:
-            max_period = max(rates, key=rates.get)
-            max_val = rates[max_period]
-            period_num = re.sub(r"[^\d]", "", max_period)
-            if max_val >= 3.0:
-                descriptions.append(f"최근 {period_num}일간 최대 {max_val:.1f}% 수준의 단기 급락이 누적되고")
-            else:
-                descriptions.append(f"최근 {period_num}일간 약 {max_val:.1f}% 수준의 완만한 단기 조정이 진행되고")
-        else:
-            descriptions.append("단기 가격 조정 압력이 관찰되고")
-    else:
-        if "하락위기" in market_cond_str:
-            descriptions.append("단기 하락 리스크가 다소 잔존하고")
+        if '5d' in rates:
+            r5 = rates['5d']
+            sign_str = "+" if r5 > 0 else ""
+            descriptions[0] += f"(5일 누적 {sign_str}{r5:.1f}%)"
 
-    # 2. 극단변동성 파싱
-    vol_match = re.search(r"극단변동성\s*\(σ\s*=\s*([\d.]+)%\)", market_cond_str)
+    # 3. 변동성 레짐 파싱 (극단변동성 / 고변동성 / 주의)
+    vol_match = re.search(r"(극단변동성|고변동성|주의)\s*\(σ\s*=\s*([\d.]+)%\)", market_cond_str)
     if vol_match:
-        sig_val = float(vol_match.group(1))
-        if sig_val >= 3.0:
-            descriptions.append(f"일간 표준편차가 {sig_val:.1f}%로 치솟아 극단적인 변동성이 나타나며")
+        v_type, sig_val = vol_match.group(1), float(vol_match.group(2))
+        if v_type == '극단변동성' or sig_val >= 3.0:
+            descriptions.append(f"일간 변동성(σ={sig_val:.1f}%)이 극심한 고위험 환경")
         else:
-            descriptions.append(f"일간 변동성(표준편차 {sig_val:.1f}%)이 비교적 차분하게 관리되며")
+            descriptions.append(f"일간 변동성(σ={sig_val:.1f}%)이 동반된 환경")
     elif "극단변동성" in market_cond_str:
-        descriptions.append("일시적인 가격 변동성이 감지되며")
+        descriptions.append("극단적 변동성 충격 수반")
+    elif "고변동성" in market_cond_str:
+        descriptions.append("높은 시장 변동성 지속")
 
-    # 3. 장중충격 파싱
+    # 4. 장중 충격 파싱
     shock_match = re.search(r"장중충격\s*\(범위\s*([\d.]+)%\)", market_cond_str)
     if shock_match:
         range_val = float(shock_match.group(1))
-        if range_val >= 8.0:
-            descriptions.append(f"장중 가격 등락 범위가 {range_val:.1f}%에 달해 심한 요동을 치는")
-        else:
-            descriptions.append(f"장중 등락 범위가 {range_val:.1f}% 수준으로 제한적인 주가 흔들림을 보이는")
+        descriptions.append(f"장중 등락 폭({range_val:.1f}%)의 주가 요동 관찰")
     elif "장중충격" in market_cond_str:
-        descriptions.append("일부 장중 충격 압력이 남아있는")
-        
-    if not descriptions:
-        return market_cond_str.replace(" | ", ", ").strip()
-        
+        descriptions.append("장중 변동성 충격 관찰")
+
     return ", ".join(descriptions)
 
 
-def get_local_fallback_commentary(name, t_score_adj, s_score, market_cond):
-    """Gemini API 호출 제한 시 동작하는 퀀트 룰 기반 로컬 대체 리서치 조언"""
-    if t_score_adj >= 85.0:
-        buy_signal = "매수 보정 점수가 최상위권으로 단기 기술적 상승 추세가 강력하게 지지되고 있습니다."
-    elif t_score_adj >= 65.0:
-        buy_signal = "매수세가 하방 경직성을 확보하며 점진적으로 유입되는 긍정적 국면입니다."
-    elif t_score_adj >= 45.0:
-        buy_signal = "매수 강도가 평이한 수준이며, 추가 거래량 실린 돌파 흐름을 확인해야 합니다."
+def get_local_fallback_commentary(
+    name, t_score_adj, s_score, raw_market_cond, cleaned_market_cond,
+    vol_penalty=1.0, market_penalty=1.0, sector=None,
+    current_price=None, stop_loss_price=None, recent_high_price=None,
+    rsi=None, macd=None, macd_signal=None,
+    bb_upper=None, bb_middle=None, bb_lower=None,
+    avg_price=None, supply_trend=None, recent_news=None
+):
+    """Gemini AI 리서치 코멘터리와 동일한 리치 3단 불릿 HTML 구조의 로컬 대체 리서치 조언"""
+    def _get_josa(txt):
+        if not txt: return txt + "는"
+        code = ord(txt[-1])
+        if 0xAC00 <= code <= 0xD7A3:
+            return f"{txt}은" if (code - 0xAC00) % 28 > 0 else f"{txt}는"
+        return f"{txt}은(는)"
+
+    name_josa = _get_josa(name)
+    c_price = current_price or 0.0
+
+    # 1. 현재 상황 요약
+    summary_parts = []
+    if avg_price and avg_price > 0 and c_price > 0:
+        ret_pct = ((c_price - avg_price) / avg_price) * 100
+        summary_parts.append(f"보유 평단가({avg_price:,.0f}원) 대비 약 {ret_pct:+.1f}% 손익 구간이며")
+    elif c_price > 0:
+        summary_parts.append(f"현재가 {c_price:,.0f}원선에서 기술적 지지 및 수급 흐름을 형성 중이며")
     else:
-        buy_signal = "매수 모멘텀이 상대적으로 정체되어 있어 공격적인 진입보다는 관망이 유리합니다."
+        summary_parts.append("단기 기술적 지지 및 수급 흐름을 형성 중이며")
 
-    if s_score >= 70.0:
-        sell_signal = "다만 매도 리스크가 매우 높아 비중 조절 및 분할 차익실현 등의 리스크 관리가 긴요합니다."
-    elif s_score >= 50.0:
-        sell_signal = "매도 리스크가 다소 상존하고 있으므로 직전 지지선의 이탈 여부를 주의 깊게 관찰해야 합니다."
+    summary_parts.append("중립적 시장 국면 속에서 신중한 대응이 필요한 상황입니다.")
+    summary_txt = f"{name_josa} 최근 " + " ".join(summary_parts)
+
+    # 2. 기술적 차트 분석 (불릿 항목)
+    tech_items = []
+    if rsi is not None:
+        if rsi >= 70:
+            rsi_desc = f"현재 {rsi:.1f}로 과매수 영역에 진입하여, 단기 과열 부담으로 인한 차익실현 매물 소화가 우려됩니다."
+        elif rsi <= 30:
+            rsi_desc = f"현재 {rsi:.1f}로 과매도 영역에 위치하여, 하방 경직성을 바탕으로 한 기술적 반등 여력이 확보되고 있습니다."
+        else:
+            rsi_desc = f"현재 {rsi:.1f}로 과매수/과매도 영역이 아닌 중립 상단에 위치하여, 과열 부담 없이 추가적인 상승 여력을 확보하고 있습니다."
+        tech_items.append(f"<li><strong>RSI (14)</strong>: {rsi_desc}</li>")
     else:
-        sell_signal = "매도 압력이 현저히 낮아 현재의 견조한 추세를 안정적으로 지속할 가능성이 큽니다."
+        tech_items.append("<li><strong>RSI (14)</strong>: 중립 구간 상단에 위치하여 추가 추세 지속 여력을 타진 중입니다.</li>")
 
-    return f"{name}은(는) 현재 {market_cond} 국면 속에서 {buy_signal} {sell_signal}"
+    if macd is not None and macd_signal is not None:
+        if macd > macd_signal:
+            macd_desc = f"MACD({macd:.1f})가 Signal({macd_signal:.1f})을 상회하는 골든크로스를 형성한 후 추세 회복 흐름을 이어나가고 있어 단기 상승 모멘텀이 유지되고 있습니다."
+        else:
+            macd_desc = f"MACD({macd:.1f})가 Signal({macd_signal:.1f})을 하회하는 흐름으로, 0선 아래에서 단기 매물 소화 압력이 지속되고 있습니다."
+        tech_items.append(f"<li><strong>MACD</strong>: {macd_desc}</li>")
+    else:
+        tech_items.append("<li><strong>MACD</strong>: MACD선과 Signal선이 수렴하며 골든크로스 전환 여부를 타진 중입니다.</li>")
+
+    if bb_upper and bb_middle and bb_lower and c_price > 0:
+        bb_desc = f"현재가({c_price:,.0f}원)는 볼린저 밴드 중심선({bb_middle:,.0f}원)을 안착하고 상한선({bb_upper:,.0f}원)"
+        if recent_high_price and recent_high_price > 0:
+            bb_desc += f" 및 단기 저항선(최근 20일 고점인 {recent_high_price:,.0f}원)"
+        bb_desc += " 향해 상승 중입니다."
+        if stop_loss_price and stop_loss_price > 0:
+            bb_desc += f" 하방으로는 ATR 손절선({stop_loss_price:,.0f}원)이 단기 1차 지지선 역할을 수행하고 있습니다."
+        tech_items.append(f"<li><strong>볼린저 밴드 및 지지/저항</strong>: {bb_desc}</li>")
+    elif stop_loss_price and stop_loss_price > 0:
+        tech_items.append(f"<li><strong>볼린저 밴드 및 지지/저항</strong>: 하방으로는 ATR 손절선({stop_loss_price:,.0f}원)이 단기 1차 지지선 역할을 수행하고 있습니다.</li>")
+    else:
+        tech_items.append("<li><strong>볼린저 밴드 및 지지/저항</strong>: 주요 이평선 지지 라인 안착 여부가 단기 1차 지지선 역할을 수행하고 있습니다.</li>")
+
+    tech_html = '<ul style="margin-top: 5px; margin-bottom: 10px; padding-left: 20px;">\n  ' + '\n  '.join(tech_items) + '\n</ul>'
+
+    # 3. 매매 대응 전략 (불릿 항목)
+    strat_items = []
+    if t_score_adj >= 75.0 and s_score < 40.0:
+        dir_txt = "매수 (강력한 단기 기술적 상승 추세 유효)"
+    elif t_score_adj >= 60.0:
+        dir_txt = "매수 (분할 진입 긍정적 구간)"
+    elif s_score >= 60.0:
+        dir_txt = "비중 축소/매도 (매도 리스크 우세 구간)"
+    else:
+        dir_txt = "홀딩 (단기 기술적 반등 지속 여부 관망)"
+
+    strat_items.append(f"<li><strong>기본 방향성</strong>: {dir_txt}</li>")
+
+    # 추가 매수 전략
+    buy_strat = f"매수 퀀트 점수가 {t_score_adj:.1f}점이며 "
+    if supply_trend:
+        buy_strat += f"{supply_trend} "
+    else:
+        buy_strat += "외인/기관 동반 수급 유입 여부를 관찰해야 하며 "
+    if t_score_adj >= 60.0:
+        buy_strat += "무리한 추격 매수보다는 지지선 확인 후 눌림목 매수를 고려할 수 있습니다."
+    else:
+        buy_strat += "무리한 추격 매수나 물타기는 위험하며 확정적 수급 돌파 시점에 제한적으로 고려할 수 있습니다."
+    strat_items.append(f"<li><strong>추가 매수 전략</strong>: {buy_strat}</li>")
+
+    # 단기 목표가 (비중 축소 구간)
+    t1 = bb_upper if (bb_upper and bb_upper > c_price) else (recent_high_price if (recent_high_price and recent_high_price > c_price) else (c_price * 1.05 if c_price > 0 else 0))
+    t2 = max(t1 * 1.08, (recent_high_price or c_price) * 1.12 if c_price > 0 else 0)
+
+    if t1 > 0:
+        target_html = f"""<li><strong>단기 목표가 (비중 축소 구간)</strong>:
+    <ul style="margin-top: 3px; margin-bottom: 3px; padding-left: 20px;">
+      <li>1차 목표가: {t1:,.0f}원 (볼린저 밴드 상한선 및 20일 고점 부근으로, 맞고 떨어질 위험이 있어 일부 비중 축소 타겟)</li>
+      <li>2차 목표가: {t2:,.0f}원 (1차 저항선 강력 돌파 시 추가 기술적 반등 목표치)</li>
+    </ul>
+  </li>"""
+        strat_items.append(target_html)
+
+    # 리스크 관리선
+    sl_val = stop_loss_price or (bb_lower if bb_lower else (c_price * 0.93 if c_price > 0 else 0))
+    if sl_val > 0:
+        strat_items.append(f"<li><strong>리스크 관리선 (손절/지지선)</strong>: 볼린저 밴드 중심선 및 기술적 기준선(ATR 손절선 {sl_val:,.0f}원)을 하향 이탈할 경우, 매도 퀀트 점수({s_score:.1f}점) 리스크에 따라 전저점 방향으로 하락 채널이 열릴 수 있으므로 엄격한 대응이 필요합니다.</li>")
+
+    strat_html = '<ul style="margin-top: 5px; margin-bottom: 5px; padding-left: 20px;">\n  ' + '\n  '.join(strat_items) + '\n</ul>'
+
+    return f"""1. <strong>현재 상황 요약</strong>: {summary_txt}<br>
+2. <strong>기술적 차트 분석</strong>:
+{tech_html}
+3. <strong>매매 대응 전략</strong>:
+{strat_html}"""
 
 
 
-@st.cache_data(ttl=60)  # 60초 캐시 (너무 잦은 호출 방지)
+
+@st.cache_data(ttl=67)  # 67초 캐시 — TTL 분산으로 다른 캐시와 동시 만료 방지
 def fetch_naver_realtime_indices():
     """네이버 금융 API로 코스피/코스닥 실시간 지수 조회"""
     try:
@@ -280,7 +398,7 @@ def fetch_naver_realtime_indices():
         print(f"DEBUG: fetch_naver_realtime_indices failed: {e}")
     return {}
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=90)  # 90초 캐시 — 수급 조회는 1분 이상 여유로도 충분
 def fetch_stock_realtime_investors(code_list):
     """네이버 금융 API로 개별 종목의 실시간 외국인/기관 수급(가집계) 조회"""
     res = {}
@@ -463,6 +581,7 @@ def fetch_remote_portfolio():
             print(f"DEBUG: fetch_remote_portfolio failed: {e}")
     return None
 
+@st.cache_data(ttl=30)  # 30초 캐시 — 매 Rerun마다 GitHub API 호출 방지
 def load_portfolio():
     """클라우드(GitHub)와 로컬 my_portfolio.json을 동기화하여 로드"""
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -523,6 +642,7 @@ def save_portfolio(portfolio):
         try:
             requests.put(url, headers=headers, json=payload, timeout=5)
             fetch_remote_portfolio.clear()
+            load_portfolio.clear()  # load_portfolio 캐시도 함께 무효화
         except Exception as e:
             print(f"DEBUG: save_portfolio remote failed: {e}")
 
@@ -1026,6 +1146,23 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
             entry_idx   = 0
             entry_tp_pct = tp_pct
 
+        # ── [성능 최적화] 루프 내 반복 계산을 벡터 연산으로 사전 계산 ──
+        # ① 이동평균 거래량 (avg_vol_10): 루프 내 np.mean 슬라이스 → rolling 벡터 연산
+        _vol_arr = df['Volume'].values.astype(float)
+        _avg_vol_10_series = df['Volume'].rolling(10, min_periods=1).mean().shift(1).fillna(0).values
+
+        # ② MA20 기울기(slope) 벡터 사전 계산: i >= 25 이상인 위치에서만 유효
+        _ma20_arr      = df['MA20'].fillna(0).values
+        _ma20_prev_arr = np.roll(_ma20_arr, 5)  # 5봉 전 MA20
+        _ma20_prev_arr[:5] = 0.0
+        with np.errstate(invalid='ignore', divide='ignore'):
+            _ma20_slope_arr = np.where(
+                _ma20_prev_arr > 0,
+                (_ma20_arr - _ma20_prev_arr) / _ma20_prev_arr * 100,
+                0.0
+            )
+        _is_ma20_slope_down_arr = (_ma20_slope_arr < -0.15) & (np.arange(len(df)) >= 25)
+
         for i in range(len(df)):
             close_val = df['Close'].iloc[i]
             open_val  = df['Open'].iloc[i]
@@ -1049,25 +1186,18 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
             else:
                 local_vol_mult = vol_mult * 2.0
             
-            # 동적 볼륨 서지 판정
+            # 동적 볼륨 서지 판정 (사전 계산된 이동평균 거래량 배열 참조)
             is_vol_surge_dynamic = False
             if i >= 10:
-                avg_vol_10 = np.mean(df['Volume'].values[i-10:i])
+                avg_vol_10 = _avg_vol_10_series[i]
                 if avg_vol_10 > 0:
-                    is_vol_surge_dynamic = df['Volume'].iloc[i] >= (avg_vol_10 * local_vol_mult)
+                    is_vol_surge_dynamic = _vol_arr[i] >= (avg_vol_10 * local_vol_mult)
             
             # 오후 14:30 이후 신규 진입 제한 스위치
             is_afternoon_cutoff = time_val >= 1430
 
-            # ── [아이디어 3 적용] 중기 이평선(MA20) 기울기(Slope) 필터 ──
-            is_ma20_slope_down = False
-            if i >= 25:
-                ma20_curr = df['MA20'].iloc[i]
-                ma20_prev = df['MA20'].iloc[i-5]
-                if ma20_prev > 0:
-                    ma20_slope = (ma20_curr - ma20_prev) / ma20_prev * 100
-                    if ma20_slope < -0.15:
-                        is_ma20_slope_down = True
+            # ── [아이디어 3 적용] 중기 이평선(MA20) 기울기(Slope) 필터 (사전 계산 배열 참조)
+            is_ma20_slope_down = bool(_is_ma20_slope_down_arr[i])
 
             # 동적 볼륨 서지를 반영한 실시간 일반 매수 조건 조합 (포트폴리오 종목은 강력 돌파 시 RSI 상한 78.0으로 완화)
             cond_vwap = close_val > df['VWAP'].iloc[i]
@@ -1716,7 +1846,8 @@ if df_q is not None and not df_q.empty and 'Total_Score' in df_q.columns:
         mean_score = df_q['Total_Score'].mean()
         std_score = df_q['Total_Score'].std()
         if std_score > 0:
-            df_q['Total_Score_Adj'] = df_q['Total_Score'].apply(lambda x: round(min(100.0, max(0.0, ((x - mean_score) / std_score * 25.0) + 50.0)), 1))
+            # [성능 최적화] apply(lambda) → numpy 벡터 연산으로 교체 (수천 종목에 수십 배 빠름)
+            df_q['Total_Score_Adj'] = ((df_q['Total_Score'] - mean_score) / std_score * 25.0 + 50.0).clip(0.0, 100.0).round(1)
         else:
             df_q['Total_Score_Adj'] = df_q['Total_Score']
     except Exception as z_err:
@@ -1735,9 +1866,11 @@ try:
         }
         if 'quant_score_history' not in st.session_state:
             st.session_state.quant_score_history = []
-        # 이전 스냅샷과 현재 스냅샷이 다를 때만 추가 (중복 방지)
-        if (not st.session_state.quant_score_history or
-                st.session_state.quant_score_history[-1]['scores'] != snapshot_scores):
+        # [성능 최적화] 수천 개 dict 전체 비교 → hash 기반 O(1) 비교로 교체
+        _curr_hash = hash(frozenset(snapshot_scores.items()))
+        _prev_hash = st.session_state.get('quant_snapshot_last_hash', None)
+        if _curr_hash != _prev_hash:
+            st.session_state.quant_snapshot_last_hash = _curr_hash
             st.session_state.quant_score_history.append(snapshot_entry)
             # 최근 10개 스냅샷만 유지 (메모리 관리)
             if len(st.session_state.quant_score_history) > 10:
@@ -1798,12 +1931,44 @@ if df_intraday is not None and not df_intraday.empty and 'Market' in df_intraday
         return market_map.get(v, v)  # 매핑 없으면 원본 유지
     df_intraday['Market'] = df_intraday['Market'].apply(_norm_market)
 
+# ── [성능 최적화] ETF/스팩/파생상품 필터 사전 계산 (Panel 1·2·3·6 공유) ──
+# 매 패널마다 반복 필터링하지 않고 데이터 로드 직후 1회 계산 후 전역 변수에 저장
+def _apply_etf_filter(df):
+    """ETF/스팩/파생상품 종목을 필터링한 DataFrame 반환 (성능 최적화용 사전 계산 함수)"""
+    if df is None or df.empty:
+        return df if df is not None else pd.DataFrame()
+    df_out = df.copy()
+    name_lower = df_out['Name'].fillna('').astype(str).str.lower()
+    is_fund = name_lower.apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
+    if 'Sector' in df_out.columns:
+        sector_lower = df_out['Sector'].fillna('').astype(str).str.lower()
+        is_fund = is_fund | sector_lower.apply(lambda x: 'etf' in x or '수익증권' in x)
+    return df_out[~is_fund]
+
+# 사전 필터링된 전역 DataFrame (각 패널에서 직접 재사용)
+df_hd_filtered = _apply_etf_filter(df_hd)
+df_q_filtered  = _apply_etf_filter(df_q)
+df_m_filtered  = _apply_etf_filter(df_m) if not df_m.empty else pd.DataFrame()
+
+
 # ── 실시간 시세 반영 (FDR → GitHub CSV 폴백) ─────────────────
 if df_m is not None and not df_m.empty:
     with st.spinner("🔄 실시간 시세 및 지수 반영 중..."):
         try:
             # 1. 전체 시세 조회 (FDR 실패 시 GitHub CSV 자동 폴백)
-            df_live = fetch_live_stock_listing()
+            # [성능 최적화] 세션 스테이트에 df_live_all이 있으면 재사용 (캐시 히트 시 FDR 호출 생략)
+            _cached_live = st.session_state.get('df_live_all', pd.DataFrame())
+            _live_cache_ts = st.session_state.get('df_live_all_ts', 0)
+            _live_cache_age = time.time() - _live_cache_ts
+            
+            if not _cached_live.empty and _live_cache_age < 120:
+                # 세션 캐시 유효 (120초 이내) → FDR 호출 없이 재사용
+                df_live = _cached_live
+            else:
+                # 세션 캐시 만료 → 새로 조회 후 세션에 저장
+                df_live = fetch_live_stock_listing()
+                if not df_live.empty:
+                    st.session_state['df_live_all_ts'] = time.time()
 
             if not df_live.empty:
                 # 세션 스테이트에 전체 상장 종목 목록 백업 (검색용)
@@ -1819,6 +1984,11 @@ if df_m is not None and not df_m.empty:
                         df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
         except Exception:
             pass  # 실패해도 GitHub CSV 데이터로 자연스럽게 동작
+        
+        # [성능 최적화] 실시간 시세가 반영된 df_m으로 df_m_filtered 재계산 (최신 가격 반영)
+        if not df_m.empty:
+            df_m_filtered = _apply_etf_filter(df_m)
+
             
         # URL 쿼리 파라미터 또는 세션 상태의 sel_code를 활용해 sel_name 한글명 보정
         if 'sel_code' in st.session_state and not df_m.empty:
@@ -2707,25 +2877,16 @@ col_left, col_mid, col_right = st.columns(3)
 # ── [Panel 1] 실시간 수급 (Treemap) ─────────────────────────
 with col_mid:
     st.markdown("##### 📊 실시간 수급 (외/기/프)")
-    if not df_hd.empty and 'Total_Combined_Net' in df_hd.columns:
-        df_hd_clean = df_hd.copy()
-        
-        df_hd_clean['Name_lower'] = df_hd_clean['Name'].fillna('').astype(str).str.lower()
-        df_hd_clean['Sector_lower'] = df_hd_clean['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_hd_clean.columns else ''
-        
-        is_fund = df_hd_clean['Name_lower'].apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
-        if 'Sector' in df_hd_clean.columns:
-            is_fund = is_fund | df_hd_clean['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
-            
-        df_hd_clean = df_hd_clean[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
+    if not df_hd_filtered.empty and 'Total_Combined_Net' in df_hd_filtered.columns:
+        df_hd_clean = df_hd_filtered.copy()
         
         # 순매수/순매도 상관없이 수급 쏠림이 가장 큰(절대값 기준) TOP 10 종목 추출
         df_hd_clean['Abs_Net_Sort'] = df_hd_clean['Total_Combined_Net'].abs()
         df1 = df_hd_clean.sort_values('Abs_Net_Sort', ascending=False).head(10).copy()
         df1['Code'] = df1['Code'].astype(str).str.zfill(6)
         
-        # 실시간 외국인/기관 수급 조회
-        realtime_sup = fetch_stock_realtime_investors(df1['Code'].tolist())
+        # 실시간 외국인/기관 수급 조회 (tuple로 변환하여 캐시 키 안정화)
+        realtime_sup = fetch_stock_realtime_investors(tuple(sorted(df1['Code'].tolist())))
         
         # 실시간 시세 반영을 위해 기존 df_hd에 들어있던 시세 관련 과거 컬럼 제거
         df1 = df1.drop(columns=['ChagesRatio', 'Current_Price', 'Close', 'Price', 'Volume', 'Trade_Volume'], errors='ignore')
@@ -2842,17 +3003,8 @@ with col_mid:
     st.markdown(f"##### 🎯 Quant Buy TOP 10 ({q_sort_by})")
     fig_p2 = go.Figure()
     x_val = pd.Series(dtype=float)  # NameError 방지: df_q 비어있을 때 기본값
-    if not df_q.empty and 'Total_Score' in df_q.columns:
-        df2 = df_q.copy()
-        
-        df2['Name_lower'] = df2['Name'].fillna('').astype(str).str.lower()
-        df2['Sector_lower'] = df2['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df2.columns else ''
-        
-        is_fund = df2['Name_lower'].apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
-        if 'Sector' in df2.columns:
-            is_fund = is_fund | df2['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
-            
-        df2 = df2[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
+    if not df_q_filtered.empty and 'Total_Score' in df_q_filtered.columns:
+        df2 = df_q_filtered.copy()
         
         df2['Code'] = df2['Code'].astype(str).str.split('.').str[0].str.zfill(6)
         if not df_m.empty and 'Code' in df_m.columns:
@@ -2948,39 +3100,24 @@ with col_right:
     st.markdown("##### 🔥 거래대금 리더 (12)")
     fig_p3 = go.Figure()
     df3 = pd.DataFrame()  # NameError 방지: df_m 비어있을 때 기본값
-    if not df_m.empty and 'Amount' in df_m.columns:
-        df_m_clean3 = df_m.copy()
-        
-        df_m_clean3['Name_lower'] = df_m_clean3['Name'].fillna('').astype(str).str.lower()
-        df_m_clean3['Sector_lower'] = df_m_clean3['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_m_clean3.columns else ''
-        
-        is_fund = df_m_clean3['Name_lower'].apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
-        if 'Sector' in df_m_clean3.columns:
-            is_fund = is_fund | df_m_clean3['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
-            
-        df_m_clean3 = df_m_clean3[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
-        
-        df3 = df_m_clean3.sort_values('Amount', ascending=True).tail(12).copy()
+    if not df_m_filtered.empty and 'Amount' in df_m_filtered.columns:
+        df3 = df_m_filtered.sort_values('Amount', ascending=True).tail(12).copy()
         df3['Amount_100M'] = df3['Amount'] / 100000000
         
-        # 매수/매도 거래대금 추정 (CLV + 등락률 하이브리드 모델)
-        buy_fractions = []
-        for idx, row_i in df3.iterrows():
-            close_val = float(row_i.get('Close', 0))
-            high_val = float(row_i.get('High', 0))
-            low_val = float(row_i.get('Low', 0))
-            ratio_val = float(row_i.get('ChagesRatio', 0))
-            
-            clv = 0.0
-            if high_val > low_val:
-                clv = ((close_val - low_val) - (high_val - close_val)) / (high_val - low_val)
-            
-            # 하이브리드 가중치: CLV 30% + 등락률 20% + 기본 50%
-            buy_frac = 0.5 + 0.3 * clv + 0.2 * (ratio_val / 30.0)
-            buy_frac = max(0.1, min(0.9, buy_frac))
-            buy_fractions.append(buy_frac)
-            
-        df3['Buy_Fraction'] = buy_fractions
+        # 매수/매도 거래대금 추정 (CLV + 등락률 하이브리드 모델) ── 벡터 연산으로 최적화
+        close_v = pd.to_numeric(df3.get('Close', 0), errors='coerce').fillna(0)
+        high_v  = pd.to_numeric(df3.get('High',  0), errors='coerce').fillna(0)
+        low_v   = pd.to_numeric(df3.get('Low',   0), errors='coerce').fillna(0)
+        ratio_v = pd.to_numeric(df3.get('ChagesRatio', 0), errors='coerce').fillna(0)
+        
+        hl_range = (high_v - low_v).replace(0, np.nan)
+        clv = ((close_v - low_v) - (high_v - close_v)) / hl_range
+        clv = clv.fillna(0.0)
+        
+        # 하이브리드 가중치: CLV 30% + 등락률 20% + 기본 50%
+        buy_frac = (0.5 + 0.3 * clv + 0.2 * (ratio_v / 30.0)).clip(0.1, 0.9)
+        
+        df3['Buy_Fraction'] = buy_frac.values
         df3['Sell_Fraction'] = 1.0 - df3['Buy_Fraction']
         df3['Buy_Amount_100M'] = df3['Amount_100M'] * df3['Buy_Fraction']
         df3['Sell_Amount_100M'] = df3['Amount_100M'] * df3['Sell_Fraction']
@@ -3244,19 +3381,8 @@ with col_right:
     st.markdown("##### 🚀 상승률 리더 (12)")
     fig_p6 = go.Figure()
     df6 = pd.DataFrame()  # NameError 방지: df_m 비어있을 때 기본값
-    if not df_m.empty and 'ChagesRatio' in df_m.columns:
-        df_m_clean6 = df_m.copy()
-        
-        df_m_clean6['Name_lower'] = df_m_clean6['Name'].fillna('').astype(str).str.lower()
-        df_m_clean6['Sector_lower'] = df_m_clean6['Sector'].fillna('').astype(str).str.lower() if 'Sector' in df_m_clean6.columns else ''
-        
-        is_fund = df_m_clean6['Name_lower'].apply(lambda x: any(kw in x for kw in EXCLUDE_KEYWORDS))
-        if 'Sector' in df_m_clean6.columns:
-            is_fund = is_fund | df_m_clean6['Sector_lower'].apply(lambda x: 'etf' in str(x) or '수익증권' in str(x))
-            
-        df_m_clean6 = df_m_clean6[~is_fund].drop(columns=['Name_lower', 'Sector_lower'], errors='ignore')
-        
-        df6 = df_m_clean6.sort_values('ChagesRatio', ascending=True).tail(12).copy()
+    if not df_m_filtered.empty and 'ChagesRatio' in df_m_filtered.columns:
+        df6 = df_m_filtered.sort_values('ChagesRatio', ascending=True).tail(12).copy()
         
         fig_p6.add_trace(go.Bar(
             y=df6['Name'],
@@ -3314,17 +3440,17 @@ def render_gemini_commentary(params):
     _name = params['name_disp']
 
     # ── Gemini AI 분석 세션 캐싱 및 속도 제한 방지 ──
-    if 'gemini_cache' not in st.session_state:
-        st.session_state.gemini_cache = {}
+    if 'gemini_cache' not in st.session_state or not isinstance(st.session_state.gemini_cache, dict):
+        st.session_state['gemini_cache'] = {}
 
     now_ts = time.time()
-    cached_val = st.session_state.gemini_cache.get(_code)
+    cached_val = st.session_state['gemini_cache'].get(_code)
     force_refresh = st.session_state.get(f"force_refresh_gemini_{_code}", False)
 
     use_cache = False
     if cached_val and not force_refresh:
         cached_comment, cached_ts, is_error = cached_val
-        cache_duration = 30 if is_error else 600
+        cache_duration = 5 if is_error else 600  # 에러 폴백은 5초만 캐시하여 금방 실시간 재시도
         if now_ts - cached_ts < cache_duration:
             use_cache = True
 
@@ -3336,18 +3462,36 @@ def render_gemini_commentary(params):
         with st.spinner("🤖 Gemini AI 퀀트 리스크 조언 분석 중..."):
             try:
                 ai_comment = get_gemini_commentary(
-                    _code, _name, params['t_score'], params['t_score_adj'], params['s_score'], params['daily_chg'], params['market_cond'], params['rec_cash'], params['rec_stock'], params['gemini_api_key'], params['avg_price_for_gemini'], params['recent_prices_str'], params['current_price_for_gemini'], params['stop_loss_for_gemini'], params['recent_high_for_gemini'], params['rsi_for_gemini'], params['macd_for_gemini'], params['macd_sig_for_gemini'], params['bb_upper_for_gemini'], params['bb_middle_for_gemini'], params['bb_lower_for_gemini'], params['supply_trend_prompt'], params['recent_news_prompt']
+                    _code, _name, params['t_score'], params['t_score_adj'], params['s_score'], params['daily_chg'], params['market_cond'], params['rec_cash'], params['rec_stock'], params['gemini_api_key'], params['avg_price_for_gemini'], params['recent_prices_str'], params['current_price_for_gemini'], params['stop_loss_for_gemini'], params['recent_high_for_gemini'], params['rsi_for_gemini'], params['macd_for_gemini'], params['macd_sig_for_gemini'], params['bb_upper_for_gemini'], params['bb_middle_for_gemini'], params['bb_lower_for_gemini'], params['supply_trend_prompt'], params['recent_news_prompt'],
+                    raw_market_cond=params.get('raw_market_cond'), vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0)
                 )
-                st.session_state.gemini_cache[_code] = (ai_comment, now_ts, False)
+                st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, False)
             except RuntimeWarning as e:
-                fallback_comment = get_local_fallback_commentary(_name, params['t_score_adj'], params['s_score'], params['market_cond'])
+                fallback_comment = get_local_fallback_commentary(
+                    _name, params['t_score_adj'], params['s_score'], params.get('raw_market_cond', '중립'), params['market_cond'],
+                    vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0), sector=params.get('sector'),
+                    current_price=params.get('current_price_for_gemini'), stop_loss_price=params.get('stop_loss_for_gemini'),
+                    recent_high_price=params.get('recent_high_for_gemini'), rsi=params.get('rsi_for_gemini'),
+                    macd=params.get('macd_for_gemini'), macd_signal=params.get('macd_sig_for_gemini'),
+                    bb_upper=params.get('bb_upper_for_gemini'), bb_middle=params.get('bb_middle_for_gemini'), bb_lower=params.get('bb_lower_for_gemini'),
+                    avg_price=params.get('avg_price_for_gemini'), supply_trend=params.get('supply_trend_prompt'), recent_news=params.get('recent_news_prompt')
+                )
                 ai_comment = fallback_comment
                 is_ai_fallback = True
-                st.session_state.gemini_cache[_code] = (ai_comment, now_ts, True)
+                st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, True)
             except Exception as e:
-                ai_comment = get_local_fallback_commentary(_name, params['t_score_adj'], params['s_score'], params['market_cond'])
+                fallback_comment = get_local_fallback_commentary(
+                    _name, params['t_score_adj'], params['s_score'], params.get('raw_market_cond', '중립'), params['market_cond'],
+                    vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0), sector=params.get('sector'),
+                    current_price=params.get('current_price_for_gemini'), stop_loss_price=params.get('stop_loss_for_gemini'),
+                    recent_high_price=params.get('recent_high_for_gemini'), rsi=params.get('rsi_for_gemini'),
+                    macd=params.get('macd_for_gemini'), macd_signal=params.get('macd_sig_for_gemini'),
+                    bb_upper=params.get('bb_upper_for_gemini'), bb_middle=params.get('bb_middle_for_gemini'), bb_lower=params.get('bb_lower_for_gemini'),
+                    avg_price=params.get('avg_price_for_gemini'), supply_trend=params.get('supply_trend_prompt'), recent_news=params.get('recent_news_prompt')
+                )
+                ai_comment = fallback_comment
                 is_ai_fallback = True
-                st.session_state.gemini_cache[_code] = (ai_comment, now_ts, True)
+                st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, True)
         
         if force_refresh:
             st.session_state[f"force_refresh_gemini_{_code}"] = False
@@ -3890,6 +4034,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 
             # Gemini AI 코멘터리 요청 (자산 배분 비율 연동 및 캐싱 방지)
             raw_market_cond = q_row.iloc[0].get('Market_Condition', 'N/A') if not q_row.empty else 'N/A'
+            vol_penalty = float(q_row.iloc[0].get('Vol_Penalty', 1.0)) if not q_row.empty else 1.0
+            market_penalty = float(q_row.iloc[0].get('Market_Penalty', 1.0)) if not q_row.empty else 1.0
+            sector_name = q_row.iloc[0].get('Sector', '') if not q_row.empty else ''
             market_cond = clean_market_condition_korean(raw_market_cond)
             
             # 실시간 수급 추이 및 최근 뉴스 조회
@@ -4003,6 +4150,10 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 's_score': s_score,
                 'daily_chg': daily_chg,
                 'market_cond': market_cond,
+                'raw_market_cond': raw_market_cond,
+                'vol_penalty': vol_penalty,
+                'market_penalty': market_penalty,
+                'sector': sector_name,
                 'gemini_api_key': gemini_api_key,
                 'avg_price_for_gemini': avg_price_for_gemini,
                 'recent_prices_str': recent_prices_str,
