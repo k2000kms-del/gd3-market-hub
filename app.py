@@ -676,6 +676,14 @@ st.set_page_config(
 # 사이드바 toggle 상태는 세션 스테이트로 전달받습니다.
 if st.session_state.get('auto_refresh_enabled', False):
     st_autorefresh(interval=5000, key="data_refresh")
+else:
+    # 스캘핑 모드 OFF여도 수급 차트 세션 누적을 위해 60초마다 자동 재실행
+    # (장중일 때만 작동 → 장외 시간 불필요한 리소스 낭비 방지)
+    from datetime import timezone as _tz, timedelta as _td
+    _now_for_refresh = datetime.now(_tz(_td(hours=9)))
+    _hm_for_refresh = _now_for_refresh.hour * 100 + _now_for_refresh.minute
+    if 900 <= _hm_for_refresh <= 1530 and _now_for_refresh.weekday() < 5:
+        st_autorefresh(interval=60000, key="supply_accumulate_refresh")
 
 # Plotly 차트 마우스 커서 강제 고정 및 태블릿 좌우 뷰포트 여백 최소화
 st.markdown("""
@@ -3316,16 +3324,20 @@ with col_left:
         
         df_line['Datetime'] = pd.to_datetime(today_date_str + ' ' + df_line['Time'], format='%Y%m%d %H:%M')
         
-        # 누락된 시간(접속 안한 시간)의 왜곡된 직선 연결을 방지하기 위해 1분 단위 빈 시간 생성
+        # 수급 수치를 숫자형으로 변환
         for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net']:
             if c in df_line.columns:
                 df_line[c] = pd.to_numeric(df_line[c].astype(str).str.replace(',', ''), errors='coerce')
-        
-        # 1분 단위 정규화 및 선형 보간 (결측치 보간으로 끊김 없는 매끄러운 선 그래프 제공)
+
+        # 1분 단위로 리샘플링 후 3차 스플라인 보간 적용
+        # → 10분/30분 간격 데이터 포인트 사이를 자연스러운 곡선으로 채워 HTS 수준의 부드러운 곡선 구현
         df_line = df_line.set_index('Datetime').resample('1min').asfreq()
         num_cols = [c for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net'] if c in df_line.columns]
         if num_cols:
-            df_line[num_cols] = df_line[num_cols].interpolate(method='linear').ffill().bfill()
+            n_pts = df_line[num_cols].notna().any(axis=1).sum()
+            # 포인트 수가 4개 이상이면 cubic(3차) 보간, 미만이면 linear 보간 (cubic 최소 4포인트 필요)
+            interp_method = 'cubic' if n_pts >= 4 else 'linear'
+            df_line[num_cols] = df_line[num_cols].interpolate(method=interp_method).ffill().bfill()
         df_line = df_line.reset_index()
 
         col_cfg = [
@@ -3338,9 +3350,13 @@ with col_left:
             if col in df_line.columns:
                 fig_p5.add_trace(go.Scatter(
                     x=df_line['Datetime'], y=df_line[col],
-                    name=name, mode='lines',  # 점(마커) 제거하여 뭉개짐 방지
-                    connectgaps=True,         # 선이 끊기지 않고 매끄럽게 연결되도록 설정
-                    line=dict(color=color, width=2, shape='spline'),  # 부드러운 곡선(spline) 스타일 적용
+                    name=name, mode='lines',  # 마커 제거하여 순수 곡선만 표시
+                    connectgaps=True,         # NaN 구간도 선이 끊기지 않도록 연결
+                    line=dict(
+                        color=color, width=2.5,
+                        shape='spline',       # Plotly 렌더링 레벨 spline 곡선화
+                        smoothing=1.3         # 최대 곡선 부드러움 (0=직선, 1.3=최대 곡선)
+                    ),
                     hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
                 ))
     else:
