@@ -3324,20 +3324,40 @@ with col_left:
         
         df_line['Datetime'] = pd.to_datetime(today_date_str + ' ' + df_line['Time'], format='%Y%m%d %H:%M')
         
-        # 수급 수치를 숫자형으로 변환
+        # ── 수급 수치 숫자형 변환 ──
         for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net']:
             if c in df_line.columns:
                 df_line[c] = pd.to_numeric(df_line[c].astype(str).str.replace(',', ''), errors='coerce')
 
-        # 1분 단위로 리샘플링 후 3차 스플라인 보간 적용
-        # → 10분/30분 간격 데이터 포인트 사이를 자연스러운 곡선으로 채워 HTS 수준의 부드러운 곡선 구현
+        # ── 1분 단위 리샘플링 후 선형 보간 (scipy 불필요) ──
         df_line = df_line.set_index('Datetime').resample('1min').asfreq()
         num_cols = [c for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net'] if c in df_line.columns]
         if num_cols:
-            n_pts = df_line[num_cols].notna().any(axis=1).sum()
-            # 포인트 수가 4개 이상이면 cubic(3차) 보간, 미만이면 linear 보간 (cubic 최소 4포인트 필요)
-            interp_method = 'cubic' if n_pts >= 4 else 'linear'
-            df_line[num_cols] = df_line[num_cols].interpolate(method=interp_method).ffill().bfill()
+            df_line[num_cols] = df_line[num_cols].interpolate(method='linear').ffill().bfill()
+
+            # ── numpy 가우시안 롤링 평활화 (scipy 불필요) ──
+            # 포인트 수에 따라 윈도우 크기를 자동 조절:
+            #   데이터가 적으면 작은 윈도우(꺾임 유지), 많으면 큰 윈도우(HTS 수준 곡선)
+            n_total = len(df_line)
+            smooth_win = max(3, min(15, n_total // 8))  # 3~15분 적응형 윈도우
+            import numpy as np
+
+            def _gaussian_smooth(series, window):
+                """가우시안 가중 롤링 평균 — numpy만으로 구현 (scipy 불필요)"""
+                sigma = window / 3.0
+                x = np.arange(window) - window // 2
+                weights = np.exp(-0.5 * (x / sigma) ** 2)
+                weights /= weights.sum()
+                arr = series.values.astype(float)
+                # 엣지 처리: 양쪽 끝은 원본값 유지(pad)
+                padded = np.pad(arr, window // 2, mode='edge')
+                smoothed = np.convolve(padded, weights, mode='valid')
+                return pd.Series(smoothed[:len(arr)], index=series.index)
+
+            for col in num_cols:
+                if df_line[col].notna().sum() >= smooth_win:
+                    df_line[col] = _gaussian_smooth(df_line[col].ffill().bfill(), smooth_win)
+
         df_line = df_line.reset_index()
 
         col_cfg = [
@@ -3350,12 +3370,12 @@ with col_left:
             if col in df_line.columns:
                 fig_p5.add_trace(go.Scatter(
                     x=df_line['Datetime'], y=df_line[col],
-                    name=name, mode='lines',  # 마커 제거하여 순수 곡선만 표시
-                    connectgaps=True,         # NaN 구간도 선이 끊기지 않도록 연결
+                    name=name, mode='lines',
+                    connectgaps=True,
                     line=dict(
                         color=color, width=2.5,
-                        shape='spline',       # Plotly 렌더링 레벨 spline 곡선화
-                        smoothing=1.3         # 최대 곡선 부드러움 (0=직선, 1.3=최대 곡선)
+                        shape='spline',   # Plotly 렌더링 레벨 spline 곡선화 (이중 평활)
+                        smoothing=1.3     # 최대 곡선 부드러움
                     ),
                     hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
                 ))
