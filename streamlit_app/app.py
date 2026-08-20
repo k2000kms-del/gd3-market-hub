@@ -12,6 +12,13 @@ try:
 except Exception:
     pass
 
+# ── 모듈 검색 경로(sys.path) 자동 등록 (backend 패키지 임포트 보장) ──
+_curr_dir = os.path.dirname(os.path.abspath(__file__))
+_root_dir = os.path.dirname(_curr_dir) if os.path.basename(_curr_dir) == 'streamlit_app' else _curr_dir
+for _p in [_curr_dir, _root_dir]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -641,16 +648,30 @@ def _backup_portfolio_daily(portfolio):
     except Exception as e:
         print(f"DEBUG: Daily portfolio backup error: {e}")
 
-def load_portfolio():
+def load_portfolio(force_remote: bool = False):
     """로컬 및 클라우드 my_portfolio.json을 안전하게 로드 (세션 상태 최우선)"""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
     
-    # 1. 세션 내 최신 수정본이 있으면 최우선 반환 (GitHub API 캐시 딜레이 역전 방지)
-    if 'session_portfolio' in st.session_state and st.session_state['session_portfolio']:
+    # 1. force_remote가 아니고 세션 내 최신 수정본이 있으면 최우선 반환 (GitHub API 캐시 딜레이 역전 방지)
+    if not force_remote and 'session_portfolio' in st.session_state and st.session_state['session_portfolio']:
         return st.session_state['session_portfolio']
         
-    # 2. 로컬 파일 우선 읽기
+    # 2. force_remote 요청 시 GitHub 최신 데이터 즉시 다운로드 동기화
+    if force_remote:
+        remote_data = fetch_remote_portfolio()
+        if remote_data is not None:
+            try:
+                os.makedirs(os.path.dirname(port_path), exist_ok=True)
+                with open(port_path, 'w', encoding='utf-8') as f:
+                    json.dump(remote_data, f, ensure_ascii=False, indent=2)
+                st.session_state['session_portfolio'] = remote_data
+                _backup_portfolio_daily(remote_data)
+                return remote_data
+            except Exception:
+                pass
+
+    # 3. 로컬 파일 우선 읽기
     if os.path.exists(port_path):
         try:
             with open(port_path, 'r', encoding='utf-8') as f:
@@ -662,7 +683,7 @@ def load_portfolio():
         except Exception as e:
             print(f"DEBUG: load_portfolio local failed: {e}")
 
-    # 3. 원격 GitHub 동기화 (로컬 파일 부재 시)
+    # 4. 원격 GitHub 동기화 (로컬 파일 부재 시)
     remote_data = fetch_remote_portfolio()
     if remote_data is not None:
         try:
@@ -2161,6 +2182,7 @@ def load_data(force_remote: bool = False):
 force_sync = st.session_state.pop('force_sync', False)
 with st.spinner('📡 최신 데이터 동기화 중...'):
     data, update_times = load_data(force_remote=force_sync)
+    load_portfolio(force_remote=force_sync)
 
 df_hd       = data['df_high_density.csv']
 df_q        = data['df_quant_final.csv']
