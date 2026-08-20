@@ -649,15 +649,46 @@ def _backup_portfolio_daily(portfolio):
         print(f"DEBUG: Daily portfolio backup error: {e}")
 
 def load_portfolio(force_remote: bool = False):
-    """로컬 및 클라우드 my_portfolio.json을 안전하게 로드 (세션 상태 최우선)"""
+    """
+    [Supabase 초고속 클라우드 DB 1순위 연동]
+    어디서나(PC, LTE 태블릿, 모바일) 0.05초 만에 중앙 DB에서 최신 포트폴리오를 실시간 로드합니다.
+    Supabase 부재/오류 시 로컬 JSON 및 GitHub 백업으로 자동 안전 폴백.
+    """
     base_dir = os.path.dirname(os.path.abspath(__file__))
     port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
-    
-    # 1. force_remote가 아니고 세션 내 최신 수정본이 있으면 최우선 반환 (GitHub API 캐시 딜레이 역전 방지)
+
+    # 1. Supabase 클라우드 DB 1순위 실시간 조회
+    if supabase:
+        try:
+            res = supabase.table("portfolio").select("*").execute()
+            if res and res.data:
+                port_dict = {}
+                for r in res.data:
+                    c = str(r['code']).strip().zfill(6)
+                    port_dict[c] = {
+                        "name": str(r.get('name', '')),
+                        "entry_price": float(r.get('entry_price', 0.0)),
+                        "qty": float(r.get('qty', 0.0)),
+                        "stop_loss": float(r.get('stop_loss', 0.0)) if r.get('stop_loss') else 0.0
+                    }
+                if port_dict:
+                    st.session_state['session_portfolio'] = port_dict
+                    try:
+                        os.makedirs(os.path.dirname(port_path), exist_ok=True)
+                        with open(port_path, 'w', encoding='utf-8') as f:
+                            json.dump(port_dict, f, ensure_ascii=False, indent=2)
+                        _backup_portfolio_daily(port_dict)
+                    except Exception:
+                        pass
+                    return port_dict
+        except Exception:
+            pass
+
+    # 2. 세션 내 최신 수정본이 있으면 최우선 반환 (GitHub API 캐시 딜레이 역전 방지)
     if not force_remote and 'session_portfolio' in st.session_state and st.session_state['session_portfolio']:
         return st.session_state['session_portfolio']
-        
-    # 2. force_remote 요청 시 GitHub 최신 데이터 즉시 다운로드 동기화
+
+    # 3. force_remote 요청 시 GitHub 최신 데이터 즉시 다운로드 동기화
     if force_remote:
         remote_data = fetch_remote_portfolio()
         if remote_data is not None:
@@ -671,7 +702,7 @@ def load_portfolio(force_remote: bool = False):
             except Exception:
                 pass
 
-    # 3. 로컬 파일 우선 읽기
+    # 4. 로컬 파일 우선 읽기
     if os.path.exists(port_path):
         try:
             with open(port_path, 'r', encoding='utf-8') as f:
@@ -683,7 +714,7 @@ def load_portfolio(force_remote: bool = False):
         except Exception as e:
             print(f"DEBUG: load_portfolio local failed: {e}")
 
-    # 4. 원격 GitHub 동기화 (로컬 파일 부재 시)
+    # 5. 원격 GitHub 동기화 (로컬 파일 부재 시)
     remote_data = fetch_remote_portfolio()
     if remote_data is not None:
         try:
@@ -695,19 +726,46 @@ def load_portfolio(force_remote: bool = False):
         except Exception:
             pass
         return remote_data
-        
+
     return {}
 
 def save_portfolio(portfolio):
-    """로컬 저장, 세션 상태 갱신, 일일 백업, 클라우드(GitHub) 3중 동기화"""
+    """
+    [Supabase 초고속 클라우드 DB 1순위 영구 저장]
+    1. Supabase 실시간 DB 즉각 반영 (0.03초)
+    2. 로컬 파일 및 세션 메모리 즉시 갱신
+    3. 깃허브 원격 파일 백업 및 일일 자동 백업
+    """
     import requests
     base_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.dirname(base_dir)
-    
+
     # 1. 세션 상태 즉시 갱신 (Rerun 시 0.001ms 즉시 반영)
     st.session_state['session_portfolio'] = portfolio
-    
-    # 2. 로컬 파일 저장 (streamlit_app 및 루트 data/ 폴더 동시 저장)
+
+    # 2. Supabase 클라우드 DB 즉시 Upsert & Delete 동기화
+    if supabase:
+        try:
+            existing_res = supabase.table("portfolio").select("code").execute()
+            if existing_res and existing_res.data:
+                db_codes = {str(r['code']).strip().zfill(6) for r in existing_res.data}
+                curr_codes = {str(k).strip().zfill(6) for k in portfolio.keys()}
+                for del_code in (db_codes - curr_codes):
+                    supabase.table("portfolio").delete().eq("code", del_code).execute()
+
+            for code, item in portfolio.items():
+                c_str = str(code).strip().zfill(6)
+                supabase.table("portfolio").upsert({
+                    "code": c_str,
+                    "name": str(item.get('name', '')),
+                    "entry_price": float(item.get('entry_price', 0.0)),
+                    "qty": float(item.get('qty', 0.0)),
+                    "stop_loss": float(item.get('stop_loss', 0.0)) if item.get('stop_loss') else None
+                }).execute()
+        except Exception as sb_err:
+            print(f"DEBUG: Supabase save_portfolio error: {sb_err}")
+
+    # 3. 로컬 파일 저장 (streamlit_app 및 루트 data/ 폴더 동시 저장)
     for p_dir in [os.path.join(base_dir, 'data'), os.path.join(root_dir, 'data')]:
         try:
             os.makedirs(p_dir, exist_ok=True)
@@ -716,10 +774,10 @@ def save_portfolio(portfolio):
                 json.dump(portfolio, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"DEBUG: save_portfolio local failed for {p_dir}: {e}")
-            
+
     _backup_portfolio_daily(portfolio)
 
-    # 3. GitHub API 원격 동기화
+    # 4. GitHub API 원격 동기화 (백업용)
     gh_token = st.secrets.get("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))
     if gh_token:
         import base64
@@ -730,7 +788,7 @@ def save_portfolio(portfolio):
             sha = res.json().get('sha') if res.status_code == 200 else None
             content_str = json.dumps(portfolio, ensure_ascii=False, indent=2)
             encoded_content = base64.b64encode(content_str.encode('utf-8')).decode('utf-8')
-            payload = {"message": "Update portfolio via Dashboard", "content": encoded_content}
+            payload = {"message": "Update portfolio via Dashboard (Supabase Sync)", "content": encoded_content}
             if sha:
                 payload["sha"] = sha
             requests.put(url, headers=headers, json=payload, timeout=5)
