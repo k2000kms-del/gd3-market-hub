@@ -887,12 +887,12 @@ EXCLUDE_KEYWORDS = [
 
 
 def _relative_time(dt_str: str) -> str:
-    """'2026-07-11 10:30:00' 형식의 시간 문자열을 '7분 전' 형식으로 변환"""
+    """'2026-07-11 10:30:00' 형식의 KST 시간 문자열을 '방금 전 / N분 전' 형식으로 변환"""
     try:
         from datetime import datetime, timezone, timedelta
         _KST = timezone(timedelta(hours=9))
-        dt = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
-        now = datetime.now(_KST).replace(tzinfo=None)
+        dt = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=_KST)
+        now = datetime.now(_KST)
         diff = int((now - dt).total_seconds())
         if diff < 60:
             return '방금 전'
@@ -2207,7 +2207,9 @@ def load_data(force_remote: bool = False):
                 try:
                     df = pd.read_csv(local_path, encoding=enc)
                     mtime_ts = os.path.getmtime(local_path)
-                    final_mtime_str = datetime.fromtimestamp(mtime_ts).strftime('%Y-%m-%d %H:%M:%S')
+                    _KST = timezone(timedelta(hours=9))
+                    dt_kst = datetime.fromtimestamp(mtime_ts, tz=_KST)
+                    final_mtime_str = dt_kst.strftime('%Y-%m-%d %H:%M:%S')
                     return fname, df, final_mtime_str
                 except Exception:
                     continue
