@@ -2712,15 +2712,24 @@ code_to_name_map = {}
 default_idx = 0
 
 st.sidebar.markdown('### ⚡ 실시간 스캘핑 모드')
-auto_refresh = st.sidebar.toggle(
-    '5초마다 실시간 차트 갱신',
-    key='auto_refresh_enabled',
-    help="차트와 시그널을 자동으로 5초마다 새로고침합니다."
-)
-if auto_refresh:
-    st.sidebar.markdown("<div style='background:rgba(46,204,113,0.15); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-top:-6px; text-align:center;'>🟢 5초 실시간 자동 갱신 동작 중</div>", unsafe_allow_html=True)
+
+is_auto_on = st.session_state.get('auto_refresh_enabled', False)
+if is_auto_on:
+    btn_label = "🟢 5초 실시간 갱신 [ON] (탭하여 끄기)"
+    btn_type = "primary"
 else:
-    st.sidebar.markdown("<div style='background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:6px 10px; font-size:12px; color:#888888; margin-top:-6px; text-align:center;'>⚪ 5초 자동 갱신 꺼짐</div>", unsafe_allow_html=True)
+    btn_label = "⚪ 5초 실시간 갱신 [OFF] (탭하여 켜기)"
+    btn_type = "secondary"
+
+if st.sidebar.button(btn_label, type=btn_type, width='stretch', key='btn_auto_refresh_toggle'):
+    st.session_state['auto_refresh_enabled'] = not is_auto_on
+    st.rerun()
+
+if is_auto_on:
+    st.sidebar.markdown("<div style='background:rgba(46,204,113,0.15); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-top:-6px; text-align:center;'>🟢 5초 실시간 갱신 동작 중</div>", unsafe_allow_html=True)
+else:
+    st.sidebar.markdown("<div style='background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:6px 10px; font-size:12px; color:#888888; margin-top:-6px; text-align:center;'>⚪ 5초 자동 갱신 꺼짐 (버튼 탭 시 가동)</div>", unsafe_allow_html=True)
+
 st.sidebar.markdown('---')
 st.sidebar.markdown('### 🔍 종목 검색')
 st.sidebar.caption('종목명 또는 코드로 검색하면 대시보드 아래에 일봉 차트가 표시됩니다.')
