@@ -641,12 +641,28 @@ def _backup_portfolio_daily(portfolio):
     except Exception as e:
         print(f"DEBUG: Daily portfolio backup error: {e}")
 
-@st.cache_data(ttl=30)  # 30초 캐시 — 매 Rerun마다 GitHub API 호출 방지
 def load_portfolio():
-    """클라우드(GitHub)와 로컬 my_portfolio.json을 동기화하여 로드"""
+    """로컬 및 클라우드 my_portfolio.json을 안전하게 로드 (세션 상태 최우선)"""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
     
+    # 1. 세션 내 최신 수정본이 있으면 최우선 반환 (GitHub API 캐시 딜레이 역전 방지)
+    if 'session_portfolio' in st.session_state and st.session_state['session_portfolio']:
+        return st.session_state['session_portfolio']
+        
+    # 2. 로컬 파일 우선 읽기
+    if os.path.exists(port_path):
+        try:
+            with open(port_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data:
+                    st.session_state['session_portfolio'] = data
+                    _backup_portfolio_daily(data)
+                    return data
+        except Exception as e:
+            print(f"DEBUG: load_portfolio local failed: {e}")
+
+    # 3. 원격 GitHub 동기화 (로컬 파일 부재 시)
     remote_data = fetch_remote_portfolio()
     if remote_data is not None:
         try:
@@ -654,59 +670,50 @@ def load_portfolio():
             with open(port_path, 'w', encoding='utf-8') as f:
                 json.dump(remote_data, f, ensure_ascii=False, indent=2)
             _backup_portfolio_daily(remote_data)
+            st.session_state['session_portfolio'] = remote_data
         except Exception:
             pass
         return remote_data
         
-    if os.path.exists(port_path):
-        try:
-            with open(port_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                _backup_portfolio_daily(data)
-                return data
-        except Exception as e:
-            print(f"DEBUG: load_portfolio fallback failed: {e}")
     return {}
 
 def save_portfolio(portfolio):
-    """로컬 저장 및 클라우드(GitHub) 동기화 저장 + 일일 자동 백업"""
+    """로컬 저장, 세션 상태 갱신, 일일 백업, 클라우드(GitHub) 3중 동기화"""
     import requests
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    port_dir = os.path.join(base_dir, 'data')
-    os.makedirs(port_dir, exist_ok=True)
-    port_path = os.path.join(port_dir, 'my_portfolio.json')
-    try:
-        with open(port_path, 'w', encoding='utf-8') as f:
-            json.dump(portfolio, f, ensure_ascii=False, indent=2)
-        _backup_portfolio_daily(portfolio)
-    except Exception as e:
-        print(f"DEBUG: save_portfolio local failed: {e}")
+    root_dir = os.path.dirname(base_dir)
+    
+    # 1. 세션 상태 즉시 갱신 (Rerun 시 0.001ms 즉시 반영)
+    st.session_state['session_portfolio'] = portfolio
+    
+    # 2. 로컬 파일 저장 (streamlit_app 및 루트 data/ 폴더 동시 저장)
+    for p_dir in [os.path.join(base_dir, 'data'), os.path.join(root_dir, 'data')]:
+        try:
+            os.makedirs(p_dir, exist_ok=True)
+            p_path = os.path.join(p_dir, 'my_portfolio.json')
+            with open(p_path, 'w', encoding='utf-8') as f:
+                json.dump(portfolio, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"DEBUG: save_portfolio local failed for {p_dir}: {e}")
+            
+    _backup_portfolio_daily(portfolio)
 
+    # 3. GitHub API 원격 동기화
     gh_token = st.secrets.get("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))
     if gh_token:
         import base64
         url = "https://api.github.com/repos/k2000kms-del/gd3-market-hub/contents/data/my_portfolio.json"
         headers = {"Authorization": f"token {gh_token}", "Accept": "application/vnd.github.v3+json"}
-        sha = None
         try:
-            res = requests.get(url, headers=headers, timeout=5)
-            if res.status_code == 200:
-                sha = res.json().get('sha')
-        except Exception:
-            pass
-            
-        content_str = json.dumps(portfolio, ensure_ascii=False, indent=2)
-        encoded_content = base64.b64encode(content_str.encode('utf-8')).decode('utf-8')
-        payload = {
-            "message": "Update portfolio via Dashboard",
-            "content": encoded_content
-        }
-        if sha:
-            payload["sha"] = sha
-        try:
+            res = requests.get(url, headers=headers, timeout=3)
+            sha = res.json().get('sha') if res.status_code == 200 else None
+            content_str = json.dumps(portfolio, ensure_ascii=False, indent=2)
+            encoded_content = base64.b64encode(content_str.encode('utf-8')).decode('utf-8')
+            payload = {"message": "Update portfolio via Dashboard", "content": encoded_content}
+            if sha:
+                payload["sha"] = sha
             requests.put(url, headers=headers, json=payload, timeout=5)
             fetch_remote_portfolio.clear()
-            load_portfolio.clear()  # load_portfolio 캐시도 함께 무효화
         except Exception as e:
             print(f"DEBUG: save_portfolio remote failed: {e}")
 
@@ -2677,66 +2684,93 @@ if _search_q:
 portfolio_sidebar_container = st.sidebar.container()
 
 # ── 💼 실전 포트폴리오 관리 사이드바 UI (즉시 렌더링) ──
-_port_code_disp = st.session_state.get('sel_code', '005930')
-_port_name_disp = st.session_state.get('sel_name', '삼성전자')
-_port_last_close = 0.0
-if 'df_m' in globals() and not df_m.empty:
-    _match = df_m[df_m['Code'] == _port_code_disp]
-    if not _match.empty:
-        _port_last_close = float(_match.iloc[0]['Close'])
-
 portfolio = load_portfolio()
 
 portfolio_sidebar_container.markdown('---')
 portfolio_sidebar_container.markdown('### 💼 실전 포트폴리오 관리')
 
-# 현재 조회 중인 종목 보유 여부
-is_held = _port_code_disp in portfolio
-held_info = portfolio.get(_port_code_disp, {"entry_price": 0.0, "qty": 0.0})
+# 1. 관리할 종목 선택 드롭다운 (현재 분석 종목 및 보유 종목 즉시 선택)
+_active_sel_code = st.session_state.get('sel_code', '005930')
+_active_sel_name = st.session_state.get('sel_name', '삼성전자')
 
-# 평단가 및 수량 입력란 (streamlit input 사용)
+_port_options = [f"🎯 현재 분석: {_active_sel_name} ({_active_sel_code})"]
+for p_c, p_i in portfolio.items():
+    opt_str = f"💼 {p_i['name']} ({p_c})"
+    if opt_str not in _port_options and p_c != _active_sel_code:
+        _port_options.append(opt_str)
+
+selected_port_target = portfolio_sidebar_container.selectbox(
+    "관리할 종목 선택",
+    options=_port_options,
+    index=0,
+    key="sb_port_target_selector"
+)
+
+# 종목 코드 및 이름 파싱
+if "(" in selected_port_target and ")" in selected_port_target:
+    _target_code = selected_port_target.split("(")[-1].replace(")", "").strip()
+    if "🎯 현재 분석: " in selected_port_target:
+        _target_name = selected_port_target.replace("🎯 현재 분석: ", "").split("(")[0].strip()
+    elif "💼 " in selected_port_target:
+        _target_name = selected_port_target.replace("💼 ", "").split("(")[0].strip()
+    else:
+        _target_name = _target_code
+else:
+    _target_code = _active_sel_code
+    _target_name = _active_sel_name
+
+_target_last_close = 0.0
+if 'df_m' in globals() and not df_m.empty and 'Code' in df_m.columns:
+    _m_match = df_m[df_m['Code'] == _target_code]
+    if not _m_match.empty:
+        _target_last_close = float(_m_match.iloc[0]['Close'])
+
+is_held = _target_code in portfolio
+held_info = portfolio.get(_target_code, {"entry_price": _target_last_close, "qty": 0.0})
+
+# 평단가 및 수량 입력란
 col_p1, col_p2 = portfolio_sidebar_container.columns(2)
 with col_p1:
     input_price = portfolio_sidebar_container.number_input(
         "매수 평단가 (원)", 
         min_value=0.0, 
-        value=float(held_info["entry_price"]) if is_held else float(_port_last_close), 
+        value=float(held_info.get("entry_price", _target_last_close)), 
         step=100.0,
-        key=f"port_input_price_{_port_code_disp}"
+        key=f"port_input_price_{_target_code}"
     )
 with col_p2:
     input_qty = portfolio_sidebar_container.number_input(
         "보유 수량 (주)", 
         min_value=0.0, 
-        value=float(held_info["qty"]) if is_held else 0.0, 
+        value=float(held_info.get("qty", 0.0)), 
         step=1.0,
-        key=f"port_input_qty_{_port_code_disp}"
+        key=f"port_input_qty_{_target_code}"
     )
 
 # 등록/수정/삭제 버튼
 col_btn1, col_btn2 = portfolio_sidebar_container.columns(2)
 with col_btn1:
-    if portfolio_sidebar_container.button("➕ 등록/수정", width='stretch', key="btn_port_save"):
+    if portfolio_sidebar_container.button("➕ 등록/수정", width='stretch', key=f"btn_port_save_{_target_code}"):
         if input_price > 0 and input_qty > 0:
-            portfolio[_port_code_disp] = {
-                "name": _port_name_disp,
+            portfolio[_target_code] = {
+                "name": _target_name,
                 "entry_price": input_price,
                 "qty": input_qty
             }
             save_portfolio(portfolio)
-            st.toast(f"💼 {_port_name_disp} 포트폴리오 저장 완료!", icon="✅")
+            st.toast(f"💼 {_target_name} ({input_qty:.0f}주) 저장 완료!", icon="✅")
             st.rerun()
         else:
             portfolio_sidebar_container.warning("가격과 수량을 입력해주세요.")
 with col_btn2:
     if is_held:
-        if portfolio_sidebar_container.button("🗑️ 삭제", width='stretch', key="btn_port_del"):
-            del portfolio[_port_code_disp]
+        if portfolio_sidebar_container.button("🗑️ 삭제", width='stretch', key=f"btn_port_del_{_target_code}"):
+            del portfolio[_target_code]
             save_portfolio(portfolio)
-            st.toast(f"🗑️ {_port_name_disp} 포트폴리오 삭제 완료", icon="ℹ️")
+            st.toast(f"🗑️ {_target_name} 포트폴리오 삭제 완료", icon="ℹ️")
             st.rerun()
     else:
-        portfolio_sidebar_container.button("🗑️ 삭제", width='stretch', disabled=True, key="btn_port_del_dis")
+        portfolio_sidebar_container.button("🗑️ 삭제", width='stretch', disabled=True, key=f"btn_port_del_dis_{_target_code}")
 
 
 
