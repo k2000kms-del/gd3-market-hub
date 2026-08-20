@@ -4435,45 +4435,6 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 _news_clean = re.sub(r'\s+', ' ', _news_html.replace('\n', ' ')).strip()
                 st.markdown(_news_clean, unsafe_allow_html=True)
 
-                # 뉴스 아래 공백 위치: ⚡ 볼린저 밴드(20,2) 시장 에너지 진단 카드 연동 (Streamlit UI)
-                try:
-                    from backend.services import get_bollinger_market_energy
-                    b_data = get_bollinger_market_energy()
-                    if b_data and b_data.get('status') == 'OK':
-                        b_status = b_data.get('energy_status', '-')
-                        b_color  = b_data.get('status_color', '#e74c3c')
-                        b_ma5    = b_data.get('ma5', 0)
-                        b_slope  = b_data.get('slope', 0)
-                        b_cash   = b_data.get('cash_ratio', '-')
-                        b_desc   = b_data.get('description', '')
-                        b_bt     = b_data.get('backtest', {})
-
-                        b_html = f"""<div style="background: linear-gradient(135deg, rgba(30,34,45,0.95), rgba(15,18,25,0.98)); padding: 14px; border-radius: 8px; border: 1px solid #00f2fe; margin-top: 12px; font-family: 'malgun gothic', sans-serif;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span style="font-size:14px; font-weight:bold; color:#00f2fe;">⚡ 시장 에너지 진단 (볼린저 밴드 20,2 상단 돌파)</span>
-        <span style="font-size:11px; color:#aaa;">KOSPI200 + KOSDAQ150 (350개 표본)</span>
-    </div>
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-        <div>
-            <div style="font-size:11px; color:#888;">현재 시장 에너지 상태</div>
-            <div style="font-size:18px; font-weight:bold; color:{b_color};">{b_status}</div>
-            <div style="font-size:11px; color:#aaa; margin-top:3px;">{b_desc}</div>
-        </div>
-        <div style="text-align:right;">
-            <div style="font-size:11px; color:#888;">5일 평균 돌파 종목 수</div>
-            <div style="font-size:17px; font-weight:bold; color:#fff;">{b_ma5}개 <span style="font-size:12px; color:{'#2ecc71' if b_slope > 0 else '#e74c3c'};">({'+' if b_slope>0 else ''}{b_slope})</span></div>
-            <div style="font-size:11px; color:#f39c12; margin-top:2px;">권장 현금 비중: <b>{b_cash}</b></div>
-        </div>
-    </div>
-    <div style="margin-top:10px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.1); font-size:11px; color:#aaa; display:flex; gap:12px;">
-        <span>📊 백테스트(5일후):</span>
-        <span>강세 승률 <b style="color:#2ecc71;">{b_bt.get('strong_win_rate','72.4%')}</b></span>
-        <span>위험 승률 <b style="color:#e74c3c;">{b_bt.get('risk_win_rate','34.8%')}</b></span>
-    </div>
-</div>"""
-                        st.markdown(re.sub(r'\s+', ' ', b_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
-                except Exception as _b_err:
-                    pass
             with col_rd:
                 # 💼 실시간 포트폴리오 관리 패널 구현
                 portfolio = load_portfolio()
@@ -4654,6 +4615,46 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     st.html(table_html)
                 else:
                     st.info("등록된 포트폴리오 종목이 없습니다.")
+
+                # ⚡ 볼린저 밴드(20,2) 시장 에너지 진단 카드 연동 (포트폴리오 종목 하단 배치)
+                try:
+                    from backend.services import get_bollinger_market_energy
+                    b_data = get_bollinger_market_energy()
+                    if b_data and b_data.get('status') == 'OK':
+                        b_status = b_data.get('energy_status', '-')
+                        b_color  = b_data.get('status_color', '#e74c3c')
+                        b_ma5    = b_data.get('ma5', 0)
+                        b_slope  = b_data.get('slope', 0)
+                        b_cash   = b_data.get('cash_ratio', '-')
+                        b_desc   = b_data.get('description', '')
+                        b_bt     = b_data.get('backtest', {})
+
+                        b_html = f"""<div style="background: linear-gradient(135deg, rgba(30,34,45,0.95), rgba(15,18,25,0.98)); padding: 12px 14px; border-radius: 8px; border: 1px solid #00f2fe; margin-top: 10px; font-family: 'malgun gothic', sans-serif;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <span style="font-size:13px; font-weight:bold; color:#00f2fe;">⚡ 시장 에너지 진단 (볼린저 밴드 20,2)</span>
+        <span style="font-size:10px; color:#aaa;">표본 350개</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div>
+            <div style="font-size:10px; color:#888;">현재 시장 에너지 상태</div>
+            <div style="font-size:16px; font-weight:bold; color:{b_color};">{b_status}</div>
+            <div style="font-size:10px; color:#aaa; margin-top:2px;">{b_desc}</div>
+        </div>
+        <div style="text-align:right;">
+            <div style="font-size:10px; color:#888;">5일 평균 돌파 종목 수</div>
+            <div style="font-size:15px; font-weight:bold; color:#fff;">{b_ma5}개 <span style="font-size:11px; color:{'#2ecc71' if b_slope > 0 else '#e74c3c'};">({'+' if b_slope>0 else ''}{b_slope})</span></div>
+            <div style="font-size:10px; color:#f39c12; margin-top:2px;">권장 현금 비중: <b>{b_cash}</b></div>
+        </div>
+    </div>
+    <div style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.1); font-size:10px; color:#aaa; display:flex; justify-content:space-between;">
+        <span>📊 백테스트(5일후):</span>
+        <span>강세 승률 <b style="color:#2ecc71;">{b_bt.get('strong_win_rate','72.4%')}</b></span>
+        <span>위험 승률 <b style="color:#e74c3c;">{b_bt.get('risk_win_rate','34.8%')}</b></span>
+    </div>
+</div>"""
+                        st.markdown(re.sub(r'\s+', ' ', b_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
+                except Exception as _b_err:
+                    pass
                 
 
                 
