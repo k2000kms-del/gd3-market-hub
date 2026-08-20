@@ -745,13 +745,8 @@ st.set_page_config(
 # ── ⚡ 스마트 실시간 스캘핑 모드 최적화 ──
 # st_autorefresh()는 Streamlit 렌더링 파이프라인 최상단에 위치해야 합니다.
 if st.session_state.get('auto_refresh_enabled', False):
-    from datetime import timezone as _tz, timedelta as _td
-    _now_kst = datetime.now(_tz(_td(hours=9)))
-    _is_market_open = (900 <= (_now_kst.hour * 100 + _now_kst.minute) <= 1535) and (_now_kst.weekday() < 5)
-    
-    # 장중에는 5초마다 갱신, 장외(밤/주말)에는 시세 변동이 없으므로 30초로 완화하여 버벅임 완전 제거
-    _interval_ms = 5000 if _is_market_open else 30000
-    st_autorefresh(interval=_interval_ms, key="data_refresh")
+    # 사용자가 5초 갱신을 켜면 언제나 5초(5000ms)마다 즉시 갱신
+    st_autorefresh(interval=5000, key="data_refresh_5s")
 else:
     # 스캘핑 모드 OFF여도 수급 차트 세션 누적을 위해 60초마다 자동 재실행
     from datetime import timezone as _tz, timedelta as _td
@@ -2640,8 +2635,12 @@ st.sidebar.markdown('### ⚡ 실시간 스캘핑 모드')
 auto_refresh = st.sidebar.toggle(
     '5초마다 실시간 차트 갱신',
     key='auto_refresh_enabled',
-    help="차트와 시그널을 자동으로 새로고침합니다."
+    help="차트와 시그널을 자동으로 5초마다 새로고침합니다."
 )
+if auto_refresh:
+    st.sidebar.markdown("<div style='background:rgba(46,204,113,0.15); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-top:-6px; text-align:center;'>🟢 5초 실시간 자동 갱신 동작 중</div>", unsafe_allow_html=True)
+else:
+    st.sidebar.markdown("<div style='background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:6px 10px; font-size:12px; color:#888888; margin-top:-6px; text-align:center;'>⚪ 5초 자동 갱신 꺼짐</div>", unsafe_allow_html=True)
 st.sidebar.markdown('---')
 st.sidebar.markdown('### 🔍 종목 검색')
 st.sidebar.caption('종목명 또는 코드로 검색하면 대시보드 아래에 일봉 차트가 표시됩니다.')
@@ -3040,7 +3039,8 @@ title_col_left, title_col_right = st.columns([7, 5])
 with title_col_left:
     rel_t = _relative_time(quant_time)
     rel_t_str = f" ({rel_t})" if rel_t else ""
-    st.markdown(f"### 📊 실시간 시장 종합 대시보드 <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time}{rel_t_str})</span>", unsafe_allow_html=True)
+    refresh_badge = " <span style='background:rgba(46,204,113,0.2); color:#2ecc71; border:1px solid #2ecc71; font-size:11px; font-weight:bold; padding:2px 8px; border-radius:10px;'>⚡ 5초 실시간 갱신 중</span>" if st.session_state.get('auto_refresh_enabled', False) else ""
+    st.markdown(f"### 📊 실시간 시장 종합 대시보드{refresh_badge} <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time}{rel_t_str})</span>", unsafe_allow_html=True)
     st.caption("💡 왼쪽 사이드바의 '종목 검색'을 통해 종목을 선택하시면, 하단 일봉 차트가 실시간으로 비동기 갱신됩니다.")
 
 with title_col_right:
