@@ -1,3 +1,22 @@
+def safe_num(v):
+    if v is None:
+        return 0.0
+    try:
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).replace(',', '').replace('+', '').strip()
+        return float(s) if s else 0.0
+    except:
+        return 0.0
+
+def get_sup_val(d, *keys):
+    if not isinstance(d, dict):
+        return 0.0
+    for k in keys:
+        if k in d and d[k] is not None:
+            return safe_num(d[k])
+    return 0.0
+
 import FinanceDataReader as fdr
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -74,10 +93,10 @@ def get_supabase():
 
 # ── 수량 및 화폐 포맷 헬퍼 ───────────────────────────────────────
 def fmt_shares_korean(shares):
-    if shares is None or pd.isna(shares):
-        return "-"
+    s = safe_num(shares)
+    if s == 0:
+        return "0주"
     try:
-        s = float(shares)
         if abs(s) >= 10000:
             return f"{s / 10000:+,.1f}만 주"
         return f"{s:+,.0f}주"
@@ -85,10 +104,10 @@ def fmt_shares_korean(shares):
         return str(shares)
 
 def fmt_shares_html(shares):
-    if shares is None or pd.isna(shares):
-        return '<span style="color:#888;">-</span>'
+    s = safe_num(shares)
+    if s == 0:
+        return '<span style="color:#888;">0</span>'
     try:
-        s = float(shares)
         txt = fmt_shares_korean(s)
         if s > 0:
             return f'<span style="color:#ff6b6b; font-weight:600;">{txt}</span>'
@@ -97,6 +116,7 @@ def fmt_shares_html(shares):
         return f'<span style="color:#888;">{txt}</span>'
     except:
         return str(shares)
+
 
 def clean_market_condition_korean(raw_cond_str: str) -> str:
     """시장 판단 문자열을 한글 표준 국면명으로 정제"""
@@ -4032,32 +4052,31 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     return f"{sign}{shares/10000:.1f}만 주"
                 return f"{sign}{shares:,}주"
             
-            if supply_trend_data.get('success'):
-                cum = supply_trend_data['cumulative']
-                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(cum.get('foreigner', 0))}, 기관: {fmt_shares_korean(cum.get('organ', 0))}, 개인: {fmt_shares_korean(cum.get('individual', 0))}"
+            if isinstance(supply_trend_data, dict) and supply_trend_data.get('success'):
+                cum = supply_trend_data.get('cumulative', {})
+                f_cum = get_sup_val(cum, 'foreigner', 'foreign', '외국인', 'Foreigner')
+                o_cum = get_sup_val(cum, 'organ', 'institutional', '기관', 'Institutional')
+                i_cum = get_sup_val(cum, 'individual', '개인', 'Individual')
+                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(f_cum)}, 기관: {fmt_shares_korean(o_cum)}, 개인: {fmt_shares_korean(i_cum)}"
                 
                 daily_details = []
-                for d in supply_trend_data['daily']:
-                    daily_details.append(f"{d.get('date', '')}(외인:{fmt_shares_korean(d.get('foreigner', 0))}, 기관:{fmt_shares_korean(d.get('organ', 0))})")
-                supply_trend_prompt += " | 일별 추이: " + ", ".join(daily_details)
-                
-                # HTML 표 포맷팅
-                def fmt_shares_html(shares):
-                    sign = "+" if shares > 0 else ""
-                    val_str = f"{shares/10000:.1f}만" if abs(shares) >= 10000 else f"{shares:,}"
-                    color = "#ff6b6b" if shares > 0 else "#4e9ff5" if shares < 0 else "#888888"
-                    return f"<span style='color: {color}; font-weight: bold;'>{sign}{val_str}</span>"
-                
                 daily_rows = ""
-                for d in supply_trend_data['daily']:
-                    daily_rows += f"""
-                    <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
-                        <td style='padding: 5px; text-align: left; color: #aaa;'>{d.get('date', '')}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d.get('foreigner', 0))}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d.get('organ', 0))}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d.get('individual', 0))}</td>
-                    </tr>
-                    """
+                for d in supply_trend_data.get('daily', []):
+                    if isinstance(d, dict):
+                        d_date = str(d.get('date', d.get('bizdate', '')))
+                        d_f = get_sup_val(d, 'foreigner', 'foreign', '외국인', 'Foreigner')
+                        d_o = get_sup_val(d, 'organ', 'institutional', '기관', 'Institutional')
+                        d_i = get_sup_val(d, 'individual', '개인', 'Individual')
+                        daily_details.append(f"{d_date}(외인:{fmt_shares_korean(d_f)}, 기관:{fmt_shares_korean(d_o)})")
+                        daily_rows += f"""
+                        <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
+                            <td style='padding: 5px; text-align: left; color: #aaa;'>{d_date}</td>
+                            <td style='padding: 5px;'>{fmt_shares_html(d_f)}</td>
+                            <td style='padding: 5px;'>{fmt_shares_html(d_o)}</td>
+                            <td style='padding: 5px;'>{fmt_shares_html(d_i)}</td>
+                        </tr>
+                        """
+                supply_trend_prompt += " | 일별 추이: " + ", ".join(daily_details)
                 
                 supply_table_html = f"""
                 <div style="background-color: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: 6px; border-left: 4px solid #00e5ff; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif; margin-bottom: 8px;">
@@ -4074,9 +4093,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         <tbody>
                             <tr style="border-bottom: 2px solid rgba(0, 229, 255, 0.3); background-color: rgba(0, 229, 255, 0.05); font-weight: bold;">
                                 <td style="padding: 5px; text-align: left; color: #00e5ff;">10일 누적</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum.get('foreigner', 0))}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum.get('organ', 0))}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum.get('individual', 0))}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(f_cum)}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(o_cum)}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(i_cum)}</td>
                             </tr>
                             {daily_rows}
                         </tbody>
