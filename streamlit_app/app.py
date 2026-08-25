@@ -1724,6 +1724,104 @@ def fetch_live_indices():
     return result
 
 
+def _backup_portfolio_daily(portfolio):
+    """매일 자정/저장 시 날짜별 백업본(my_portfolio_YYYY-MM-DD.json)을 data/backups/ 에 영구 보존"""
+    try:
+        if not portfolio:
+            return
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        backup_dir = os.path.join(base_dir, 'data', 'backups')
+        os.makedirs(backup_dir, exist_ok=True)
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        backup_file = os.path.join(backup_dir, f'my_portfolio_{today_str}.json')
+        with open(backup_file, 'w', encoding='utf-8') as f:
+            json.dump(portfolio, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"DEBUG: Daily portfolio backup error: {e}")
+
+def load_portfolio(force_remote: bool = False):
+    """
+    [Supabase 초고속 클라우드 DB 1순위 연동]
+    어디서나(PC, LTE 태블릿, 모바일) 0.05초 만에 중앙 DB에서 최신 포트폴리오를 실시간 로드합니다.
+    Supabase 부재/오류 시 로컬 JSON 및 GitHub 백업으로 자동 안전 폴백.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
+
+    # 1. Supabase 클라우드 DB 1순위 실시간 조회
+    if supabase:
+        try:
+            res = supabase.table("portfolio").select("*").execute()
+            if res and res.data:
+                port_dict = {}
+                for r in res.data:
+                    c = str(r['code']).strip().zfill(6)
+                    port_dict[c] = {
+                        "name": str(r.get('name', '')),
+                        "entry_price": float(r.get('entry_price', 0.0)),
+                        "qty": float(r.get('qty', 0.0)),
+                        "stop_loss": float(r.get('stop_loss', 0.0)) if r.get('stop_loss') else 0.0
+                    }
+                if port_dict:
+                    st.session_state['session_portfolio'] = port_dict
+                    try:
+                        os.makedirs(os.path.dirname(port_path), exist_ok=True)
+                        with open(port_path, 'w', encoding='utf-8') as f:
+                            json.dump(port_dict, f, ensure_ascii=False, indent=2)
+                        _backup_portfolio_daily(port_dict)
+                    except Exception:
+                        pass
+                    return port_dict
+        except Exception:
+            pass
+
+    # 2. 세션 내 최신 수정본이 있으면 최우선 반환 (GitHub API 캐시 딜레이 역전 방지)
+    if not force_remote and 'session_portfolio' in st.session_state and st.session_state['session_portfolio']:
+        return st.session_state['session_portfolio']
+
+    # 3. force_remote 요청 시 GitHub 최신 데이터 즉시 다운로드 동기화
+    if force_remote:
+        remote_data = fetch_remote_portfolio()
+        if remote_data is not None:
+            try:
+                os.makedirs(os.path.dirname(port_path), exist_ok=True)
+                with open(port_path, 'w', encoding='utf-8') as f:
+                    json.dump(remote_data, f, ensure_ascii=False, indent=2)
+                st.session_state['session_portfolio'] = remote_data
+                _backup_portfolio_daily(remote_data)
+                return remote_data
+            except Exception:
+                pass
+
+    # 4. 로컬 파일 우선 읽기
+    if os.path.exists(port_path):
+        try:
+            with open(port_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data:
+                    st.session_state['session_portfolio'] = data
+                    _backup_portfolio_daily(data)
+                    return data
+        except Exception as e:
+            print(f"DEBUG: load_portfolio local failed: {e}")
+
+    # 5. 원격 GitHub 동기화 (로컬 파일 부재 시)
+    remote_data = fetch_remote_portfolio()
+    if remote_data is not None:
+        try:
+            os.makedirs(os.path.dirname(port_path), exist_ok=True)
+            with open(port_path, 'w', encoding='utf-8') as f:
+                json.dump(remote_data, f, ensure_ascii=False, indent=2)
+            _backup_portfolio_daily(remote_data)
+            st.session_state['session_portfolio'] = remote_data
+        except Exception:
+            pass
+        return remote_data
+
+    return {}
+
+
+
 DATA_FILES = [
     'df_full_market.csv',
     'df_high_density.csv',
