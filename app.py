@@ -3483,53 +3483,19 @@ def render_gemini_commentary(params):
         with st.spinner("🤖 Gemini AI 퀀트 리스크 조언 분석 중..."):
             try:
                 ai_comment = get_gemini_commentary(
-                    code=_code, name=_name,
-                    t_score=params.get('t_score', 50.0),
-                    t_score_adj=params.get('t_score_adj', 50.0),
-                    s_score=params.get('s_score', 50.0),
-                    change=params.get('daily_chg', 0.0),
-                    market_cond=params.get('market_cond', '중립'),
-                    cash_ratio=params.get('rec_cash', 30),
-                    stock_ratio=params.get('rec_stock', 70),
-                    api_key=params.get('gemini_api_key', ''),
-                    recent_prices_str=params.get('recent_prices_str', ''),
-                    current_price=params.get('current_price_for_gemini'),
-                    stop_loss_price=params.get('stop_loss_for_gemini'),
-                    recent_high_price=params.get('recent_high_for_gemini'),
-                    rsi=params.get('rsi_for_gemini'),
-                    macd=params.get('macd_for_gemini'),
-                    macd_signal=params.get('macd_sig_for_gemini'),
-                    bb_upper=params.get('bb_upper_for_gemini'),
-                    bb_middle=params.get('bb_middle_for_gemini'),
-                    bb_lower=params.get('bb_lower_for_gemini'),
-                    vol_penalty=params.get('vol_penalty', 1.0),
-                    market_penalty=params.get('market_penalty', 1.0),
-                    sector=params.get('sector'),
-                    raw_market_cond=params.get('raw_market_cond'),
-                    avg_price=params.get('avg_price_for_gemini'),
-                    supply_trend=params.get('supply_trend_prompt'),
-                    recent_news=params.get('recent_news_prompt')
+                    _code, _name, params['t_score'], params['t_score_adj'], params['s_score'], params['daily_chg'], params['market_cond'], params['rec_cash'], params['rec_stock'], params['gemini_api_key'], params['avg_price_for_gemini'], params['recent_prices_str'], params['current_price_for_gemini'], params['stop_loss_for_gemini'], params['recent_high_for_gemini'], params['rsi_for_gemini'], params['macd_for_gemini'], params['macd_sig_for_gemini'], params['bb_upper_for_gemini'], params['bb_middle_for_gemini'], params['bb_lower_for_gemini'], params['supply_trend_prompt'], params['recent_news_prompt'],
+                    raw_market_cond=params.get('raw_market_cond'), vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0)
                 )
                 st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, False)
             except RuntimeWarning as e:
                 fallback_comment = get_local_fallback_commentary(
-                    code=_code, name=_name,
-                    t_score_adj=params.get('t_score_adj', 50.0),
-                    s_score=params.get('s_score', 50.0),
-                    change=params.get('daily_chg', 0.0),
-                    market_cond=params.get('market_cond', '중립'),
-                    current_price=params.get('current_price_for_gemini'),
-                    stop_loss_price=params.get('stop_loss_for_gemini'),
-                    recent_high_price=params.get('recent_high_for_gemini'),
-                    rsi=params.get('rsi_for_gemini'),
-                    macd=params.get('macd_for_gemini'),
-                    macd_signal=params.get('macd_sig_for_gemini'),
-                    bb_upper=params.get('bb_upper_for_gemini'),
-                    bb_middle=params.get('bb_middle_for_gemini'),
-                    bb_lower=params.get('bb_lower_for_gemini'),
-                    avg_price=params.get('avg_price_for_gemini'),
-                    supply_trend=params.get('supply_trend_prompt'),
-                    recent_news=params.get('recent_news_prompt')
+                    _name, params['t_score_adj'], params['s_score'], params.get('raw_market_cond', '중립'), params['market_cond'],
+                    vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0), sector=params.get('sector'),
+                    current_price=params.get('current_price_for_gemini'), stop_loss_price=params.get('stop_loss_for_gemini'),
+                    recent_high_price=params.get('recent_high_for_gemini'), rsi=params.get('rsi_for_gemini'),
+                    macd=params.get('macd_for_gemini'), macd_signal=params.get('macd_sig_for_gemini'),
+                    bb_upper=params.get('bb_upper_for_gemini'), bb_middle=params.get('bb_middle_for_gemini'), bb_lower=params.get('bb_lower_for_gemini'),
+                    avg_price=params.get('avg_price_for_gemini'), supply_trend=params.get('supply_trend_prompt'), recent_news=params.get('recent_news_prompt')
                 )
                 ai_comment = fallback_comment
                 is_ai_fallback = True
@@ -4109,31 +4075,32 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     return f"{sign}{shares/10000:.1f}만 주"
                 return f"{sign}{shares:,}주"
             
-            if isinstance(supply_trend_data, dict) and supply_trend_data.get('success'):
-                cum = supply_trend_data.get('cumulative', {})
-                f_cum = get_sup_val(cum, 'foreigner', 'foreign', '외국인', 'Foreigner')
-                o_cum = get_sup_val(cum, 'organ', 'institutional', '기관', 'Institutional')
-                i_cum = get_sup_val(cum, 'individual', '개인', 'Individual')
-                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(f_cum)}, 기관: {fmt_shares_korean(o_cum)}, 개인: {fmt_shares_korean(i_cum)}"
+            if supply_trend_data.get('success'):
+                cum = supply_trend_data['cumulative']
+                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(cum['foreigner'])}, 기관: {fmt_shares_korean(cum['organ'])}, 개인: {fmt_shares_korean(cum['individual'])}"
                 
                 daily_details = []
-                daily_rows = ""
-                for d in supply_trend_data.get('daily', []):
-                    if isinstance(d, dict):
-                        d_date = str(d.get('date', d.get('bizdate', '')))
-                        d_f = get_sup_val(d, 'foreigner', 'foreign', '외국인', 'Foreigner')
-                        d_o = get_sup_val(d, 'organ', 'institutional', '기관', 'Institutional')
-                        d_i = get_sup_val(d, 'individual', '개인', 'Individual')
-                        daily_details.append(f"{d_date}(외인:{fmt_shares_korean(d_f)}, 기관:{fmt_shares_korean(d_o)})")
-                        daily_rows += f"""
-                        <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
-                            <td style='padding: 5px; text-align: left; color: #aaa;'>{d_date}</td>
-                            <td style='padding: 5px;'>{fmt_shares_html(d_f)}</td>
-                            <td style='padding: 5px;'>{fmt_shares_html(d_o)}</td>
-                            <td style='padding: 5px;'>{fmt_shares_html(d_i)}</td>
-                        </tr>
-                        """
+                for d in supply_trend_data['daily']:
+                    daily_details.append(f"{d['date']}(외인:{fmt_shares_korean(d['foreigner'])}, 기관:{fmt_shares_korean(d['organ'])})")
                 supply_trend_prompt += " | 일별 추이: " + ", ".join(daily_details)
+                
+                # HTML 표 포맷팅
+                def fmt_shares_html(shares):
+                    sign = "+" if shares > 0 else ""
+                    val_str = f"{shares/10000:.1f}만" if abs(shares) >= 10000 else f"{shares:,}"
+                    color = "#ff6b6b" if shares > 0 else "#4e9ff5" if shares < 0 else "#888888"
+                    return f"<span style='color: {color}; font-weight: bold;'>{sign}{val_str}</span>"
+                
+                daily_rows = ""
+                for d in supply_trend_data['daily']:
+                    daily_rows += f"""
+                    <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
+                        <td style='padding: 5px; text-align: left; color: #aaa;'>{d['date']}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d['foreigner'])}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d['organ'])}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d['individual'])}</td>
+                    </tr>
+                    """
                 
                 supply_table_html = f"""
                 <div style="background-color: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: 6px; border-left: 4px solid #00e5ff; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif; margin-bottom: 8px;">
@@ -4150,9 +4117,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         <tbody>
                             <tr style="border-bottom: 2px solid rgba(0, 229, 255, 0.3); background-color: rgba(0, 229, 255, 0.05); font-weight: bold;">
                                 <td style="padding: 5px; text-align: left; color: #00e5ff;">10일 누적</td>
-                                <td style="padding: 5px;">{fmt_shares_html(f_cum)}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(o_cum)}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(i_cum)}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum['foreigner'])}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum['organ'])}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum['individual'])}</td>
                             </tr>
                             {daily_rows}
                         </tbody>
@@ -5468,3 +5435,5 @@ html_script = """
 """
 
 st.html(html_script)
+
+
