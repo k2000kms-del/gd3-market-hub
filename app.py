@@ -4034,11 +4034,11 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             
             if supply_trend_data.get('success'):
                 cum = supply_trend_data['cumulative']
-                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(cum['foreigner'])}, 기관: {fmt_shares_korean(cum['organ'])}, 개인: {fmt_shares_korean(cum['individual'])}"
+                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(cum.get('foreigner', 0))}, 기관: {fmt_shares_korean(cum.get('organ', 0))}, 개인: {fmt_shares_korean(cum.get('individual', 0))}"
                 
                 daily_details = []
                 for d in supply_trend_data['daily']:
-                    daily_details.append(f"{d['date']}(외인:{fmt_shares_korean(d['foreigner'])}, 기관:{fmt_shares_korean(d['organ'])})")
+                    daily_details.append(f"{d.get('date', '')}(외인:{fmt_shares_korean(d.get('foreigner', 0))}, 기관:{fmt_shares_korean(d.get('organ', 0))})")
                 supply_trend_prompt += " | 일별 추이: " + ", ".join(daily_details)
                 
                 # HTML 표 포맷팅
@@ -4052,10 +4052,10 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 for d in supply_trend_data['daily']:
                     daily_rows += f"""
                     <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
-                        <td style='padding: 5px; text-align: left; color: #aaa;'>{d['date']}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d['foreigner'])}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d['organ'])}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d['individual'])}</td>
+                        <td style='padding: 5px; text-align: left; color: #aaa;'>{d.get('date', '')}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d.get('foreigner', 0))}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d.get('organ', 0))}</td>
+                        <td style='padding: 5px;'>{fmt_shares_html(d.get('individual', 0))}</td>
                     </tr>
                     """
                 
@@ -4074,9 +4074,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         <tbody>
                             <tr style="border-bottom: 2px solid rgba(0, 229, 255, 0.3); background-color: rgba(0, 229, 255, 0.05); font-weight: bold;">
                                 <td style="padding: 5px; text-align: left; color: #00e5ff;">10일 누적</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum['foreigner'])}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum['organ'])}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum['individual'])}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum.get('foreigner', 0))}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum.get('organ', 0))}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(cum.get('individual', 0))}</td>
                             </tr>
                             {daily_rows}
                         </tbody>
