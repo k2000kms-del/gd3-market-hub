@@ -1,3 +1,14 @@
+def to_float(val, default=0.0):
+    if val is None:
+        return default
+    try:
+        if isinstance(val, (int, float)):
+            return float(val)
+        s = str(val).replace('%', '').replace('점', '').replace('원', '').replace(',', '').replace('+', '').strip()
+        return float(s) if s else default
+    except:
+        return default
+
 def safe_num(v):
     if v is None:
         return 0.0
@@ -265,41 +276,53 @@ def get_local_fallback_commentary(code="", name="", t_score_adj=50.0, s_score=50
                                   current_price=None, stop_loss_price=None, recent_high_price=None,
                                   rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None,
                                   avg_price=None, supply_trend=None, recent_news=None, **kwargs):
+    _t = to_float(t_score_adj, 50.0)
+    _s = to_float(s_score, 50.0)
+    _c = to_float(change, 0.0)
+    _cur = to_float(current_price, None) if current_price is not None else None
+    _avg = to_float(avg_price, None) if avg_price is not None else None
+    _stop = to_float(stop_loss_price, None) if stop_loss_price is not None else None
+    _rhigh = to_float(recent_high_price, None) if recent_high_price is not None else None
+    _rsi = to_float(rsi, None) if rsi is not None else None
+    _macd = to_float(macd, None) if macd is not None else None
+    _msig = to_float(macd_signal, None) if macd_signal is not None else None
+    _bbu = to_float(bb_upper, None) if bb_upper is not None else None
+    _bbm = to_float(bb_middle, None) if bb_middle is not None else None
+
     ret_str = ""
-    if avg_price and avg_price > 0 and current_price:
-        ret = ((current_price - avg_price) / avg_price) * 100
+    if _avg and _avg > 0 and _cur:
+        ret = ((_cur - _avg) / _avg) * 100
         ret_str = f" (보유 평단가 대비 {ret:+.1f}% 수익권)"
-    
-    summary = f"1. <strong>현재 상황 요약</strong>: {name}은(는) 당일 등락률 {change:+.2f}%를 기록 중이며, 퀀트 매수 점수 {t_score_adj:.1f}점, 매도 점수 {s_score:.1f}점으로 시장 국면은 '{market_cond}' 상태입니다{ret_str}.<br>"
-    
+
+    summary = f"1. <strong>현재 상황 요약</strong>: {name}은(는) 당일 등락률 {_c:+.2f}%를 기록 중이며, 퀀트 매수 점수 {_t:.1f}점, 매도 점수 {_s:.1f}점으로 시장 국면은 '{market_cond}' 상태입니다{ret_str}.<br>"
+
     tech = "2. <strong>기술적 차트 분석</strong>: "
     tech_items = []
-    if rsi is not None:
-        tech_items.append(f"RSI는 {rsi:.1f}로 " + ("과매수 구간에 근접했습니다." if rsi > 70 else "과매도 구간으로 반등 기대가 있습니다." if rsi < 30 else "안정적인 중립 영역에 위치합니다."))
-    if macd is not None and macd_signal is not None:
-        tech_items.append(f"MACD({macd:.1f})가 Signal({macd_signal:.1f}) 대비 " + ("골든크로스를 유지 중입니다." if macd > macd_signal else "데드크로스 경계 국면입니다."))
-    if bb_upper is not None and current_price is not None:
-        tech_items.append(f"볼린저 상한선({bb_upper:,.0f}원) 및 중심선({bb_middle:,.0f}원) 대비 지지/저항을 시험 중입니다.")
-    tech += " ".join(tech_items) + "<br>"
-    
+    if _rsi is not None:
+        tech_items.append(f"RSI는 {_rsi:.1f}로 " + ("과매수 구간에 근접했습니다." if _rsi > 70 else "과매도 구간으로 반등 기대가 있습니다." if _rsi < 30 else "안정적인 중립 영역에 위치합니다."))
+    if _macd is not None and _msig is not None:
+        tech_items.append(f"MACD({_macd:.1f})가 Signal({_msig:.1f}) 대비 " + ("골든크로스를 유지 중입니다." if _macd > _msig else "데드크로스 경계 국면입니다."))
+    if _bbu is not None and _cur is not None and _bbm is not None:
+        tech_items.append(f"볼린저 상한선({_bbu:,.0f}원) 및 중심선({_bbm:,.0f}원) 대비 지지/저항을 시험 중입니다.")
+    tech += (" ".join(tech_items) if tech_items else "지표 중립 상태입니다.") + "<br>"
+
     strat = "3. <strong>매매 대응 전략</strong>: "
-    if t_score_adj >= 70:
-        strat += f"강력한 매수 모멘텀이 포착되었습니다. "
-        if recent_high_price:
-            strat += f"1차 목표가는 {recent_high_price:,.0f}원이며, "
-        if stop_loss_price:
-            strat += f"손절선은 {stop_loss_price:,.0f}원으로 설정하여 분할 접근을 권장합니다."
-    elif s_score >= 60:
-        strat += f"매도 압력이 높아지고 있습니다. "
-        if stop_loss_price:
-            strat += f"손절/수익보전 기준선({stop_loss_price:,.0f}원) 이탈 시 비중 축소 대응이 유효합니다."
+    if _t >= 70:
+        strat += "강력한 매수 모멘텀이 포착되었습니다. "
+        if _rhigh:
+            strat += f"1차 목표가는 {_rhigh:,.0f}원이며, "
+        if _stop:
+            strat += f"손절선은 {_stop:,.0f}원으로 설정하여 분할 접근을 권장합니다."
+    elif _s >= 60:
+        strat += "매도 압력이 높아지고 있습니다. "
+        if _stop:
+            strat += f"손절/수익보전 기준선({_stop:,.0f}원) 이탈 시 비중 축소 대응이 유효합니다."
     else:
-        strat += f"단기 관망 및 기존 포지션 홀딩을 권장하며, 명확한 수급 돌파 확인 후 대응하세요."
-        
+        strat += "단기 관망 및 기존 포지션 홀딩을 권장하며, 명확한 수급 돌파 확인 후 대응하세요."
+
     return f"{summary}\n{tech}\n{strat}"
 
-# ── 포트폴리오 관리 함수군 ───────────────────────────────────────
-@st.cache_data(ttl=60)
+
 def fetch_remote_portfolio():
     gh_token = ""
     try:
