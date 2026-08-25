@@ -84,8 +84,8 @@ st.markdown("""
 .block-container {
     padding-left: 1.0rem !important;
     padding-right: 1.0rem !important;
-    padding-top: 1.0rem !important;
-    padding-bottom: 1.0rem !important;
+    padding-top: 2.8rem !important;
+    padding-bottom: 1.2rem !important;
     max-width: 100% !important;
 }
 .js-plotly-plot .plotly .cursor-crosshair { cursor: default !important; }
@@ -2902,7 +2902,10 @@ with title_col_left:
     rel_t = _relative_time(quant_time)
     rel_t_str = f" ({rel_t})" if rel_t else ""
     refresh_badge = " <span style='background:rgba(46,204,113,0.2); color:#2ecc71; border:1px solid #2ecc71; font-size:11px; font-weight:bold; padding:2px 8px; border-radius:10px;'>⚡ 5초 실시간 갱신 중</span>" if st.session_state.get('auto_refresh_enabled', False) else ""
-    st.markdown(f"### 📊 실시간 시장 종합 대시보드{refresh_badge} <span style='font-size: 0.85rem; color: #888; font-weight: normal; margin-left: 10px;'>(퀀트 업데이트: {quant_time}{rel_t_str})</span>", unsafe_allow_html=True)
+    st.markdown(f"""<div style="padding-top: 6px; padding-bottom: 4px; overflow: visible; line-height: 1.4;">
+        <h3 style="margin: 0; padding: 0; display: inline-block; font-size: 1.35rem; font-weight: 700; color: #f1f5f9;">📊 실시간 시장 종합 대시보드</h3>{refresh_badge}
+        <span style="font-size: 0.85rem; color: #94a3b8; font-weight: normal; margin-left: 8px;">(퀀트 업데이트: {quant_time}{rel_t_str})</span>
+    </div>""", unsafe_allow_html=True)
     st.caption("💡 왼쪽 사이드바의 '종목 검색'을 통해 종목을 선택하시면, 하단 일봉 차트가 실시간으로 비동기 갱신됩니다.")
 
 with title_col_right:
@@ -3024,7 +3027,7 @@ with col_mid:
         fig_p1.update_layout(
             height=320,
             template='plotly_dark',
-            margin=dict(t=10, b=10, l=95, r=80),
+            margin=dict(t=10, b=10, l=95, r=95),
             clickmode='event+select',
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
             xaxis=dict(
@@ -3126,7 +3129,7 @@ with col_mid:
     fig_p2.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=95, r=80),  # 좌우 여백을 넓혀 기기별 잘림 방지
+        margin=dict(t=10, b=10, l=95, r=95),  # 좌우 여백을 넓혀 기기별 잘림 방지
         clickmode='event+select',
         font=dict(family='malgun gothic, nanum gothic, sans-serif'),
         xaxis=dict(fixedrange=True),
@@ -3134,7 +3137,7 @@ with col_mid:
     )
     fig_p2.update_yaxes(automargin=True)
     max_x = float(x_val.max()) if not x_val.empty else 100
-    fig_p2.update_xaxes(range=[0, max_x * 1.30])
+    fig_p2.update_xaxes(range=[0, max_x * 1.35])
     ev_p2 = st.plotly_chart(
         fig_p2, 
         width='stretch', 
@@ -3228,7 +3231,7 @@ with col_right:
     fig_p3.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=95, r=80),  # 좌우 여백을 넓혀 기기별 잘림 방지
+        margin=dict(t=10, b=10, l=95, r=95),  # 좌우 여백을 넓혀 기기별 잘림 방지
         clickmode='event+select',
         barmode='stack',
         showlegend=False,
@@ -3238,7 +3241,7 @@ with col_right:
     )
     fig_p3.update_yaxes(automargin=True)
     max_x = float(df3['Visual_Total'].max()) if not df3.empty else 100
-    fig_p3.update_xaxes(range=[0, max_x * 1.30])
+    fig_p3.update_xaxes(range=[0, max_x * 1.35])
     ev_p3 = st.plotly_chart(
         fig_p3, 
         width='stretch', 
@@ -3487,7 +3490,7 @@ with col_right:
     fig_p6.update_layout(
         height=320,
         template='plotly_dark',
-        margin=dict(t=10, b=10, l=95, r=80),  # 좌우 여백을 넓혀 기기별 잘림 방지
+        margin=dict(t=10, b=10, l=95, r=95),  # 좌우 여백을 넓혀 기기별 잘림 방지
         clickmode='event+select',
         font=dict(family='malgun gothic, nanum gothic, sans-serif'),
         xaxis=dict(fixedrange=True),
@@ -3495,7 +3498,7 @@ with col_right:
     )
     fig_p6.update_yaxes(automargin=True)
     max_x = float(df6['ChagesRatio'].max()) if not df6.empty else 30
-    fig_p6.update_xaxes(range=[0, max_x * 1.30])
+    fig_p6.update_xaxes(range=[0, max_x * 1.35])
     ev_p6 = st.plotly_chart(
         fig_p6, 
         width='stretch', 
