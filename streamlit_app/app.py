@@ -4069,38 +4069,31 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             supply_trend_prompt = ""
             supply_table_html = ""
             
-            def fmt_shares_korean(shares):
-                sign = "+" if shares > 0 else ""
-                if abs(shares) >= 10000:
-                    return f"{sign}{shares/10000:.1f}만 주"
-                return f"{sign}{shares:,}주"
-            
-            if supply_trend_data.get('success'):
-                cum = supply_trend_data['cumulative']
-                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(cum['foreigner'])}, 기관: {fmt_shares_korean(cum['organ'])}, 개인: {fmt_shares_korean(cum['individual'])}"
+            if isinstance(supply_trend_data, dict) and supply_trend_data.get('success'):
+                cum = supply_trend_data.get('cumulative', {})
+                f_cum = get_sup_val(cum, 'foreigner', 'foreign', '외국인', 'Foreigner')
+                o_cum = get_sup_val(cum, 'organ', 'institutional', '기관', 'Institutional')
+                i_cum = get_sup_val(cum, 'individual', '개인', 'Individual')
+                supply_trend_prompt = f"10일 누적 - 외인: {fmt_shares_korean(f_cum)}, 기관: {fmt_shares_korean(o_cum)}, 개인: {fmt_shares_korean(i_cum)}"
                 
                 daily_details = []
-                for d in supply_trend_data['daily']:
-                    daily_details.append(f"{d['date']}(외인:{fmt_shares_korean(d['foreigner'])}, 기관:{fmt_shares_korean(d['organ'])})")
-                supply_trend_prompt += " | 일별 추이: " + ", ".join(daily_details)
-                
-                # HTML 표 포맷팅
-                def fmt_shares_html(shares):
-                    sign = "+" if shares > 0 else ""
-                    val_str = f"{shares/10000:.1f}만" if abs(shares) >= 10000 else f"{shares:,}"
-                    color = "#ff6b6b" if shares > 0 else "#4e9ff5" if shares < 0 else "#888888"
-                    return f"<span style='color: {color}; font-weight: bold;'>{sign}{val_str}</span>"
-                
                 daily_rows = ""
-                for d in supply_trend_data['daily']:
-                    daily_rows += f"""
-                    <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
-                        <td style='padding: 5px; text-align: left; color: #aaa;'>{d['date']}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d['foreigner'])}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d['organ'])}</td>
-                        <td style='padding: 5px;'>{fmt_shares_html(d['individual'])}</td>
-                    </tr>
-                    """
+                for d in supply_trend_data.get('daily', []):
+                    if isinstance(d, dict):
+                        d_date = str(d.get('date', d.get('bizdate', '')))
+                        d_f = get_sup_val(d, 'foreigner', 'foreign', '외국인', 'Foreigner')
+                        d_o = get_sup_val(d, 'organ', 'institutional', '기관', 'Institutional')
+                        d_i = get_sup_val(d, 'individual', '개인', 'Individual')
+                        daily_details.append(f"{d_date}(외인:{fmt_shares_korean(d_f)}, 기관:{fmt_shares_korean(d_o)})")
+                        daily_rows += f"""
+                        <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
+                            <td style='padding: 5px; text-align: left; color: #aaa;'>{d_date}</td>
+                            <td style='padding: 5px;'>{fmt_shares_html(d_f)}</td>
+                            <td style='padding: 5px;'>{fmt_shares_html(d_o)}</td>
+                            <td style='padding: 5px;'>{fmt_shares_html(d_i)}</td>
+                        </tr>
+                        """
+                supply_trend_prompt += " | 일별 추이: " + ", ".join(daily_details)
                 
                 supply_table_html = f"""
                 <div style="background-color: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: 6px; border-left: 4px solid #00e5ff; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif; margin-bottom: 8px;">
@@ -4117,9 +4110,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         <tbody>
                             <tr style="border-bottom: 2px solid rgba(0, 229, 255, 0.3); background-color: rgba(0, 229, 255, 0.05); font-weight: bold;">
                                 <td style="padding: 5px; text-align: left; color: #00e5ff;">10일 누적</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum['foreigner'])}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum['organ'])}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(cum['individual'])}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(f_cum)}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(o_cum)}</td>
+                                <td style="padding: 5px;">{fmt_shares_html(i_cum)}</td>
                             </tr>
                             {daily_rows}
                         </tbody>
