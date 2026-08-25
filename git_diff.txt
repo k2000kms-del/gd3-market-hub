@@ -1,0 +1,1221 @@
+﻿diff --git a/.github/workflows/collect_data.yml b/.github/workflows/collect_data.yml
+index 4cf8cff..8d12784 100644
+--- a/.github/workflows/collect_data.yml
++++ b/.github/workflows/collect_data.yml
+@@ -4,9 +4,10 @@ on:
+   push:
+     branches: [ main ]
+   schedule:
+-    # ?쒓뎅 ???쒓컙(KST 09:00~15:30 = UTC 00:00~06:30) ?됱씪 30遺꾨쭏???ㅽ뻾
+-    - cron: '0,30 0,1,2,3,4,5 * * 1-5'
+-    - cron: '0 6 * * 1-5'
++    # ?쒓뎅 ???쒓컙(KST 09:00~15:30 = UTC 00:00~06:30) ?됱씪 10遺꾨쭏???ㅽ뻾
++    # ???섎（ 理쒕? 39?? 5踰??⑤꼸 ?섍툒 ?꾪솴 10遺??⑥쐞濡?珥섏킌?섍쾶 ?곸옱
++    - cron: '*/10 0,1,2,3,4,5 * * 1-5'   # UTC 00:00~05:59 = KST 09:00~14:59
++    - cron: '0,10,20,30 6 * * 1-5'        # UTC 06:00~06:30 = KST 15:00~15:30
+     # ??留덇컧 ??理쒖쥌 醫낃? 諛??섍툒 諛섏쁺???꾪븳 異붽? ?ㅽ뻾 (KST 15:40, 16:00)
+     - cron: '40 6 * * 1-5'
+     - cron: '0 7 * * 1-5'
+diff --git a/app.py b/app.py
+index 9ee7e16..6dd49fc 100644
+--- a/app.py
++++ b/app.py
+@@ -36,6 +36,59 @@ def get_kospi_ma20():
+         print(f"DEBUG: Failed to get KOSPI MA20: {e}")
+     return 0.0, 0.0, False
+ 
++def draw_quant_radar_chart(q_row):
++    """???5? 吏???먯닔 ?덉씠??李⑦듃 ?앹꽦"""
++    if q_row.empty:
++        return None
++    
++    categories = ['紐⑤찘?', '?섍툒', '嫄곕옒??, '?댄룊??, '罹붾뱾?⑦꽩']
++    values = [
++        float(q_row.iloc[0].get('Score_Momentum', 0)),
++        float(q_row.iloc[0].get('Score_Supply', 0)),
++        float(q_row.iloc[0].get('Score_Volume', 0)),
++        float(q_row.iloc[0].get('Score_MA', 0)),
++        float(q_row.iloc[0].get('Score_Candle', 0))
++    ]
++    
++    # ?먭끝?좎쓣 留뚮뱾湲??꾪빐 泥?踰덉㎏ 吏??媛믪쓣 ?앹뿉 異붽?
++    categories_closed = categories + [categories[0]]
++    values_closed = values + [values[0]]
++    
++    fig = go.Figure()
++    fig.add_trace(go.Scatterpolar(
++        r=values_closed,
++        theta=categories_closed,
++        fill='toself',
++        fillcolor='rgba(0, 229, 255, 0.15)',
++        line=dict(color='#00e5ff', width=2),
++        marker=dict(color='#00e5ff', size=6),
++        hoverinfo='theta+r'
++    ))
++    
++    fig.update_layout(
++        polar=dict(
++            radialaxis=dict(
++                visible=True,
++                range=[0, 100],
++                tickfont=dict(size=9, color="#888888"),
++                gridcolor="rgba(255, 255, 255, 0.08)",
++                linecolor="rgba(255, 255, 255, 0.1)"
++            ),
++            angularaxis=dict(
++                tickfont=dict(size=11, color="#ffffff"),
++                gridcolor="rgba(255, 255, 255, 0.08)"
++            ),
++            bgcolor='rgba(0,0,0,0)'
++        ),
++        showlegend=False,
++        height=280,
++        margin=dict(t=30, b=20, l=40, r=40),
++        paper_bgcolor='rgba(0,0,0,0)',
++        plot_bgcolor='rgba(0,0,0,0)'
++    )
++    return fig
++
++
+ @st.cache_data(ttl=1200)
+ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key):
+     """醫낅ぉ?????吏??諛??먯궛諛곕텇 鍮꾩쨷??湲곕컲?쇰줈 Gemini AI 二쇱떇 由ъ꽌移?肄붾찘?곕━ ?앹꽦 (?ㅼ쨷 紐⑤뜽 ?먮룞 ?대갚 吏??"""
+@@ -66,17 +119,14 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
+         "systemInstruction": {"parts": [{"text": system_instruction}]}
+     }
+     
+-    # 理쒖긽??3.x ?몃? 紐⑤뜽 諛?怨좎꽦??Pro/Thinking 紐⑤뜽?ㅼ쓣 ?곗꽑 ?쒕룄?섍퀬 ?쒖감 ?대갚
++    # 2026-06 怨듭떇 臾몄꽌(ai.google.dev/gemini-api/docs/models) 湲곗? 寃利앸맂 紐⑤뜽 紐⑸줉
++    # gemini-3.5-flash = gemini-flash-latest ???ㅼ껜 (Stable GA)
+     models_to_try = [
+-        "gemini-3.1-pro-preview",
+-        "gemini-3.5-flash",
+-        "gemini-2.5-pro",
+-        "gemini-2.0-pro-exp-02-05",
+-        "gemini-2.0-flash-thinking-exp-01-21",
+-        "gemini-1.5-pro",
+-        "gemini-2.0-flash",
+-        "gemini-1.5-flash",
+-        "gemini-flash-latest"
++        "gemini-3.5-flash",           # ??Stable GA ??理쒖슦??(理쒖떊 ?덉젙 紐⑤뜽)
++        "gemini-2.5-flash",           # Stable ???댁쟾 ?몃? 媛?깅퉬 ?대갚
++        "gemini-2.5-pro",             # Stable ??蹂듭옟 異붾줎 怨좎꽦???대갚
++        "gemini-2.5-flash-lite",      # Stable ??珥덇꼍??怨좎냽 ?대갚
++        "gemini-flash-latest",        # latest alias ??理쒗썑 ?덉쟾留?     ]
+     
+     last_err = None
+@@ -274,6 +324,51 @@ def fetch_naver_realtime_supply():
+             print(f"DEBUG: fetch_naver_realtime_supply {mkt_name} failed: {e}")
+     return res
+ 
++
++import json
++
++def load_portfolio():
++    """濡쒖뺄 my_portfolio.json ?뚯씪?먯꽌 蹂댁쑀 醫낅ぉ ?곗씠??濡쒕뱶"""
++    base_dir = os.path.dirname(os.path.abspath(__file__))
++    port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
++    if os.path.exists(port_path):
++        try:
++            with open(port_path, 'r', encoding='utf-8') as f:
++                return json.load(f)
++        except Exception as e:
++            print(f"DEBUG: load_portfolio failed: {e}")
++    return {}
++
++def save_portfolio(portfolio):
++    """濡쒖뺄 my_portfolio.json ?뚯씪??蹂댁쑀 醫낅ぉ ?곗씠?????""
++    base_dir = os.path.dirname(os.path.abspath(__file__))
++    port_dir = os.path.join(base_dir, 'data')
++    os.makedirs(port_dir, exist_ok=True)
++    port_path = os.path.join(port_dir, 'my_portfolio.json')
++    try:
++        with open(port_path, 'w', encoding='utf-8') as f:
++            json.dump(portfolio, f, ensure_ascii=False, indent=2)
++    except Exception as e:
++        print(f"DEBUG: save_portfolio failed: {e}")
++
++def on_portfolio_go():
++    """蹂댁쑀 醫낅ぉ 諛붾줈媛湲??좏깮 ??臾댄븳 Rerun 猷⑦봽瑜?諛⑹??섎㈃??醫낅ぉ ?대룞 泥섎━"""
++    if 'port_go_select' in st.session_state:
++        selected_go = st.session_state.port_go_select
++        if selected_go != "?좏깮 ????:
++            try:
++                code_to_go = selected_go.split("(")[-1].replace(")", "").strip()
++                port = load_portfolio()
++                if code_to_go in port:
++                    st.session_state.sel_code = code_to_go
++                    st.session_state.sel_name = port[code_to_go]['name']
++                    st.query_params['sel_code'] = code_to_go
++                    st.query_params['sel_name'] = port[code_to_go]['name']
++            except Exception as err:
++                print(f"DEBUG: on_portfolio_go failed: {err}")
++            # 臾댄븳 Rerun 諛⑹?瑜??꾪빐 利됱떆 selectbox 媛믪쓣 珥덇린媛믪쑝濡?由ъ뀑
++            st.session_state.port_go_select = "?좏깮 ????
++
+ st.set_page_config(
+     page_title='GD 3.0 Market Hub',
+     page_icon='?뱤',
+@@ -303,6 +398,71 @@ def get_stock_history(code: str):
+         return pd.DataFrame()
+ 
+ 
++@st.cache_data(ttl=60)
++def get_minute_history(code: str, count: int = 300):
++    """?ㅼ씠踰??ㅼ떆媛?1遺꾨큺 ?곗씠??議고쉶"""
++    try:
++        url = f"https://api.finance.naver.com/siseJson.naver?symbol={code}&requestType=1&timeframe=minute&count={count}"
++        res = requests.get(url, timeout=5)
++        if res.status_code == 200:
++            text = res.text.strip()
++            # JSON ?명솚???꾪빐 ?щ㎎ 移섑솚
++            text = text.replace("'", '"').replace("null", "None").replace("NaN", "None")
++            import ast
++            raw_data = ast.literal_eval(text)
++            
++            if len(raw_data) > 1:
++                columns = raw_data[0]
++                rows = raw_data[1:]
++                
++                df = pd.DataFrame(rows, columns=columns)
++                df.rename(columns={'?좎쭨': 'Time', '醫낃?': 'Close', '嫄곕옒??: 'Volume'}, inplace=True)
++                
++                df = df.dropna(subset=['Time', 'Close'])
++                df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
++                df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
++                
++                # '202606261530' -> datetime 蹂??+                df['DateTime'] = pd.to_datetime(df['Time'], format='%Y%m%d%H%M', errors='coerce')
++                df = df.dropna(subset=['DateTime'])
++                df = df.sort_values('DateTime').reset_index(drop=True)
++                return df
++    except Exception as e:
++        print(f"DEBUG: Failed to get minute history: {e}")
++    return pd.DataFrame()
++
++
++def resample_to_5min(df_1min):
++    """1遺꾨큺 ?곗씠?곕? 5遺??⑥쐞濡?Resampling?섏뿬 5遺꾨큺 OHLCV ?앹꽦"""
++    if df_1min.empty:
++        return pd.DataFrame()
++    try:
++        df = df_1min.copy()
++        df.set_index('DateTime', inplace=True)
++        
++        # 5遺??⑥쐞 resample (1遺꾨큺 醫낃? ?먮쫫?쇰줈 OHLC 援ъ꽦)
++        ohlc = df['Close'].resample('5min', closed='left', label='left').ohlc()
++        volume = df['Volume'].resample('5min', closed='left', label='left').sum()
++        
++        resampled = pd.concat([ohlc, volume], axis=1)
++        resampled.reset_index(inplace=True)
++        
++        resampled.rename(columns={
++            'open': 'Open',
++            'high': 'High',
++            'low': 'Low',
++            'close': 'Close',
++            'volume': 'Volume'
++        }, inplace=True)
++        
++        resampled = resampled.dropna(subset=['Close'])
++        return resampled
++    except Exception as e:
++        print(f"DEBUG: Resampling failed: {e}")
++    return pd.DataFrame()
++
++
++
+ @st.cache_data(ttl=60)  # 60珥?罹먯떆 ??rerun留덈떎 ?꾩껜 ?쒖옣 ?ㅼ슫濡쒕뱶 諛⑹? (?듭떖 蹂묐ぉ)
+ def fetch_live_stock_listing():
+     """肄붿뒪??肄붿뒪???꾩껜 ?쒖꽭 議고쉶.
+@@ -688,6 +848,23 @@ if df_m is not None and not df_m.empty:
+                         df_summary.at[idx, '異붿씠'] = '?? if chg_val > 0 else ('?? if chg_val < 0 else '-')
+                 
+                 # ?? ?ㅼ떆媛??섍툒 ?꾪솴 df_summary 諛섏쁺 ??
++                # ?? ?섍툒 媛??щℓ???ы띁 ?⑥닔 (猷⑦봽 ?몃???1?뚮쭔 ?뺤쓽) ??
++                def _format_sup(val_str):
++                    """?ㅼ씠踰??섍툒 臾몄옄?댁쓣 '+1,234' ?뺥깭濡??뺢퇋??""
++                    v = str(val_str).strip().replace(',', '')
++                    try:
++                        f_val = float(v)
++                        return f"{f_val:+.0f}" if f_val != 0 else "0"
++                    except Exception:
++                        return val_str
++
++                def _clean_sup(val_str):
++                    """?ㅼ씠踰??섍툒 臾몄옄?댁쓣 ?뺤닔(?듭썝)濡?蹂??""
++                    try:
++                        return int(str(val_str).replace(',', '').replace('+', '').strip())
++                    except Exception:
++                        return 0
++
+                 # ?ㅼ씠踰??ㅼ떆媛?API濡?吏???섍툒 理쒖떊 ??뼱?곌린 ?곸슜
+                 try:
+                     nv_indices = fetch_naver_realtime_indices()
+@@ -715,17 +892,9 @@ if df_m is not None and not df_m.empty:
+                         for m_name in ['肄붿뒪??, '肄붿뒪??]:
+                             if m_name in name and m_name in nv_supply:
+                                 m_sup = nv_supply[m_name]
+-                                def format_sup(val_str):
+-                                    v = str(val_str).strip().replace(',', '')
+-                                    try:
+-                                        f_val = float(v)
+-                                        return f"{f_val:+.0f}" if f_val != 0 else "0"
+-                                    except:
+-                                        return val_str
+-                                
+-                                df_summary.at[idx, '媛쒖씤(??'] = format_sup(m_sup.get('媛쒖씤', '0'))
+-                                df_summary.at[idx, '?멸뎅????'] = format_sup(m_sup.get('?멸뎅??, '0'))
+-                                df_summary.at[idx, '湲곌?(??'] = format_sup(m_sup.get('湲곌?', '0'))
++                                df_summary.at[idx, '媛쒖씤(??'] = _format_sup(m_sup.get('媛쒖씤', '0'))
++                                df_summary.at[idx, '?멸뎅????'] = _format_sup(m_sup.get('?멸뎅??, '0'))
++                                df_summary.at[idx, '湲곌?(??'] = _format_sup(m_sup.get('湲곌?', '0'))
+                     
+                     # ?? ?뱀씪 ?ㅼ떆媛??섍툒 ?몄뀡 ?꾩쟻 ?곸옱 (1遺꾨쭏?????ъ씤??異붽?) ??
+                     try:
+@@ -734,21 +903,16 @@ if df_m is not None and not df_m.empty:
+                         _now_kst = datetime.now(_KST)
+                         now_time = _now_kst.strftime('%H:%M')
+                         h_m = _now_kst.hour * 100 + _now_kst.minute
+-                        # ?μ쨷(09:00~15:30)?닿퀬, 留덉?留??꾩쟻 ?쒓컖怨??꾩옱 ?쒓컖???ㅻ? ?뚮쭔 異붽?
++                        # ?μ쨷(09:00~15:30)?닿퀬, ?됱씪?대ŉ, 留덉?留??꾩쟻 ?쒓컖怨??꾩옱 ?쒓컖???ㅻ? ?뚮쭔 異붽?
+                         last_accum_time = st.session_state.get('last_accum_time', '')
+-                        if 900 <= h_m <= 1530 and now_time != last_accum_time:
++                        is_weekday = _now_kst.weekday() < 5  # 0=??~ 4=湲? 5=?? 6=??+                        if 900 <= h_m <= 1530 and is_weekday and now_time != last_accum_time:
+                             for mkt_name in ['肄붿뒪??, '肄붿뒪??]:
+                                 if mkt_name in nv_supply:
+                                     m_sup = nv_supply[mkt_name]
+-                                    def clean_sup(val_str):
+-                                        try:
+-                                            # ?ㅼ씠踰?API???듭썝 ?⑥쐞 臾몄옄??'+5,254') 諛섑솚
+-                                            return int(str(val_str).replace(',', '').replace('+', '').strip())
+-                                        except:
+-                                            return 0
+-                                    f_val = clean_sup(m_sup.get('?멸뎅??, 0))
+-                                    p_val = clean_sup(m_sup.get('媛쒖씤', 0))
+-                                    i_val = clean_sup(m_sup.get('湲곌?', 0))
++                                    f_val = _clean_sup(m_sup.get('?멸뎅??, 0))
++                                    p_val = _clean_sup(m_sup.get('媛쒖씤', 0))
++                                    i_val = _clean_sup(m_sup.get('湲곌?', 0))
+ 
+                                     accum_df = st.session_state.df_intraday_accum
+                                     # 媛숈? ?쒓컙쨌媛숈? ?쒖옣 ?곗씠???대? ?덉쑝硫??ㅽ궢
+@@ -783,6 +947,16 @@ if df_m is not None and not df_m.empty:
+                                                 print(f"DEBUG: Supabase upsert failed: {db_err}")
+                             # 肄붿뒪?셋룹퐫?ㅻ떏 紐⑤몢 泥섎━ ?꾨즺 ???꾩쟻 ?쒓컖 媛깆떊
+                             st.session_state['last_accum_time'] = now_time
++                            # ?? 濡쒖뺄 CSV 諛깆뾽 ???(???ъ떆????蹂듭썝?? ??
++                            try:
++                                _base_dir = os.path.dirname(os.path.abspath(__file__))
++                                _session_csv = os.path.join(_base_dir, 'data', 'df_supply_intraday_session.csv')
++                                os.makedirs(os.path.dirname(_session_csv), exist_ok=True)
++                                _save_df = st.session_state.df_intraday_accum.copy()
++                                _save_df['Date'] = _now_kst.strftime('%Y%m%d')
++                                _save_df.to_csv(_session_csv, index=False, encoding='utf-8-sig')
++                            except Exception as csv_save_err:
++                                print(f"DEBUG: 濡쒖뺄 CSV ?섍툒 ????ㅽ뙣: {csv_save_err}")
+                     except Exception as accum_err:
+                         print(f"DEBUG: Accumulation failed: {accum_err}")
+ 
+@@ -790,18 +964,14 @@ if df_m is not None and not df_m.empty:
+                 except Exception as e:
+                     st.write(f"?좑툘 ?ㅼ씠踰??ㅼ떆媛??뺣낫 諛섏쁺 ?ㅽ뙣: {e}")
+                     
+-                    # ?ㅽ뙣 ??湲곗〈 ?뷀뤃???대갚 泥섎━ 蹂듦뎄
+-                    default_supplies = {
+-                        '肄붿뒪??: {'媛쒖씤': '+452', '?멸뎅??: '-120', '湲곌?': '-310'},
+-                        '肄붿뒪??: {'媛쒖씤': '+120', '?멸뎅??: '+85', '湲곌?': '-188'}
+-                    }
++                    # API ?ㅽ뙣 ???섍툒媛믪쓣 '-'濡??쒖떆 (媛吏??レ옄 ?ㅼ씤 諛⑹?)
+                     for idx, row in df_summary.iterrows():
+                         name = str(row['醫낅ぉ/醫낅쪟'])
+                         for m_name in ['肄붿뒪??, '肄붿뒪??]:
+                             if m_name in name:
+-                                df_summary.at[idx, '媛쒖씤(??'] = default_supplies[m_name]['媛쒖씤']
+-                                df_summary.at[idx, '?멸뎅????'] = default_supplies[m_name]['?멸뎅??]
+-                                df_summary.at[idx, '湲곌?(??'] = default_supplies[m_name]['湲곌?']
++                                df_summary.at[idx, '媛쒖씤(??'] = '-'
++                                df_summary.at[idx, '?멸뎅????'] = '-'
++                                df_summary.at[idx, '湲곌?(??'] = '-'
+                     
+                     if df_intraday is not None and not df_intraday.empty:
+                         for market_key, market_name in [('KOSPI', '肄붿뒪??), ('KOSDAQ', '肄붿뒪??)]:
+@@ -878,7 +1048,7 @@ _KST = timezone(timedelta(hours=9))
+ today_str = datetime.now(_KST).strftime('%Y%m%d')
+ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_str:
+     st.session_state.accum_date = today_str
+-    # Supabase?먯꽌 ?뱀씪 異뺤쟻???섍툒 ?곗씠??濡쒕뱶
++    # ?뱀씪 ?섍툒 ?곗씠??濡쒕뱶 (?곗꽑?쒖쐞: Supabase ??濡쒖뺄 CSV 諛깆뾽)
+     loaded_df = pd.DataFrame(columns=['Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+     if supabase:
+         try:
+@@ -896,6 +1066,21 @@ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_
+                 loaded_df = pd.DataFrame(records)
+         except Exception as db_err:
+             print(f"DEBUG: Supabase fetch failed: {db_err}")
++    # Supabase 誘몄뿰???먮뒗 ?곗씠???놁쓬 ??濡쒖뺄 CSV 諛깆뾽?먯꽌 蹂듭썝
++    if loaded_df.empty:
++        try:
++            _base_dir = os.path.dirname(os.path.abspath(__file__))
++            _session_csv = os.path.join(_base_dir, 'data', 'df_supply_intraday_session.csv')
++            if os.path.exists(_session_csv):
++                _saved = pd.read_csv(_session_csv, encoding='utf-8-sig')
++                # ?ㅻ뒛 ?좎쭨 ?곗씠?곕쭔 蹂듭썝 (?꾨궇 ?곗씠???쒖쇅)
++                if 'Date' in _saved.columns:
++                    _saved = _saved[_saved['Date'].astype(str) == today_str]
++                if not _saved.empty:
++                    loaded_df = _saved[['Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net']].copy()
++                    print(f"DEBUG: 濡쒖뺄 CSV?먯꽌 ?뱀씪 ?섍툒 ?곗씠??{len(loaded_df)}??蹂듭썝 ?꾨즺")
++        except Exception as csv_restore_err:
++            print(f"DEBUG: 濡쒖뺄 CSV ?섍툒 蹂듭썝 ?ㅽ뙣: {csv_restore_err}")
+     st.session_state.df_intraday_accum = loaded_df
+ 
+ 
+@@ -995,6 +1180,8 @@ if _search_q:
+                 st.query_params['sel_name'] = str(_r['Name'])
+                 st.rerun()
+ 
++st.sidebar.markdown('---')
++
+ 
+ # ?? ?ъ씠?쒕컮 留??꾨옒: Gemini AI ?ы봽 ?쇳꽣 ???????????????????
+ st.sidebar.markdown('---')
+@@ -1053,9 +1240,9 @@ if st.sidebar.button("Gemini?먭쾶 吏덈Ц?섍린", use_container_width=True):
+             # ?ы봽 ?쇳꽣 ?ㅼ쨷 紐⑤뜽 ?쒖감 ?대갚 ?몄텧
+             models_to_try = [
+                 "gemini-3.5-flash",
+-                "gemini-3.1-pro-preview",
+                 "gemini-2.5-flash",
+-                "gemini-2.0-flash",
++                "gemini-2.5-pro",
++                "gemini-2.5-flash-lite",
+                 "gemini-flash-latest"
+             ]
+             
+@@ -1455,7 +1642,7 @@ with row1_col1:
+         df1['Current_Price_Val'] = pd.to_numeric(df1['Close'], errors='coerce').fillna(0)
+         df1['Trade_Volume_Val']  = pd.to_numeric(df1['Volume'], errors='coerce').fillna(0)
+         
+-        # ?ㅼ떆媛??섍툒 ?곗씠????뼱?곌린
++        # ?ㅼ떆媛??섍툒 ?곗씠????뼱?곌린 (?ㅼ씠踰?API ?ㅼ떆媛?媛吏묎퀎 諛섏쁺)
+         fgn_list = []
+         inst_list = []
+         for code in df1['Code']:
+@@ -1467,40 +1654,49 @@ with row1_col1:
+                 inst_list.append(0)
+         df1['Foreign_Net'] = fgn_list
+         df1['Institutional_Net'] = inst_list
+-        
++        # ???ㅼ떆媛??섍툒 諛섏쁺 ??Total_Combined_Net ?ш퀎??(湲곗〈 CSV 媛믪씠 0?댁뼱???ㅼ씠踰??ㅼ떆媛꾧컪 ?ъ슜)
++        df1['Total_Combined_Net'] = df1['Foreign_Net'] + df1['Institutional_Net']
++
+         df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
+-        
++
+         df1['Abs_Net'] = df1['Total_Combined_Net'].abs()
+-        df1['visual_val'] = df1['Abs_Net'] ** 0.55
+-        
+-        # 1踰??⑤꼸 ?ㅼ떆媛??섍툒??Plotly Horizontal Bar 李⑦듃濡??꾨㈃ 媛쒗렪 (?숈옉 ?쇨???諛?CORS 蹂댁븞 洹밸났)
++        # 遺??蹂댁〈 power-scale: ?쒕ℓ??+)???묒닔, ?쒕ℓ??-)???뚯닔 諛⑺뼢?쇰줈 留됰? ?쒖떆
++        if df1['Abs_Net'].max() > 0:
++            df1['visual_val'] = df1['Total_Combined_Net'].apply(
++                lambda x: (abs(x) ** 0.55) if x >= 0 else -(abs(x) ** 0.55)
++            )
++        else:
++            # ?섍툒 ?곗씠???꾨Т ??嫄곕옒?湲?湲곕컲 ?묐갑??fallback
++            df1['visual_val'] = (pd.to_numeric(df1.get('Amount', 0), errors='coerce').fillna(0) / 1e8) ** 0.55
++
++        # 1踰??⑤꼸: ?쒕ℓ??+)???ㅻⅨ履? ?쒕ℓ??-)???쇱そ?쇰줈 六쀫뒗 Diverging Bar Chart
+         import plotly.graph_objects as go
+-        
++
+         fig_p1 = go.Figure()
+-        
++
++        # ?뺣젹: ?쒕ℓ???곸쐞媛 ?섎떒, ?쒕ℓ???곸쐞媛 ?곷떒???ㅻ룄濡?ascending=True
+         df1_sorted = df1.sort_values('Total_Combined_Net', ascending=True).copy()
+         x_val_sorted = df1_sorted['visual_val']
+-        text_labels_sorted = df1_sorted['Total_Combined_Net'].apply(lambda x: f" {x/10000:.1f}留? if abs(x) >= 10000 else f" {x:,}")
+-        
++
++        # 留됰? ?됱긽: ?쒕ℓ???묒닔)=鍮④컯 怨꾩뿴, ?쒕ℓ???뚯닔)=?뚮옉 怨꾩뿴
++        bar_colors = [
++            '#ef4444' if v >= 0 else '#3b82f6'
++            for v in df1_sorted['Total_Combined_Net']
++        ]
++
++        text_labels_sorted = df1_sorted['Total_Combined_Net'].apply(
++            lambda x: f" {x/10000:.1f}留뚯＜" if abs(x) >= 10000 else f" {int(x):+,}二?
++        )
++
+         custom_data_values = df1_sorted[['Code', 'Close', 'ChagesRatio', 'Total_Combined_Net', 'Foreign_Net', 'Institutional_Net']].values
+-        
++
+         fig_p1.add_trace(go.Bar(
+             y=df1_sorted['Name'],
+             x=x_val_sorted,
+             orientation='h',
+             marker=dict(
+-                colorscale=[
+-                    [0.0, "#1e3a8a"], # 吏꾪븳 ?뚮옉 (<-3%)
+-                    [0.3, "#3b82f6"], # 諛앹? ?뚮옉
+-                    [0.5, "#4b5563"], # ?뚯깋 (0%)
+-                    [0.7, "#ef4444"], # 諛앹? 鍮④컯
+-                    [1.0, "#991b1b"]  # 吏꾪븳 鍮④컯 (>3%)
+-                ],
+-                cmin=-4.0,
+-                cmax=4.0,
+-                color=df1_sorted['ChagesRatio'],
+-                showscale=False,
+-                line=dict(color='rgba(255,255,255,0.1)', width=1)
++                color=bar_colors,
++                line=dict(color='rgba(255,255,255,0.08)', width=1)
+             ),
+             text=text_labels_sorted,
+             textposition='outside',
+@@ -1515,19 +1711,26 @@ with row1_col1:
+                 '<extra></extra>'
+             )
+         ))
+-        
++
++        abs_max = float(x_val_sorted.abs().max()) if not x_val_sorted.empty and x_val_sorted.abs().max() > 0 else 100
++
+         fig_p1.update_layout(
+             height=320,
+             template='plotly_dark',
+             margin=dict(t=10, b=10, l=95, r=80),
+             clickmode='event+select',
+             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+-            xaxis=dict(fixedrange=True),
++            xaxis=dict(
++                fixedrange=True,
++                zeroline=True,
++                zerolinecolor='rgba(255,255,255,0.3)',
++                zerolinewidth=1.5,
++            ),
+             yaxis=dict(fixedrange=True)
+         )
+         fig_p1.update_yaxes(automargin=True)
+-        max_x = float(x_val_sorted.max()) if not x_val_sorted.empty else 100
+-        fig_p1.update_xaxes(range=[0, max_x * 1.30])
++        # x異뺤쓣 以묒븰 0 湲곗? ?移?쑝濡??ㅼ젙 (?쒕ℓ?꾨뒗 ?쇱そ, ?쒕ℓ?섎뒗 ?ㅻⅨ履?
++        fig_p1.update_xaxes(range=[-abs_max * 1.35, abs_max * 1.35])
+         
+         ev_p1 = st.plotly_chart(
+             fig_p1,
+@@ -1542,6 +1745,7 @@ with row1_col1:
+ with row1_col2:
+     st.markdown(f"##### ?렞 Quant Buy TOP 10 ({q_sort_by})")
+     fig_p2 = go.Figure()
++    x_val = pd.Series(dtype=float)  # NameError 諛⑹?: df_q 鍮꾩뼱?덉쓣 ??湲곕낯媛?     if not df_q.empty and 'Total_Score' in df_q.columns:
+         df2 = df_q.copy()
+         
+@@ -1637,6 +1841,7 @@ with row1_col2:
+ with row1_col3:
+     st.markdown("##### ?뵦 嫄곕옒?湲?由щ뜑 (12)")
+     fig_p3 = go.Figure()
++    df3 = pd.DataFrame()  # NameError 諛⑹?: df_m 鍮꾩뼱?덉쓣 ??湲곕낯媛?     if not df_m.empty and 'Amount' in df_m.columns:
+         df_m_clean3 = df_m.copy()
+         
+@@ -1927,6 +2132,7 @@ with row2_col2:
+ with row2_col3:
+     st.markdown("##### ?? ?곸듅瑜?由щ뜑 (12)")
+     fig_p6 = go.Figure()
++    df6 = pd.DataFrame()  # NameError 諛⑹?: df_m 鍮꾩뼱?덉쓣 ??湲곕낯媛?     if not df_m.empty and 'ChagesRatio' in df_m.columns:
+         df_m_clean6 = df_m.copy()
+         
+@@ -2022,8 +2228,10 @@ if st.session_state.sel_code:
+             st.session_state.chart_key_index += 1
+             st.rerun()
+ 
+-    with st.spinner(f'?뱻 {name_disp} ?쇰큺 ?곗씠??議고쉶 以?..'):
++    with st.spinner(f'?뱻 {name_disp} 二쇨? ?곗씠??議고쉶 以?..'):
+         df_candle = get_stock_history(code_disp)
++        df_1min = get_minute_history(code_disp, count=300)
++        df_5min = resample_to_5min(df_1min)
+ 
+     if df_candle.empty:
+         st.warning('?좑툘 李⑦듃 ?곗씠?곕? 遺덈윭?????놁뒿?덈떎.')
+@@ -2092,31 +2300,92 @@ if st.session_state.sel_code:
+ 
+             df_candle['Stop_Loss'] = stop_loss_series
+ 
+-            # 8. 留ㅻ룄 ?좏샇 ?먯젙 - ?곹깭 癒몄떊 諛⑹떇 (以묐났 ?좏샇 諛⑹?)
++            # ???蹂댁젙 ?먯닔 議고쉶 (吏꾩엯 ?꾪꽣?? 諛???뺤＜ ?꾪솕 湲곗? ?곸슜
++            t_score_adj = 60.0  # 湲곕낯媛?+            is_large_cap = False
++            marcap_val = 0.0
++            
++            if df_m is not None and not df_m.empty:
++                m_match = df_m[df_m['Code'].astype(str).str.zfill(6) == str(code_disp).strip().zfill(6)]
++                if not m_match.empty and 'Marcap' in m_match.columns:
++                    marcap_val = float(m_match.iloc[0]['Marcap'])
++                    # Marcap 5議???5,000,000,000,000) ?댁긽??寃쎌슦 ??뺤＜濡??먮퀎
++                    if marcap_val >= 5e12:
++                        is_large_cap = True
++
++            if df_q is not None and not df_q.empty:
++                q_match = df_q[df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6) == str(code_disp).strip().zfill(6)]
++                if not q_match.empty and 'Total_Score_Adj' in q_match.columns:
++                    t_score_adj = float(q_match.iloc[0]['Total_Score_Adj'])
++
++            # ??뺤＜???덈뱾??60?먯뿉??45?먯쑝濡??꾪솕 ?곸슜 (洹???以묒냼?뺤＜??60??湲곗????꾧꺽 ?좎?)
++            buy_threshold = 45.0 if is_large_cap else 60.0
++
++            # 8. 留ㅼ닔/留ㅻ룄 ?좏샇 ?먯젙 - ?곹깭 癒몄떊 諛⑹떇 (蹂몄쟾 蹂댄샇 + ????꾪꽣 + ?쒓? 媛?넀??+ ?쒓컙泥?궛 寃고빀)
+             # ?숈쟻 ?먯젙?? 由ъ뒪??媛?랁솕 ATR ?뱀닔 ?곸슜
+             dynamic_trigger_sl = df_candle['Adj_Highest_High'] - atr_multiplier * df_candle['ATR']
+             exit_signal_list = []
++            buy_signal_list = []
+             in_position = True  # 泥섏쓬? 蹂댁쑀 以??곹깭濡??쒖옉
++            entry_price = df_candle['Close'].iloc[0] if len(df_candle) > 0 else 0.0
++            max_price_since_entry = entry_price
++            days_in_position = 0
++
+             for i in range(len(df_candle)):
+                 close_val = df_candle['Close'].iloc[i]
++                open_val = df_candle['Open'].iloc[i] if 'Open' in df_candle.columns else close_val
+                 trigger_sl = dynamic_trigger_sl.iloc[i]
+-                if pd.isna(trigger_sl):
++                ma5_val = df_candle['MA5'].iloc[i]
++                
++                # ?꾩씪 湲곗? ?먯젅??(?쒓? 媛?븯???먯젙??
++                prev_sl = dynamic_trigger_sl.iloc[i-1] if i > 0 else trigger_sl
++                
++                if pd.isna(trigger_sl) or pd.isna(ma5_val):
+                     exit_signal_list.append(False)
++                    buy_signal_list.append(False)
+                     continue
++                    
+                 if in_position:
+-                    if close_val < trigger_sl:
+-                        # ?먯젅???댄깉 ??留ㅻ룄 ?좏샇 諛쒖깮 + ?ъ???泥?궛
++                    buy_signal_list.append(False)
++                    days_in_position += 1
++                    
++                    # 理쒓퀬媛 異붿쟻
++                    max_price_since_entry = max(max_price_since_entry, close_val)
++                    # 蹂몄쟾 蹂댄샇 猷? 吏꾩엯 ??理쒓퀬媛 怨좎젏??吏꾩엯媛 ?鍮?10% ?댁긽 ?꾨떖?덈떎硫? 
++                    # ?댄썑 ?먯젅?좎? ?덈?濡?吏꾩엯媛 + 1% 留덉쭊???댄븯濡??⑥뼱吏吏 ?딅룄濡?泥좎????좉툑(?듭젅 ?뺣낫)
++                    if max_price_since_entry >= entry_price * 1.10:
++                        trigger_sl = max(trigger_sl, entry_price * 1.01)
++
++                    # 1) ?쒓? 媛?븯???먯젅: ?쒓?媛 ?꾩씪 湲곗? ?먯젅?좎쓣 ?섑쉶?섏뿬 湲됰씫 異쒕컻 ?? 利됱떆 泥?궛 (釉붾옓?ㅼ셿 諛⑹?)
++                    if open_val < prev_sl:
++                        exit_signal_list.append(True)
++                        in_position = False
++                        days_in_position = 0
++                    # 2) ?쒓컙 泥?궛: 5嫄곕옒??寃쎄낵 ???섏씡瑜좎씠 蹂몄쟾 ?鍮?짹2% ?댁쇅濡??뺤껜 ??湲고쉶鍮꾩슜 ?뺣낫瑜??꾪빐 利됱떆 泥?궛
++                    elif days_in_position >= 5 and abs((close_val - entry_price) / entry_price) <= 0.02:
+                         exit_signal_list.append(True)
+                         in_position = False
++                        days_in_position = 0
++                    # 3) ?쇰컲 醫낃? ?먯젅???댄깉
++                    elif close_val < trigger_sl:
++                        exit_signal_list.append(True)
++                        in_position = False
++                        days_in_position = 0
+                     else:
+                         exit_signal_list.append(False)
+                 else:
+-                    # 誘몃낫???곹깭: MA5 ?곹뼢 ?뚰뙆 ???ъ쭊??-                    ma5_val = df_candle['MA5'].iloc[i]
+-                    if pd.notna(ma5_val) and close_val > ma5_val:
+-                        in_position = True
+                     exit_signal_list.append(False)
++                    # 誘몃낫???곹깭: MA5 ?곹뼢 ?뚰뙆 + 醫낅ぉ?????蹂댁젙 ?먯닔媛 ?꾪솕 湲곗?(buy_threshold) ?댁긽???뚮쭔 留ㅼ닔 吏꾩엯 (媛吏??뚰뙆 ?꾪꽣留?
++                    if close_val > ma5_val and (t_score_adj >= buy_threshold):
++                        buy_signal_list.append(True)
++                        in_position = True
++                        entry_price = close_val
++                        max_price_since_entry = close_val
++                        days_in_position = 0
++                    else:
++                        buy_signal_list.append(False)
+             df_candle['Exit_Signal'] = exit_signal_list
++            df_candle['Buy_Signal'] = buy_signal_list
+ 
+         except Exception as atr_err:
+             st.error(f"ATR 怨꾩궛 ?ㅻ쪟: {atr_err}")
+@@ -2173,8 +2442,7 @@ if st.session_state.sel_code:
+           </div>
+         </div>
+         """
+-        st.markdown(stats_html, unsafe_allow_html=True)
+-
++        
+         # ?? ?뮕 ???醫낇빀 留ㅻℓ ?섍껄 移대뱶 異붽? ??????????????????????????????????
+         q_row = df_q[df_q['Code'] == code_disp]
+         if not q_row.empty:
+@@ -2254,7 +2522,184 @@ if st.session_state.sel_code:
+     {ai_comment}
+ </div>
+ </div>"""
+-            st.markdown(opinion_html, unsafe_allow_html=True)
++            col_op, col_rd = st.columns([7, 3.5])
++            with col_op:
++                st.markdown(stats_html, unsafe_allow_html=True)
++                st.markdown(opinion_html, unsafe_allow_html=True)
++            with col_rd:
++                # ?뮳 ?ㅼ떆媛??ы듃?대━??愿由??⑤꼸 援ы쁽
++                portfolio = load_portfolio()
++                
++                st.markdown(
++                    """
++                    <div style="background-color: #111920; padding: 12px; border-radius: 8px; border: 1px solid rgba(0, 229, 255, 0.3); color: #fff; margin-bottom: 10px;">
++                        <h4 style="margin: 0; color: #00e5ff; font-size: 15px; font-family: 'malgun gothic', sans-serif;">?뮳 ?섏쓽 ?ㅼ쟾 ?ы듃?대━??/h4>
++                    </div>
++                    """, 
++                    unsafe_allow_html=True
++                )
++                
++                # ?꾩옱 議고쉶 以묒씤 醫낅ぉ 蹂댁쑀 ?щ?
++                is_held = code_disp in portfolio
++                held_info = portfolio.get(code_disp, {"entry_price": 0.0, "qty": 0.0})
++                
++                # ?됰떒媛 諛??섎웾 ?낅젰? (streamlit input ?ъ슜)
++                col_p1, col_p2 = st.columns(2)
++                with col_p1:
++                    input_price = st.number_input(
++                        "留ㅼ닔 ?됰떒媛 (??", 
++                        min_value=0.0, 
++                        value=float(held_info["entry_price"]) if is_held else float(last_close), 
++                        step=100.0,
++                        key="port_input_price"
++                    )
++                with col_p2:
++                    input_qty = st.number_input(
++                        "蹂댁쑀 ?섎웾 (二?", 
++                        min_value=0.0, 
++                        value=float(held_info["qty"]) if is_held else 0.0, 
++                        step=1.0,
++                        key="port_input_qty"
++                    )
++                
++                # ?깅줉/?섏젙/??젣 踰꾪듉
++                col_btn1, col_btn2 = st.columns(2)
++                with col_btn1:
++                    if st.button("???깅줉/?섏젙", use_container_width=True, key="btn_port_save"):
++                        if input_price > 0 and input_qty > 0:
++                            portfolio[code_disp] = {
++                                "name": name_disp,
++                                "entry_price": input_price,
++                                "qty": input_qty
++                            }
++                            save_portfolio(portfolio)
++                            st.toast(f"?뮳 {name_disp} ?ы듃?대━??????꾨즺!", icon="??)
++                            st.rerun()
++                        else:
++                            st.warning("媛寃⑷낵 ?섎웾???낅젰?댁＜?몄슂.")
++                with col_btn2:
++                    if is_held:
++                        if st.button("?뿊截???젣", use_container_width=True, key="btn_port_del"):
++                            del portfolio[code_disp]
++                            save_portfolio(portfolio)
++                            st.toast(f"?뿊截?{name_disp} ?ы듃?대━????젣 ?꾨즺", icon="?뱄툘")
++                            st.rerun()
++                    else:
++                        st.button("?뿊截???젣", use_container_width=True, disabled=True, key="btn_port_del_dis")
++                
++                # ?ы듃?대━??紐⑸줉 諛?諛붾줈媛湲?+                if portfolio:
++                    st.markdown("---")
++                    
++                    # 蹂댁쑀 醫낅ぉ 諛붾줈媛湲?+                    go_codes = list(portfolio.keys())
++                    go_names = [f"{portfolio[c]['name']} ({c})" for c in go_codes]
++                    
++                    if 'port_go_select' not in st.session_state:
++                        st.session_state.port_go_select = "?좏깮 ????
++                    
++                    st.selectbox(
++                        "?렞 蹂댁쑀 醫낅ぉ 諛붾줈媛湲?,
++                        ["?좏깮 ????] + go_names,
++                        key="port_go_select",
++                        on_change=on_portfolio_go
++                    )
++                        
++                    # ?ы듃?대━???뚯씠釉??뚮뜑留?+                    port_rows = []
++                    for p_code, p_data in portfolio.items():
++                        p_close = 0.0
++                        if df_m is not None and not df_m.empty:
++                            m_match = df_m[df_m['Code'] == p_code]
++                            if not m_match.empty:
++                                p_close = float(m_match.iloc[0]['Close'])
++                        if p_close == 0.0:
++                            p_close = p_data["entry_price"]
++                            
++                        p_return = ((p_close - p_data["entry_price"]) / p_data["entry_price"]) * 100.0
++                        eval_diff = (p_close - p_data["entry_price"]) * p_data["qty"]
++                        
++                        rt_color = "#ff6b6b" if p_return > 0 else "#4e9ff5" if p_return < 0 else "#888888"
++                        rt_sign = "+" if p_return > 0 else ""
++                        
++                        port_rows.append({
++                            "醫낅ぉ紐?: p_data["name"],
++                            "留ㅼ닔媛": f"{int(p_data['entry_price']):,}",
++                            "?섎웾": f"{int(p_data['qty']):,}",
++                            "?섏씡瑜?: f"<span style='color:{rt_color}; font-weight:bold;'>{rt_sign}{p_return:.2f}%</span>",
++                            "?됯??먯씡": f"<span style='color:{rt_color}; font-weight:bold;'>{rt_sign}{int(eval_diff):,}??/span>"
++                        })
++                    
++                    # ?ㅽ??쇱씠 ?곸슜??怨좉툒 ?ㅽ겕 ?뚮쭏 HTML ?뚯씠釉??앹꽦
++                    table_html = f"""
++                    <style>
++                    .port-table-container {{
++                        background-color: #0d1b2a;
++                        border: 1px solid #1b263b;
++                        border-radius: 8px;
++                        padding: 12px;
++                        margin-top: 10px;
++                        margin-bottom: 10px;
++                        box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
++                    }}
++                    .port-table {{
++                        width: 100%;
++                        border-collapse: collapse;
++                        font-family: 'Malgun Gothic', 'Nanum Gothic', sans-serif;
++                        font-size: 13px;
++                        color: #e0e1dd;
++                    }}
++                    .port-table th {{
++                        background-color: #1b263b;
++                        color: #ffd700;
++                        font-weight: bold;
++                        padding: 10px 8px;
++                        text-align: center;
++                        border-bottom: 2px solid #415a77;
++                    }}
++                    .port-table td {{
++                        padding: 10px 8px;
++                        text-align: center;
++                        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
++                    }}
++                    .port-table tr:last-child td {{
++                        border-bottom: none;
++                    }}
++                    .port-table tr:hover {{
++                        background-color: rgba(255, 255, 255, 0.03);
++                    }}
++                    </style>
++                    <div class="port-table-container">
++                        <table class="port-table">
++                            <thead>
++                                <tr>
++                                    <th>醫낅ぉ紐?/th>
++                                    <th>留ㅼ닔媛</th>
++                                    <th>?섎웾</th>
++                                    <th>?섏씡瑜?/th>
++                                    <th>?됯??먯씡</th>
++                                </tr>
++                            </thead>
++                            <tbody>
++                    """
++                    for row in port_rows:
++                        table_html += f"""
++                                <tr>
++                                    <td style="font-weight: bold; color: #ffffff;">{row['醫낅ぉ紐?]}</td>
++                                    <td>{row['留ㅼ닔媛']}</td>
++                                    <td>{row['?섎웾']}</td>
++                                    <td>{row['?섏씡瑜?]}</td>
++                                    <td>{row['?됯??먯씡']}</td>
++                                </tr>
++                        """
++                    table_html += """
++                            </tbody>
++                        </table>
++                    </div>
++                    """
++                    st.markdown(table_html, unsafe_allow_html=True)
++                else:
++                    st.info("?깅줉???ы듃?대━??醫낅ぉ???놁뒿?덈떎.")
+ 
+         # 罹붾뱾 李⑦듃 ?앹꽦
+         fig_c = make_subplots(
+@@ -2335,6 +2780,70 @@ if st.session_state.sel_code:
+                             borderpad=4,
+                             row=1, col=1
+                         )
++            
++            # 留ㅼ닔 ?좏샇 (MA5 ?곹뼢 ?뚰뙆 ??Plotly Annotation?쇰줈 湲덉븸 ?쒖떆瑜??ы븿???붿궡???꾩?)
++            if 'Buy_Signal' in df_candle.columns:
++                buy_signals = df_candle[df_candle['Buy_Signal'] == True]
++                if not buy_signals.empty:
++                    # 踰붾?(Legend) ?쒖떆???붾? ?몃젅?댁뒪 (李⑦듃?먮뒗 ?섑??섏? ?딆쓬)
++                    fig_c.add_trace(go.Scatter(
++                        x=[None], y=[None],
++                        mode='markers',
++                        name='留ㅼ닔 ?좏샇',
++                        marker=dict(symbol='triangle-up', size=10, color='#2ecc71'),
++                        showlegend=True
++                    ), row=1, col=1)
++                    
++                    # 媛??좏샇 ?쒖젏??留먰뭾??異붽? (?윟 留ㅼ닔 + 湲덉븸 ?쒖떆)
++                    for idx, row_sig in buy_signals.iterrows():
++                        close_val = row_sig['Close']
++                        price_str = f"{int(close_val):,}?? if close_val >= 100 else f"{close_val:,.2f}"
++                        idx_str = idx.strftime('%Y-%m-%d')
++                        fig_c.add_annotation(
++                            x=idx_str,
++                            y=row_sig['Low'],
++                            text=f"<b>?윟 留ㅼ닔</b><br>{price_str}",
++                            showarrow=True,
++                            arrowhead=2,
++                            arrowsize=1.0,
++                            arrowwidth=2,
++                            arrowcolor="#2ecc71",
++                            ax=0,
++                            ay=45,  # 罹붾뱾 ?섎떒???꾩튂?섎룄濡??묒닔 媛??ㅼ젙
++                            font=dict(color="#2ecc71", size=10, family="malgun gothic"),
++                            bgcolor="#0d1b2a",  # 李⑦듃 諛곌꼍?됱쑝濡?留덉뒪??+                            bordercolor="#2ecc71",
++                            borderwidth=1.5,
++                            borderpad=4,
++                            row=1, col=1
++                        )
++
++        # ?섏쓽 留ㅼ닔 ?④???(?ы듃?대━???깅줉 ???⑷툑???먯꽑?쇰줈 ?쒖떆)
++        portfolio = load_portfolio()
++        my_entry_price = 0
++        if code_disp in portfolio:
++            my_entry_price = portfolio[code_disp]["entry_price"]
++            fig_c.add_trace(go.Scatter(
++                x=date_str_list, y=[my_entry_price] * len(date_str_list),
++                name='?섏쓽 留ㅼ닔?④?', mode='lines',
++                line=dict(color='#ffd700', width=2.0, dash='dashdot')
++            ), row=1, col=1)
++
++        # ?쇰큺 李⑦듃??媛寃?踰붿쐞(y_range)瑜??꾨꼍???숆린?뷀븯湲??꾪븳 ?섎룞 怨꾩궛
++        try:
++            min_val = df_candle[['High', 'Low', 'Close', 'Open']].min().min()
++            max_val = df_candle[['High', 'Low', 'Close', 'Open']].max().max()
++            for col in ['MA5', 'MA20', 'Stop_Loss']:
++                if col in df_candle.columns:
++                    min_val = min(min_val, df_candle[col].min(skipna=True))
++                    max_val = max(max_val, df_candle[col].max(skipna=True))
++            if my_entry_price > 0:
++                min_val = min(min_val, my_entry_price)
++                max_val = max(max_val, my_entry_price)
++            margin = (max_val - min_val) * 0.05 if max_val > min_val else 1000
++            y_range = [min_val - margin, max_val + margin]
++        except Exception:
++            y_range = None
+ 
+         # 嫄곕옒??留됰? (?됱긽: ?곸듅??鍮④컯, ?섎씫???뚮옉)
+         vol_colors = [
+@@ -2347,22 +2856,71 @@ if st.session_state.sel_code:
+             showlegend=False, opacity=0.8
+         ), row=2, col=1)
+ 
++        # ?곗륫 Y異??덇툑(yaxis3)???쒖꽦?뷀븯湲??꾪븳 ?붾? ?щ챸 ?몃젅?댁뒪 二쇱엯 (row/col ?앸왂?섏뿬 layout y3 留ㅽ븨)
++        fig_c.add_trace(go.Scatter(
++            x=date_str_list,
++            y=df_candle['Close'],
++            yaxis='y3',
++            showlegend=False,
++            hoverinfo='skip',
++            mode='markers',
++            marker=dict(opacity=0)
++        ))
++
+         fig_c.update_layout(
+             template='plotly_dark',
+             height=480,
+-            margin=dict(t=20, l=10, r=10, b=10),
++            margin=dict(t=20, l=10, r=55, b=10), # ?곗륫 媛寃??덇툑???꾪븳 ?щ갚
+             xaxis_rangeslider_visible=False,
+             legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
+             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+             plot_bgcolor='#0d1b2a',
+             paper_bgcolor='#0d1b2a',
++            # ?곗륫 媛寃⑹텞???쒖꽦?뷀븯湲??꾪븳 overlay yaxis3 ?뺤쓽 (醫뚯륫 Y異뺢낵 踰붿쐞 ?숆린??
++            yaxis3=dict(
++                overlaying='y',
++                side='right',
++                showgrid=False,
++                tickfont=dict(size=10, color='#888'),
++                anchor='x',
++                tickformat=',d',
++                showticklabels=True,
++                range=y_range,
++                nticks=18 # ?덇툑????珥섏킌???쒖떆
++            )
++        )
++        # 醫뚯륫 Y異??덇툑 ?뺤쓽 諛?珥섏킌???곸슜 (yaxis = row1??二쇨? 異?
++        fig_c.update_yaxes(
++            tickformat=',d',
++            gridcolor='rgba(255,255,255,0.06)',
++            ticks='outside',       # ?덇툑 諛⑺뼢: 諛붽묑
++            showticklabels=True,
++            tickfont=dict(size=10, color='#888'),
++            range=y_range,
++            nticks=18,             # ?덇툑????珥섏킌???쒖떆
++            row=1, col=1
++        )
++
++        # ?꾩옱媛 ?곗륫 Y異??쇰꺼 諛뺤뒪 ?ъ궗 (?곸듅 ??鍮④컯, ?섎씫 ???뚮옉 HTS ?뺥깭)
++        price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
++        fig_c.add_annotation(
++            xref='paper', yref='y',
++            x=1.002, y=last_close,
++            text=f" <b>{int(last_close):,}</b> ",
++            showarrow=False,
++            font=dict(color="#ffffff", size=9, family="malgun gothic"),
++            bgcolor=price_color,
++            bordercolor=price_color,
++            borderwidth=1,
++            borderpad=3,
++            xanchor='left' # Y異뺤꽑 ?곸뿉 寃뱀튂?꾨줉 ?쇱そ ?듭빱 ?뺣젹 諛?row, col ?쒖쇅濡?paper ?듯궧 ?좎?
+         )
++
+         # x異?移댄뀒怨좊━ ???쇰꺼??怨쇰룄??諛吏?諛⑹?瑜??꾪빐 ??8媛??깅쭔 怨좊Ⅴ寃?異붿텧?섏뿬 ?쒖떆
+         tick_indices = np.linspace(0, len(date_str_list) - 1, 8, dtype=int) if len(date_str_list) > 0 else []
+         tick_vals = [date_str_list[i] for i in tick_indices]
+         tick_texts = [date_str_list[i] for i in tick_indices]
+ 
+-        fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=1, col=1)
+         fig_c.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
+         fig_c.update_xaxes(
+             type='category',
+@@ -2380,7 +2938,235 @@ if st.session_state.sel_code:
+             row=2, col=1
+         )
+ 
+-        st.plotly_chart(fig_c, use_container_width=True)
++        # ?? 5遺꾨큺 李⑦듃 ?앹꽦 ?????????????????????????????
++        fig_5m = make_subplots(
++            rows=2, cols=1,
++            row_heights=[0.72, 0.28],
++            vertical_spacing=0.03,
++            shared_xaxes=True
++        )
++        if not df_5min.empty:
++            df_5min_tail = df_5min.tail(60).copy()
++            time_str_list_5m = df_5min_tail['DateTime'].dt.strftime('%H:%M').tolist()
++            
++            fig_5m.add_trace(go.Candlestick(
++                x=time_str_list_5m,
++                open=df_5min_tail['Open'], high=df_5min_tail['High'],
++                low=df_5min_tail['Low'], close=df_5min_tail['Close'],
++                increasing=dict(line=dict(color='#ff6b6b'), fillcolor='#ff6b6b'),
++                decreasing=dict(line=dict(color='#4e9ff5'), fillcolor='#4e9ff5'),
++                name='5遺꾨큺 罹붾뱾', showlegend=False
++            ), row=1, col=1)
++            
++            df_5min_tail['MA5'] = df_5min_tail['Close'].rolling(5).mean()
++            df_5min_tail['MA20'] = df_5min_tail['Close'].rolling(20).mean()
++            
++            fig_5m.add_trace(go.Scatter(
++                x=time_str_list_5m, y=df_5min_tail['MA5'],
++                name='MA5', mode='lines',
++                line=dict(color='#ffd43b', width=1.5)
++            ), row=1, col=1)
++            
++            fig_5m.add_trace(go.Scatter(
++                x=time_str_list_5m, y=df_5min_tail['MA20'],
++                name='MA20', mode='lines',
++                line=dict(color='#ff922b', width=1.5)
++            ), row=1, col=1)
++            
++            vol_colors_5m = [
++                '#ff6b6b' if c >= o else '#4e9ff5'
++                for c, o in zip(df_5min_tail['Close'], df_5min_tail['Open'])
++            ]
++            fig_5m.add_trace(go.Bar(
++                x=time_str_list_5m, y=df_5min_tail['Volume'],
++                name='嫄곕옒??, marker_color=vol_colors_5m,
++                showlegend=False, opacity=0.8
++            ), row=2, col=1)
++
++            # 5遺꾨큺 媛寃?踰붿쐞(y_range) ?섎룞 怨꾩궛
++            try:
++                min_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].min().min()
++                max_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].max().max()
++                margin_5m = (max_val_5m - min_val_5m) * 0.05 if max_val_5m > min_val_5m else 100
++                y_range_5m = [min_val_5m - margin_5m, max_val_5m + margin_5m]
++            except Exception:
++                y_range_5m = None
++
++            # ?곗륫 Y異??덇툑(yaxis3)???쒖꽦?뷀븯湲??꾪븳 ?붾? ?щ챸 ?몃젅?댁뒪 二쇱엯 (row/col ?앸왂?섏뿬 layout y3 留ㅽ븨)
++            fig_5m.add_trace(go.Scatter(
++                x=time_str_list_5m,
++                y=df_5min_tail['Close'],
++                yaxis='y3',
++                showlegend=False,
++                hoverinfo='skip',
++                mode='markers',
++                marker=dict(opacity=0)
++            ))
++
++            last_5m_close = df_5min_tail['Close'].iloc[-1]
++            fig_5m.update_layout(
++                template='plotly_dark',
++                height=480,
++                margin=dict(t=20, l=10, r=55, b=10), # ?곗륫 ?덇툑???꾪븳 ?щ갚
++                xaxis_rangeslider_visible=False,
++                legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
++                font=dict(family='malgun gothic, nanum gothic, sans-serif'),
++                plot_bgcolor='#0d1b2a',
++                paper_bgcolor='#0d1b2a',
++                # ?곗륫 媛寃⑹텞???쒖꽦?뷀븯湲??꾪븳 overlay yaxis3 ?뺤쓽 (醫뚯륫 Y異뺢낵 踰붿쐞 ?숆린??
++                yaxis3=dict(
++                    overlaying='y',
++                    side='right',
++                    showgrid=False,
++                    tickfont=dict(size=10, color='#888'),
++                    anchor='x',
++                    tickformat=',d',
++                    showticklabels=True,
++                    range=y_range_5m,
++                    nticks=18 # ?덇툑????珥섏킌???쒖떆
++                )
++            )
++            price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
++            fig_5m.add_annotation(
++                xref='paper', yref='y',
++                x=1.002, y=last_5m_close,
++                text=f" <b>{int(last_5m_close):,}</b> ",
++                showarrow=False,
++                font=dict(color="#ffffff", size=9, family="malgun gothic"),
++                bgcolor=price_color,
++                bordercolor=price_color,
++                borderwidth=1,
++                borderpad=3,
++                xanchor='left'
++            )
++            fig_5m.update_yaxes(
++                tickformat=',d',
++                gridcolor='rgba(255,255,255,0.06)',
++                ticks='outside',
++                showticklabels=True,
++                tickfont=dict(size=10, color='#888'),
++                range=y_range_5m,
++                nticks=18,             # ?덇툑????珥섏킌???쒖떆
++                row=1, col=1
++            )
++            fig_5m.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
++            fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
++            fig_5m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, row=2, col=1)
++
++        # ?? 1遺꾨큺 李⑦듃 ?앹꽦 ?????????????????????????????
++        fig_1m = make_subplots(
++            rows=2, cols=1,
++            row_heights=[0.72, 0.28],
++            vertical_spacing=0.03,
++            shared_xaxes=True
++        )
++        if not df_1min.empty:
++            df_1min_tail = df_1min.tail(90).copy()
++            time_str_list_1m = df_1min_tail['DateTime'].dt.strftime('%H:%M').tolist()
++            
++            fig_1m.add_trace(go.Scatter(
++                x=time_str_list_1m, y=df_1min_tail['Close'],
++                mode='lines', name='1遺꾨큺 醫낃?',
++                line=dict(color='#00e5ff', width=2),
++                fill='toself', fillcolor='rgba(0, 229, 255, 0.05)'
++            ), row=1, col=1)
++            
++            vol_colors_1m = []
++            for i in range(len(df_1min_tail)):
++                if i == 0:
++                    vol_colors_1m.append('#ff6b6b')
++                else:
++                    vol_colors_1m.append('#ff6b6b' if df_1min_tail['Close'].iloc[i] >= df_1min_tail['Close'].iloc[i-1] else '#4e9ff5')
++            fig_1m.add_trace(go.Bar(
++                x=time_str_list_1m, y=df_1min_tail['Volume'],
++                name='嫄곕옒??, marker_color=vol_colors_1m,
++                showlegend=False, opacity=0.8
++            ), row=2, col=1)
++
++            # 1遺꾨큺 媛寃?踰붿쐞(y_range) ?섎룞 怨꾩궛
++            try:
++                min_val_1m = df_1min_tail['Close'].min()
++                max_val_1m = df_1min_tail['Close'].max()
++                margin_1m = (max_val_1m - min_val_1m) * 0.05 if max_val_1m > min_val_1m else 100
++                y_range_1m = [min_val_1m - margin_1m, max_val_1m + margin_1m]
++            except Exception:
++                y_range_1m = None
++
++            # ?곗륫 Y異??덇툑(yaxis3)???쒖꽦?뷀븯湲??꾪븳 ?붾? ?щ챸 ?몃젅?댁뒪 二쇱엯 (row/col ?앸왂?섏뿬 layout y3 留ㅽ븨)
++            fig_1m.add_trace(go.Scatter(
++                x=time_str_list_1m,
++                y=df_1min_tail['Close'],
++                yaxis='y3',
++                showlegend=False,
++                hoverinfo='skip',
++                mode='markers',
++                marker=dict(opacity=0)
++            ))
++
++            last_1m_close = df_1min_tail['Close'].iloc[-1]
++            fig_1m.update_layout(
++                template='plotly_dark',
++                height=480,
++                margin=dict(t=20, l=10, r=55, b=10), # ?곗륫 ?덇툑???꾪븳 ?щ갚
++                xaxis_rangeslider_visible=False,
++                legend=dict(orientation='h', x=0, y=1.02, font=dict(size=11)),
++                font=dict(family='malgun gothic, nanum gothic, sans-serif'),
++                plot_bgcolor='#0d1b2a',
++                paper_bgcolor='#0d1b2a',
++                # ?곗륫 媛寃⑹텞???쒖꽦?뷀븯湲??꾪븳 overlay yaxis3 ?뺤쓽 (醫뚯륫 Y異뺢낵 踰붿쐞 ?숆린??
++                yaxis3=dict(
++                    overlaying='y',
++                    side='right',
++                    showgrid=False,
++                    tickfont=dict(size=10, color='#888'),
++                    anchor='x',
++                    tickformat=',d',
++                    showticklabels=True,
++                    range=y_range_1m,
++                    nticks=18 # ?덇툑????珥섏킌???쒖떆
++                )
++            )
++            price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
++            fig_1m.add_annotation(
++                xref='paper', yref='y',
++                x=1.002, y=last_1m_close,
++                text=f" <b>{int(last_1m_close):,}</b> ",
++                showarrow=False,
++                font=dict(color="#ffffff", size=9, family="malgun gothic"),
++                bgcolor=price_color,
++                bordercolor=price_color,
++                borderwidth=1,
++                borderpad=3,
++                xanchor='left'
++            )
++            fig_1m.update_yaxes(
++                tickformat=',d',
++                gridcolor='rgba(255,255,255,0.06)',
++                ticks='outside',
++                showticklabels=True,
++                tickfont=dict(size=10, color='#888'),
++                range=y_range_1m,
++                nticks=18,             # ?덇툑????珥섏킌???쒖떆
++                row=1, col=1
++            )
++            fig_1m.update_yaxes(tickformat=',d', gridcolor='rgba(255,255,255,0.06)', row=2, col=1)
++            fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', showticklabels=False, row=1, col=1)
++            fig_1m.update_xaxes(type='category', gridcolor='rgba(255,255,255,0.04)', tickangle=-30, row=2, col=1)
++
++        # ?? ???덉씠?꾩썐 ?뚮뜑留??????????????????????????????
++        tab_day, tab_5m, tab_1m = st.tabs(["?뱟 ?쇰큺 李⑦듃", "?깍툘 5遺꾨큺 (罹붾뱾)", "??1遺꾨큺 (?쇱씤)"])
++        with tab_day:
++            st.plotly_chart(fig_c, use_container_width=True)
++        with tab_5m:
++            if not df_5min.empty:
++                st.plotly_chart(fig_5m, use_container_width=True)
++            else:
++                st.info("?좑툘 5遺꾨큺 ?곗씠?곕? 遺덈윭?????녾굅???댁옣?쇱엯?덈떎.")
++        with tab_1m:
++            if not df_1min.empty:
++                st.plotly_chart(fig_1m, use_container_width=True)
++            else:
++                st.info("?좑툘 1遺꾨큺 ?곗씠?곕? 遺덈윭?????녾굅???댁옣?쇱엯?덈떎.")
+ 
+     st.divider()
+ 
+@@ -2426,8 +3212,4 @@ html_script = """
+     </script>
+ """
+ 
+-st.components.v1.html(
+-    html_script,
+-    height=0,
+-    width=0
+-)
++st.html(html_script)

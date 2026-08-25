@@ -1,0 +1,693 @@
+﻿diff --git a/app.py b/app.py
+index 3cf2e10..0959c90 100644
+--- a/app.py
++++ b/app.py
+@@ -110,38 +110,52 @@ def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, mar
+     ]
+     
+     last_err = None
++    is_quota_limit = False
++    is_invalid_key = False
++    
+     for model_name in models_to_try:
+         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+-        for attempt in range(1):
+-            try:
+-                r = requests.post(url, json=payload, headers=headers, timeout=5)
+-                if r.status_code == 200:
+-                    res_json = r.json()
+-                    candidates = res_json.get('candidates', [])
+-                    if candidates:
+-                        content = candidates[0].get('content', {})
+-                        parts = content.get('parts', [])
+-                        if parts:
+-                            return parts[0].get('text', '').strip()
+-                    last_err = "API ?묐떟 蹂몃Ц???띿뒪???곗씠?곌? ?꾨씫?섏뿀?듬땲??"
+-                else:
+-                    last_err = f"API ?묐떟 肄붾뱶: {r.status_code} ({r.text[:100]})"
+-                    # ?좊떦??珥덇낵(429), ?쒕쾭 ?뺤껜(503), 紐⑤뜽 ?놁쓬(404) ???좎냽???꾪솚???꾪빐 利됱떆 ?ㅼ쓬 紐⑤뜽濡??대갚
+-                    if r.status_code in [404, 429, 503]:
+-                        break
+-            except Exception as e:
+-                last_err = str(e)
+-            time.sleep(0.1)
++        try:
++            r = requests.post(url, json=payload, headers=headers, timeout=5)
++            if r.status_code == 200:
++                res_json = r.json()
++                candidates = res_json.get('candidates', [])
++                if candidates:
++                    content = candidates[0].get('content', {})
++                    parts = content.get('parts', [])
++                    if parts:
++                        return parts[0].get('text', '').strip()
++                last_err = "API ?묐떟 蹂몃Ц???띿뒪???곗씠?곌? ?꾨씫?섏뿀?듬땲??"
++            else:
++                last_err = f"API ?묐떟 肄붾뱶: {r.status_code} ({r.text[:100]})"
++                
++                # 429 (?띾룄 ?쒗븳)??寃쎌슦 利됱떆 ?ㅻⅨ 紐⑤뜽 ?쒕룄 以묐떒 (遺덊븘?뷀븳 以묐났 ?붿껌 理쒖냼??
++                if r.status_code == 429:
++                    is_quota_limit = True
++                    break
++                # 400 (?섎せ??API ????寃쎌슦 利됱떆 以묐떒
++                elif r.status_code == 400:
++                    is_invalid_key = True
++                    break
++        except Exception as e:
++            last_err = str(e)
++            if "429" in last_err or "Quota" in last_err:
++                is_quota_limit = True
++                break
++            elif "400" in last_err or "API key" in last_err:
++                is_invalid_key = True
++                break
++        time.sleep(0.1)
+             
+     # ?먮윭 硫붿떆吏 ?쒓? ?뺤젣
+     friendly_err = "?꾩옱 API ?쒕쾭????듭떊???쇱떆?곸쑝濡?吏?곕릺怨??덉뒿?덈떎. ?좎떆 ???ㅼ떆 ?쒕룄??二쇱꽭??"
+-    if last_err:
++    if is_quota_limit:
++        friendly_err = "Gemini API ?몄텧 ?띾룄 ?쒗븳??珥덇낵?덉뒿?덈떎. ?좎떆 ???ㅼ떆 ?쒕룄??二쇱꽭??"
++    elif is_invalid_key:
++        friendly_err = "?낅젰?섏떊 Gemini API Key媛 ?щ컮瑜댁? ?딆뒿?덈떎. ?ъ씠?쒕컮 ?ㅼ젙???ㅼ떆 ?뺤씤??二쇱꽭??"
++    elif last_err:
+         if "503" in last_err or "high demand" in last_err:
+             friendly_err = "Gemini API ?쒕쾭???쇱떆?곸쑝濡??묒냽?먭? 紐곕젮 ?묐떟??吏?곕릺怨??덉뒿?덈떎. ?좎떆 ???덈줈怨좎묠??二쇱꽭??"
+-        elif "429" in last_err or "Quota" in last_err:
+-            friendly_err = "Gemini API ?몄텧 ?띾룄 ?쒗븳??珥덇낵?덉뒿?덈떎. ?좎떆 ???ㅼ떆 ?쒕룄??二쇱꽭??"
+-        elif "400" in last_err or "API key" in last_err:
+-            friendly_err = "?낅젰?섏떊 Gemini API Key媛 ?щ컮瑜댁? ?딆뒿?덈떎. ?ъ씠?쒕컮 ?ㅼ젙???ㅼ떆 ?뺤씤??二쇱꽭??"
+             
+     raise RuntimeWarning(f"?좑툘 {friendly_err}")
+             
+@@ -381,6 +395,48 @@ def fetch_naver_realtime_supply():
+ 
+ 
+ import json
++import threading
++from concurrent.futures import ThreadPoolExecutor
++
++def _fetch_remote_portfolio_raw():
++    gh_token = st.secrets.get("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))
++    if gh_token:
++        import base64
++        import requests
++        url = "https://api.github.com/repos/k2000kms-del/gd3-market-hub/contents/data/my_portfolio.json"
++        headers = {"Authorization": f"token {gh_token}", "Accept": "application/vnd.github.v3+json"}
++        try:
++            res = requests.get(url, headers=headers, timeout=3)
++            if res.status_code == 200:
++                content_b64 = res.json().get('content', '')
++                if content_b64:
++                    content_str = base64.b64decode(content_b64).decode('utf-8')
++                    return json.loads(content_str)
++        except Exception as e:
++            print(f"DEBUG: _fetch_remote_portfolio_raw failed: {e}")
++    return None
++
++def _load_portfolio_raw():
++    base_dir = os.path.dirname(os.path.abspath(__file__))
++    port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
++    
++    remote_data = _fetch_remote_portfolio_raw()
++    if remote_data is not None:
++        try:
++            os.makedirs(os.path.dirname(port_path), exist_ok=True)
++            with open(port_path, 'w', encoding='utf-8') as f:
++                json.dump(remote_data, f, ensure_ascii=False, indent=2)
++        except Exception:
++            pass
++        return remote_data
++        
++    if os.path.exists(port_path):
++        try:
++            with open(port_path, 'r', encoding='utf-8') as f:
++                return json.load(f)
++        except Exception as e:
++            print(f"DEBUG: _load_portfolio_raw fallback failed: {e}")
++    return {}
+ 
+ @st.cache_data(ttl=60)
+ def fetch_remote_portfolio():
+@@ -507,9 +563,8 @@ DATA_FILES = [
+     'df_supply_intraday.csv',
+ ]
+ 
+-@st.cache_data(ttl=300)  # 5遺?罹먯떆 (?쇰큺 ?곗씠?곕뒗 ?먯＜ 諛붾뚯? ?딆쓬)
+-def get_stock_history(code: str):
+-    """醫낅ぉ ?쇰큺 ?곗씠??議고쉶 (90??"""
++def _get_stock_history_raw(code: str):
++    """醫낅ぉ ?쇰큺 ?곗씠??議고쉶 (90?? - 罹먯떆 ?녿뒗 ?대? ?⑥닔"""
+     try:
+         # 20???밸뱾由ъ뿉 異쒓뎄(Chandelier Exit) 怨꾩궛??異⑸텇???곗씠?곕? ?⑤뵫?섍린 ?꾪빐 180???꾨???媛?몄샂 (?곸뾽??湲곗? ??120??
+         start = (pd.Timestamp.now() - pd.Timedelta(days=180)).strftime('%Y-%m-%d')
+@@ -518,9 +573,13 @@ def get_stock_history(code: str):
+     except Exception:
+         return pd.DataFrame()
+ 
++@st.cache_data(ttl=300)  # 5遺?罹먯떆 (?쇰큺 ?곗씠?곕뒗 ?먯＜ 諛붾뚯? ?딆쓬)
++def get_stock_history(code: str):
++    """醫낅ぉ ?쇰큺 ?곗씠??議고쉶 (90??"""
++    return _get_stock_history_raw(code)
+ 
+-@st.cache_data(ttl=3600*20)
+-def get_kis_access_token(app_key: str, app_secret: str) -> str:
++
++def _get_kis_access_token_raw(app_key: str, app_secret: str) -> str:
+     try:
+         url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
+         headers = {"content-type": "application/json"}
+@@ -537,11 +596,14 @@ def get_kis_access_token(app_key: str, app_secret: str) -> str:
+         print(f"DEBUG: KIS token error: {e}")
+     return ""
+ 
+-@st.cache_data(ttl=60)
+-def get_kis_minute_history(app_key: str, app_secret: str, code: str):
+-    """KIS API ?뱀씪 1遺꾨큺 ?곗씠??議고쉶 (OHLCV ?꾨꼍 吏?? ?섏씠吏?泥섎━濡???390遊??섏쭛)"""
++@st.cache_data(ttl=3600*20)
++def get_kis_access_token(app_key: str, app_secret: str) -> str:
++    return _get_kis_access_token_raw(app_key, app_secret)
++
++def _get_kis_minute_history_raw(app_key: str, app_secret: str, code: str):
++    """KIS API ?뱀씪 1遺꾨큺 ?곗씠??議고쉶 (罹먯떆 ?녿뒗 ?대? ?⑥닔)"""
+     try:
+-        token = get_kis_access_token(app_key, app_secret)
++        token = _get_kis_access_token_raw(app_key, app_secret)
+         if not token:
+             return pd.DataFrame()
+             
+@@ -633,10 +695,14 @@ def get_kis_minute_history(app_key: str, app_secret: str, code: str):
+         print(f"DEBUG: KIS minute history error: {e}")
+     return pd.DataFrame()
+ 
+-
+ @st.cache_data(ttl=60)
+-def get_minute_history(code: str, count: int = 800):
+-    """?ㅼ씠踰??ㅼ떆媛?1遺꾨큺 ?곗씠??議고쉶"""
++def get_kis_minute_history(app_key: str, app_secret: str, code: str):
++    """KIS API ?뱀씪 1遺꾨큺 ?곗씠??議고쉶 (OHLCV ?꾨꼍 吏?? 罹먯떛 吏??"""
++    return _get_kis_minute_history_raw(app_key, app_secret, code)
++
++
++def _get_minute_history_raw(code: str, count: int = 800):
++    """?ㅼ씠踰??ㅼ떆媛?1遺꾨큺 ?곗씠??議고쉶 (罹먯떆 ?녿뒗 ?대? ?⑥닔)"""
+     try:
+         url = f"https://api.finance.naver.com/siseJson.naver?symbol={code}&requestType=0&timeframe=minute&count={count}"
+         res = requests.get(url, timeout=5)
+@@ -683,6 +749,11 @@ def get_minute_history(code: str, count: int = 800):
+         print(f"DEBUG: Failed to get minute history: {e}")
+     return pd.DataFrame()
+ 
++@st.cache_data(ttl=60)
++def get_minute_history(code: str, count: int = 800):
++    """?ㅼ씠踰??ㅼ떆媛?1遺꾨큺 ?곗씠??議고쉶 (罹먯떛 吏??"""
++    return _get_minute_history_raw(code, count)
++
+ 
+ def resample_to_5min(df_1min):
+     """1遺꾨큺 ?곗씠?곕? 5遺??⑥쐞濡?Resampling?섏뿬 5遺꾨큺 OHLCV ?앹꽦"""
+@@ -888,6 +959,222 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min'):
+     return df
+ 
+ 
++# ?? 諛깃렇?쇱슫???ы듃?대━???ㅼ틪 愿???꾩뿭 ?곹깭 ??
++_daily_signals_sent_lock = threading.Lock()
++_daily_signals_sent_date = ""
++_daily_signals_sent_codes = set()
++
++def run_portfolio_background_scanner():
++    """
++    諛깃렇?쇱슫?쒖뿉??二쇨린?곸쑝濡??ы듃?대━?ㅻ? ?ㅼ틪?섎뒗 ?곕が ?ㅻ젅??猷⑦봽
++    """
++    global _daily_signals_sent_date, _daily_signals_sent_codes
++    
++    # ?뚯씪 濡쒓렇 湲곕줉
++    try:
++        with open("daemon_debug.txt", "a", encoding="utf-8") as f_log:
++            f_log.write(f"[{datetime.now()}] DEBUG: run_portfolio_background_scanner daemon thread started.\n")
++    except Exception:
++        pass
++    
++    # KST ?쒓컙? ?ㅼ젙???꾪빐 ?대? import 諛?怨꾩궛
++    from datetime import timezone, timedelta
++    _KST = timezone(timedelta(hours=9))
++    
++    while True:
++        try:
++            try:
++                with open("daemon_debug.txt", "a", encoding="utf-8") as f_log:
++                    f_log.write(f"[{datetime.now()}] DEBUG: Loop iteration started.\n")
++            except Exception:
++                pass
++                
++            # 1. ?붾젅洹몃옩 諛?KIS ?ㅼ젙 濡쒕뱶
++            tg_token   = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", ""))
++            tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_ID",   ""))
++            kis_key    = st.secrets.get("KIS_APP_KEY", st.secrets.get("KIS_KEY", os.environ.get("KIS_APP_KEY", os.environ.get("KIS_KEY", ""))))
++            kis_sec    = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.environ.get("KIS_APP_SECRET", os.environ.get("KIS_SECRET", ""))))
++            
++            if not (tg_token and tg_chat_id):
++                try:
++                    with open("daemon_debug.txt", "a", encoding="utf-8") as f_log:
++                        f_log.write(f"[{datetime.now()}] DEBUG: Telegram credentials missing (token: {bool(tg_token)}, chat_id: {bool(tg_chat_id)}). Sleeping...\n")
++                except Exception:
++                    pass
++                time.sleep(15)
++                continue
++                
++            try:
++                from telegram_notifier import notify_daily_buy_signal, notify_daily_sell_signal
++            except ImportError:
++                notify_daily_buy_signal = None
++                notify_daily_sell_signal = None
++                
++            # 2. ?ы듃?대━??濡쒕뱶
++            portfolio_data = _load_portfolio_raw()
++            if not portfolio_data:
++                try:
++                    with open("daemon_debug.txt", "a", encoding="utf-8") as f_log:
++                        f_log.write(f"[{datetime.now()}] DEBUG: Portfolio data is empty. Sleeping...\n")
++                except Exception:
++                    pass
++                time.sleep(15)
++                continue
++                
++            # ?쇰큺 ?대? 諛쒖넚???뺣낫 ?숆린??+            today_str = datetime.now(_KST).strftime('%Y-%m-%d')
++            with _daily_signals_sent_lock:
++                if _daily_signals_sent_date != today_str:
++                    _daily_signals_sent_date = today_str
++                    _daily_signals_sent_codes.clear()
++            
++            # 媛?醫낅ぉ??泥섎━???寃??⑥닔
++            def scan_single_stock(code, info):
++                try:
++                    name = info.get('name', code)
++                    entry_price = float(info.get('entry_price', 0.0))
++                    
++                    # 1遺꾨큺 ?곗씠???섏쭛 諛??곗궛
++                    df_scan = pd.DataFrame()
++                    if kis_key and kis_sec:
++                        df_scan = _get_kis_minute_history_raw(kis_key, kis_sec, code)
++                    if df_scan.empty:
++                        df_scan = _get_minute_history_raw(code, count=800)
++                        
++                    if not df_scan.empty and len(df_scan) >= 20:
++                        df_scan = calculate_intraday_signals(df_scan, my_entry_price=entry_price)
++                        last_row = df_scan.iloc[-1]
++                        if 'DateTime' in df_scan.columns and not pd.isna(last_row.get('DateTime')):
++                            # UTC/KST 李⑥씠瑜?媛먯븞???쒓컙李?泥댄겕
++                            time_diff = (pd.Timestamp.now() - pd.to_datetime(last_row['DateTime'])).total_seconds()
++                            if time_diff < 300: # 5遺??대궡
++                                rsi_v = float(last_row['RSI_14']) if 'RSI_14' in last_row and pd.notna(last_row.get('RSI_14')) else None
++                                vwap_v = float(last_row['VWAP']) if 'VWAP' in last_row and pd.notna(last_row.get('VWAP')) else None
++                                if last_row.get('Buy_Signal') == True:
++                                    live_logger.log_buy_signal(
++                                        ticker=code, price=float(last_row['Close']),
++                                        timestamp=last_row['DateTime'], name=name,
++                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
++                                        rsi=rsi_v, vwap=vwap_v
++                                    )
++                                elif last_row.get('Exit_Signal') == True:
++                                    live_logger.log_exit_signal(
++                                        ticker=code, price=float(last_row['Close']),
++                                        timestamp=last_row['DateTime'], name=name,
++                                        tg_token=tg_token, tg_chat_id=tg_chat_id
++                                    )
++                                    
++                    # ?쇰큺 ?쒓렇???ㅼ틪
++                    with _daily_signals_sent_lock:
++                        already_sent = code in _daily_signals_sent_codes
++                        
++                    if not already_sent:
++                        df_daily = _get_stock_history_raw(code)
++                        if not df_daily.empty and len(df_daily) >= 25:
++                            df_daily = df_daily.copy()
++                            df_daily['MA10'] = df_daily['Close'].rolling(10).mean()
++                            df_daily['MA20'] = df_daily['Close'].rolling(20).mean()
++                            df_daily['MA60'] = df_daily['Close'].rolling(60, min_periods=30).mean()
++                            df_daily = calculate_rsi(df_daily, period=14)
++                            df_daily['Vol_MA20'] = df_daily['Volume'].rolling(20).mean().shift(1)
++                            df_daily['Vol_Ratio'] = (df_daily['Volume'] / df_daily['Vol_MA20']).round(2)
++                            
++                            prev_row = df_daily.iloc[-2]
++                            cur_row = df_daily.iloc[-1]
++                            
++                            d_close = float(cur_row['Close'])
++                            d_rsi = float(cur_row['RSI_14']) if pd.notna(cur_row.get('RSI_14')) else None
++                            d_ma10 = float(cur_row['MA10']) if pd.notna(cur_row.get('MA10')) else None
++                            d_ma20 = float(cur_row['MA20']) if pd.notna(cur_row.get('MA20')) else None
++                            d_vol_r = float(cur_row['Vol_Ratio']) if pd.notna(cur_row.get('Vol_Ratio')) else None
++                            p_ma10 = float(prev_row['MA10']) if pd.notna(prev_row.get('MA10')) else None
++                            p_ma20 = float(prev_row['MA20']) if pd.notna(prev_row.get('MA20')) else None
++                            d_date = str(cur_row.name.date()) if hasattr(cur_row.name, 'date') else today_str
++                            
++                            d_pnl_pct = ((d_close - entry_price) / entry_price * 100) if entry_price > 0 else None
++                            daily_signal_sent = False
++                            
++                            # ?쇰큺 留ㅼ닔 議곌굔
++                            golden_cross = (
++                                p_ma10 is not None and p_ma20 is not None and
++                                d_ma10 is not None and d_ma20 is not None and
++                                p_ma10 <= p_ma20 and d_ma10 > d_ma20
++                            )
++                            rsi_ok_buy = d_rsi is not None and d_rsi <= 65
++                            vol_surge_d = d_vol_r is not None and d_vol_r >= 2.0
++                            
++                            if golden_cross and rsi_ok_buy and vol_surge_d:
++                                reason = f"MA10/MA20 怨⑤뱺?щ줈??+ RSI {d_rsi:.1f} (<=65 ?덉쟾援ш컙) + 嫄곕옒??{d_vol_r:.1f}諛??쒖?"
++                                if notify_daily_buy_signal:
++                                    notify_daily_buy_signal(
++                                        token=tg_token, chat_id=tg_chat_id,
++                                        ticker=code, name=name, price=d_close, date=d_date,
++                                        rsi=d_rsi, ma5=d_ma10, ma20=d_ma20, vol_ratio=d_vol_r,
++                                        signal_reason=reason
++                                    )
++                                daily_signal_sent = True
++                                
++                            # ?쇰큺 留ㅻ룄 議곌굔
++                            if not daily_signal_sent:
++                                dead_cross = (
++                                    p_ma10 is not None and p_ma20 is not None and
++                                    d_ma10 is not None and d_ma20 is not None and
++                                    p_ma10 >= p_ma20 and d_ma10 < d_ma20
++                                )
++                                rsi_overbought = d_rsi is not None and d_rsi >= 80
++                                sl_hit = d_pnl_pct is not None and d_pnl_pct <= -3.0
++                                
++                                if (dead_cross and vol_surge_d) or rsi_overbought or sl_hit:
++                                    reason_parts = []
++                                    if dead_cross and vol_surge_d:
++                                        reason_parts.append(f"MA10/MA20 ?곕뱶?щ줈??+ 嫄곕옒??{d_vol_r:.1f}諛??뺤씤")
++                                    if rsi_overbought:
++                                        reason_parts.append(f"RSI 怨쇰ℓ??{d_rsi:.1f}) ??李⑥씡?ㅽ쁽 寃??)
++                                    if sl_hit:
++                                        reason_parts.append(f"?먯젅???댄깉 ({d_pnl_pct:.1f}% / 湲곗? -3%)")
++                                    reason = " + ".join(reason_parts)
++                                    
++                                    if notify_daily_sell_signal:
++                                        notify_daily_sell_signal(
++                                            token=tg_token, chat_id=tg_chat_id,
++                                            ticker=code, name=name, price=d_close, date=d_date,
++                                            entry_price=entry_price if entry_price > 0 else None,
++                                            rsi=d_rsi, ma5=d_ma10, ma20=d_ma20,
++                                            signal_reason=reason
++                                        )
++                                    daily_signal_sent = True
++                                    
++                            if daily_signal_sent:
++                                with _daily_signals_sent_lock:
++                                    _daily_signals_sent_codes.add(code)
++                                    
++                except Exception as ex:
++                    print(f"DEBUG: Back scanner thread single stock [{code}] error: {ex}")
++                    
++            # 3. ThreadPoolExecutor瑜??댁슜??蹂묐젹 ?ㅼ틪 ?곸슜
++            # ?숈떆 ?ㅻ젅???섎뒗 ?ы듃?대━??媛쒖닔 ?먮뒗 ?곷떦?????? 5)濡??쒗븳
++            max_workers = min(len(portfolio_data), 5) if portfolio_data else 1
++            with ThreadPoolExecutor(max_workers=max_workers) as executor:
++                futures = [executor.submit(scan_single_stock, code, info) for code, info in portfolio_data.items()]
++                # ?ㅼ틪 ?꾨즺 ?湲?+                for fut in futures:
++                    fut.result()
++                    
++        except Exception as err:
++            print(f"DEBUG: Back scanner thread loop error: {err}")
++            
++        # 15珥??湲????ㅼ쓬 ?ㅼ틪
++        time.sleep(15)
++
++@st.cache_resource
++def start_background_portfolio_scanner():
++    """
++    理쒖큹 湲곕룞 ??諛깃렇?쇱슫???ㅻ젅?쒕? 1??援щ룞?섍퀬 ?ㅻ젅??媛앹껜瑜?由ы꽩??
++    """
++    t = threading.Thread(target=run_portfolio_background_scanner, daemon=True, name="PortfolioScannerDaemon")
++    t.start()
++    return t
++
+ 
+ @st.cache_data(ttl=60)  # 60珥?罹먯떆 ??rerun留덈떎 ?꾩껜 ?쒖옣 ?ㅼ슫濡쒕뱶 諛⑹? (?듭떖 蹂묐ぉ)
+ def fetch_live_stock_listing():
+@@ -1848,180 +2135,25 @@ kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.envir
+ tg_token   = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+ tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_ID",   ""))
+ 
+-# ?? ?ы듃?대━???꾩껜 醫낅ぉ ?먮룞 ?ㅼ틪 (?붾젅洹몃옩 ?뚮엺) ?????????????????????????
+-# ??쒕낫??媛깆떊(5珥??먮룞 ?덈줈怨좎묠 ?ы븿)留덈떎 ?ы듃?대━??蹂댁쑀 醫낅ぉ ?꾩껜瑜?-# 1遺꾨큺 湲곗??쇰줈 ?좏샇瑜?寃?ы븯??留ㅼ닔/泥?궛 ?좏샇 諛쒖깮 ??利됱떆 ?뚮엺???꾩넚?⑸땲??
+-# 異붽?濡??쇰큺 湲곗? 留ㅼ닔/留ㅻ룄 ?쒓렇?먮룄 ?섎（ 1???ㅼ틪?섏뿬 ?뚮엺???꾩넚?⑸땲??
+-if tg_token and tg_chat_id:
+-    try:
+-        from telegram_notifier import notify_daily_buy_signal, notify_daily_sell_signal
+-    except ImportError:
+-        notify_daily_buy_signal = None
+-        notify_daily_sell_signal = None
+-
+-    try:
+-        _port_scan = load_portfolio()
+-        if _port_scan:
+-            # ?? ?쇰큺 ?쒓렇???꾩넚 ?щ? (?섎（ 1?뚮쭔) ??????????????????????????????
+-            # session_state???ㅻ뒛 ?좎쭨瑜?湲곕줉??以묐났 諛쒖넚??諛⑹??⑸땲??
+-            _today_str = datetime.now(_KST).strftime('%Y-%m-%d')
+-            _daily_sent_key = f"daily_signal_sent_{_today_str}"
+-            _daily_already_sent = st.session_state.get(_daily_sent_key, set())
+-
+-            for _scan_code, _scan_info in _port_scan.items():
+-                try:
+-                    _scan_name  = _scan_info.get('name', _scan_code)
+-                    _scan_entry = float(_scan_info.get('entry_price', 0.0))
+-
+-                    # ?? [1] 1遺꾨큺 ?ㅼ틮???좏샇 ?ㅼ틪 ??????????????????????????????
+-                    _df_scan = pd.DataFrame()
+-                    if kis_key and kis_sec:
+-                        _df_scan = get_kis_minute_history(kis_key, kis_sec, _scan_code)
+-                    if _df_scan.empty:
+-                        _df_scan = get_minute_history(_scan_code, count=800)
+-
+-                    if not _df_scan.empty and len(_df_scan) >= 20:
+-                        _df_scan = calculate_intraday_signals(_df_scan, my_entry_price=_scan_entry)
+-                        _last = _df_scan.iloc[-1]
+-                        if 'DateTime' in _df_scan.columns and not pd.isna(_last.get('DateTime')):
+-                            _time_diff = (pd.Timestamp.now() - pd.to_datetime(_last['DateTime'])).total_seconds()
+-                            if _time_diff < 300:  # 5遺??대궡 ?좏샇留??덉슜
+-                                _rsi_v  = float(_last['RSI_14']) if 'RSI_14' in _last and pd.notna(_last.get('RSI_14')) else None
+-                                _vwap_v = float(_last['VWAP'])   if 'VWAP'   in _last and pd.notna(_last.get('VWAP'))   else None
+-                                if _last.get('Buy_Signal') == True:
+-                                    live_logger.log_buy_signal(
+-                                        ticker=_scan_code, price=float(_last['Close']),
+-                                        timestamp=_last['DateTime'], name=_scan_name,
+-                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
+-                                        rsi=_rsi_v, vwap=_vwap_v,
+-                                    )
+-                                elif _last.get('Exit_Signal') == True:
+-                                    live_logger.log_exit_signal(
+-                                        ticker=_scan_code, price=float(_last['Close']),
+-                                        timestamp=_last['DateTime'], name=_scan_name,
+-                                        tg_token=tg_token, tg_chat_id=tg_chat_id,
+-                                    )
+-
+-                    # ?? [2] ?쇰큺 ?쒓렇???ㅼ틪 (?섎（ 1?? ?뱀씪 誘몃컻??醫낅ぉ留? ?????
+-                    # [諛깊뀒?ㅽ듃 理쒖쟻 ?뚮씪誘명꽣 ??10醫낅ぉ 2?꾩튂, PF 8.89, ?밸쪧 66.7%]
+-                    if _scan_code in _daily_already_sent:
+-                        continue  # ?ㅻ뒛 ?대? 諛쒖넚 ???ㅽ궢
+-
+-                    _df_daily = get_stock_history(_scan_code)
+-                    if _df_daily.empty or len(_df_daily) < 25:
+-                        continue
+-
+-                    # ?? ?쇰큺 湲곗닠吏??怨꾩궛 ?????????????????????????????????????
+-                    _df_daily = _df_daily.copy()
+-                    # MA10/MA20 (諛깊뀒?ㅽ듃 理쒖쟻: MA5/MA20蹂대떎 ?꾪뻾??媛먯냼, ?좊ː???μ긽)
+-                    _df_daily['MA10'] = _df_daily['Close'].rolling(10).mean()
+-                    _df_daily['MA20'] = _df_daily['Close'].rolling(20).mean()
+-                    _df_daily['MA60'] = _df_daily['Close'].rolling(60, min_periods=30).mean()
+-                    _df_daily = calculate_rsi(_df_daily, period=14)
+-                    # 嫄곕옒??20???됯퇏 ?鍮?諛곗쑉
+-                    _df_daily['Vol_MA20'] = _df_daily['Volume'].rolling(20).mean().shift(1)
+-                    _df_daily['Vol_Ratio'] = (_df_daily['Volume'] / _df_daily['Vol_MA20']).round(2)
+-
+-                    # 理쒓렐 2遊?(?좏샇 ?먮떒??
+-                    _prev = _df_daily.iloc[-2]
+-                    _cur  = _df_daily.iloc[-1]
+-
+-                    _d_close = float(_cur['Close'])
+-                    _d_rsi   = float(_cur['RSI_14'])   if pd.notna(_cur.get('RSI_14'))   else None
+-                    _d_ma10  = float(_cur['MA10'])      if pd.notna(_cur.get('MA10'))      else None
+-                    _d_ma20  = float(_cur['MA20'])      if pd.notna(_cur.get('MA20'))      else None
+-                    _d_vol_r = float(_cur['Vol_Ratio']) if pd.notna(_cur.get('Vol_Ratio')) else None
+-                    _p_ma10  = float(_prev['MA10'])     if pd.notna(_prev.get('MA10'))     else None
+-                    _p_ma20  = float(_prev['MA20'])     if pd.notna(_prev.get('MA20'))     else None
+-                    _d_date  = str(_cur.name.date()) if hasattr(_cur.name, 'date') else _today_str
+-
+-                    # ?ы듃?대━???먯씡瑜?怨꾩궛 (留ㅻ룄 ?뚮엺 ???쒖떆??
+-                    _d_pnl_pct = ((_d_close - _scan_entry) / _scan_entry * 100) if _scan_entry > 0 else None
+-
+-                    daily_signal_sent = False
+-
+-                    # ????????????????????????????????????????????????????????????
+-                    # ?뱢 ?쇰큺 留ㅼ닔 ?쒓렇??議곌굔 [諛깊뀒?ㅽ듃 理쒖쟻: PF 8.89, ?밸쪧 66.7%]
+-                    # ????????????????????????????????????????????????????????????
+-                    # ??MA10/MA20 怨⑤뱺?щ줈??-                    # ??RSI <= 65 (怨쇱뿴 ?꾨땶 ?곹깭?먯꽌 吏꾩엯)
+-                    # ??嫄곕옒???쒖? 2.0諛??댁긽 (媛吏??좏샇 李⑤떒)
+-                    # ??3議곌굔 紐⑤몢 異⑹” ?쒖뿉留?諛쒖넚
+-                    _golden_cross = (
+-                        _p_ma10 is not None and _p_ma20 is not None and
+-                        _d_ma10 is not None and _d_ma20 is not None and
+-                        _p_ma10 <= _p_ma20 and _d_ma10 > _d_ma20
+-                    )
+-                    _rsi_ok_buy  = _d_rsi is not None and _d_rsi <= 65
+-                    _vol_surge_d = _d_vol_r is not None and _d_vol_r >= 2.0
+-
+-                    if _golden_cross and _rsi_ok_buy and _vol_surge_d:
+-                        reason_parts = [
+-                            f"MA10/MA20 怨⑤뱺?щ줈??,
+-                            f"RSI {_d_rsi:.1f} (<=65 ?덉쟾援ш컙)",
+-                            f"嫄곕옒??{_d_vol_r:.1f}諛??쒖?",
+-                        ]
+-                        _reason = " + ".join(reason_parts)
+-                        if notify_daily_buy_signal:
+-                            notify_daily_buy_signal(
+-                                token=tg_token, chat_id=tg_chat_id,
+-                                ticker=_scan_code, name=_scan_name,
+-                                price=_d_close, date=_d_date,
+-                                rsi=_d_rsi, ma5=_d_ma10, ma20=_d_ma20,
+-                                vol_ratio=_d_vol_r, signal_reason=_reason,
+-                            )
+-                        daily_signal_sent = True
+-
+-                    # ????????????????????????????????????????????????????????????
+-                    # ?뱣 ?쇰큺 留ㅻ룄 ?쒓렇??議곌굔 [諛깊뀒?ㅽ듃 理쒖쟻: ?⑥닚쨌紐낇솗??議곌굔]
+-                    # ????????????????????????????????????????????????????????????
+-                    # ??MA10/MA20 ?곕뱶?щ줈??+ 嫄곕옒???뺤씤 (嫄곗쭞 ?щ줈??李⑤떒)
+-                    # ??RSI >= 80 怨쇰ℓ??(湲곗〈 75?먯꽌 ?곹뼢 ??媛뺥븳 異붿꽭 以?議곌린 留ㅻ룄 諛⑹?)
+-                    # ???ы듃?대━???먯젅???댄깉: ?됰떒媛 ?鍮?-3% (紐낇솗??由ъ뒪??愿由?
+-                    # ??RSI 30 誘몃쭔 ?⑤룆 留ㅻ룄 議곌굔 ?꾩쟾 ?쒓굅 (怨쇰ℓ?꾨뒗 ?ㅽ엳??留ㅼ닔 湲고쉶)
+-                    if not daily_signal_sent:
+-                        _dead_cross = (
+-                            _p_ma10 is not None and _p_ma20 is not None and
+-                            _d_ma10 is not None and _d_ma20 is not None and
+-                            _p_ma10 >= _p_ma20 and _d_ma10 < _d_ma20
+-                        )
+-                        _rsi_overbought = _d_rsi is not None and _d_rsi >= 80
+-                        _sl_hit = (
+-                            _d_pnl_pct is not None and _d_pnl_pct <= -3.0
+-                        )
+-
+-                        if (_dead_cross and _vol_surge_d) or _rsi_overbought or _sl_hit:
+-                            reason_parts = []
+-                            if _dead_cross and _vol_surge_d:
+-                                reason_parts.append(f"MA10/MA20 ?곕뱶?щ줈??+ 嫄곕옒??{_d_vol_r:.1f}諛??뺤씤")
+-                            if _rsi_overbought:
+-                                reason_parts.append(f"RSI 怨쇰ℓ??{_d_rsi:.1f}) ??李⑥씡?ㅽ쁽 寃??)
+-                            if _sl_hit:
+-                                reason_parts.append(f"?먯젅???댄깉 ({_d_pnl_pct:.1f}% / 湲곗? -3%)")
+-                            _reason = " + ".join(reason_parts)
+-
+-                            if notify_daily_sell_signal:
+-                                notify_daily_sell_signal(
+-                                    token=tg_token, chat_id=tg_chat_id,
+-                                    ticker=_scan_code, name=_scan_name,
+-                                    price=_d_close, date=_d_date,
+-                                    entry_price=_scan_entry if _scan_entry > 0 else None,
+-                                    rsi=_d_rsi, ma5=_d_ma10, ma20=_d_ma20,
+-                                    signal_reason=_reason,
+-                                )
+-                            daily_signal_sent = True
+-
+-                    # 諛쒖넚 ?щ?? 愿怨꾩뾾???ㅻ뒛 ?ㅼ틪 ?꾨즺 ?쒖떆
+-                    _daily_already_sent.add(_scan_code)
+-
+-                except Exception as _scan_err:
+-                    print(f"DEBUG: ?ы듃?대━???ㅼ틪 ?ㅻ쪟 [{_scan_code}]: {_scan_err}")
+-
+-            # ?ㅻ뒛 諛쒖넚 湲곕줉 ?몄뀡?????-            st.session_state[_daily_sent_key] = _daily_already_sent
++# ?? 諛깃렇?쇱슫???ы듃?대━???ㅼ틦???쒖옉 ??
++# st.cache_resource???섑빐 理쒖큹 1?뚮쭔 援щ룞?⑸땲??
++try:
++    start_background_portfolio_scanner()
++except Exception as _bg_err:
++    print(f"DEBUG: 諛깃렇?쇱슫???ㅼ틦??湲곕룞 ?ㅽ뙣: {_bg_err}")
++# ?? URL 荑쇰━ ?뚮씪誘명꽣?먯꽌 refresh_gemini 媛먯? 諛?媛뺤젣 媛깆떊 泥섎━ ??
++try:
++    if st.query_params.get("refresh_gemini") == "1":
++        code_to_refresh = st.query_params.get("sel_code")
++        if code_to_refresh:
++            st.session_state[f"force_refresh_gemini_{code_to_refresh}"] = True
++        
++        # 二쇱냼李쎌뿉??refresh_gemini ?뚮씪誘명꽣留??쒓굅
++        del st.query_params["refresh_gemini"]
++        st.rerun()
++except Exception as _q_err:
++    pass
+ 
+-    except Exception as _port_scan_err:
+-        print(f"DEBUG: ?ы듃?대━???꾩껜 ?ㅼ틪 ?ㅽ뙣: {_port_scan_err}")
+ # ??????????????????????????????????????????????????????????????????????????????
+ 
+ if st.sidebar.button("?봽 ?ㅼ떆媛?????곗씠??利됱떆 媛깆떊", use_container_width=True, help="濡쒖뺄 ?붿쭊???뚮젮 ?꾩껜 ?쒖옣???ㅼ떆媛?媛寃⑷낵 ?섍툒??遺꾩꽍?섍퀬 ????먯닔(2踰??⑤꼸)瑜?媛뺤젣 媛깆떊?⑸땲??"):
+@@ -3366,14 +3498,42 @@ if st.session_state.sel_code:
+             if code_disp in current_portfolio:
+                 avg_price_for_gemini = current_portfolio[code_disp].get('entry_price')
+                 
+-            try:
+-                ai_comment = get_gemini_commentary(
+-                    code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini, supply_trend_prompt, recent_news_prompt
+-                )
+-            except RuntimeWarning as e:
+-                ai_comment = str(e)
+-            except Exception as e:
+-                ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
++            # ?? Gemini AI 遺꾩꽍 ?몄뀡 罹먯떛 諛??띾룄 ?쒗븳 諛⑹? (?먮윭 ?곹깭 罹먯떛 ?ы븿) ??
++            if 'gemini_cache' not in st.session_state:
++                st.session_state.gemini_cache = {}
++
++            now_ts = time.time()
++            cached_val = st.session_state.gemini_cache.get(code_disp)
++            force_refresh = st.session_state.get(f"force_refresh_gemini_{code_disp}", False)
++
++            use_cache = False
++            if cached_val and not force_refresh:
++                cached_comment, cached_ts, is_error = cached_val
++                # ?뺤긽?곸씤 ?듬?? 10遺?600珥? 罹먯떛, ?먮윭 ?듬?(?띾룄?쒗븳 ??? API 荑⑤떎?댁쓣 ?꾪빐 30珥?罹먯떛
++                cache_duration = 30 if is_error else 600
++                if now_ts - cached_ts < cache_duration:
++                    use_cache = True
++
++            if use_cache:
++                ai_comment = cached_comment
++            else:
++                try:
++                    ai_comment = get_gemini_commentary(
++                        code_disp, name_disp, t_score, t_score_adj, s_score, daily_chg, market_cond, rec_cash, rec_stock, gemini_api_key, avg_price_for_gemini, recent_prices_str, current_price_for_gemini, stop_loss_for_gemini, recent_high_for_gemini, rsi_for_gemini, macd_for_gemini, macd_sig_for_gemini, bb_upper_for_gemini, bb_middle_for_gemini, bb_lower_for_gemini, supply_trend_prompt, recent_news_prompt
++                    )
++                    # ?뺤긽?곸씤 寃곌낵????罹먯떛 (is_error = False)
++                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, False)
++                except RuntimeWarning as e:
++                    ai_comment = str(e)
++                    # ?띾룄 ?쒗븳 ???꾩떆 ?ㅻ쪟 ??30珥??숈븞 荑⑤떎???곹깭 罹먯떛 (is_error = True)
++                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, True)
++                except Exception as e:
++                    ai_comment = get_local_fallback_commentary(name_disp, t_score_adj, s_score, market_cond)
++                    st.session_state.gemini_cache[code_disp] = (ai_comment, now_ts, True)
++                
++                # 媛뺤젣 媛깆떊 ?곹깭 珥덇린??+                if force_refresh:
++                    st.session_state[f"force_refresh_gemini_{code_disp}"] = False
+             # AI 肄붾찘???대???以꾨컮轅덉쓣 <br>濡?蹂?섑븯?? Gemini媛 ?앹꽦???뺤긽?곸씤 HTML ?쒓렇(<strong>, <ul> ????蹂댁〈?섍린 ?꾪빐 escape ?섏? ?딆쓬
+             import re
+             ai_comment_cleaned = ai_comment
+@@ -3391,9 +3551,14 @@ if st.session_state.sel_code:
+             opinion_html = f"""<div style="background-color: #111920; padding: 15px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-bottom: 20px; color: #fff;">
+ <h4 style="margin: 0 0 10px 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">?뮕 ???醫낇빀 留ㅻℓ ?섍껄</h4>
+ <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+-    <div>
+-        <span style="font-size: 14px; color: #aaa; font-family: 'malgun gothic', sans-serif;">蹂댁젙 ?됯? ?깃툒:</span>
+-        <strong style="font-size: 18px; color: {grade_color}; margin-left: 8px; font-family: 'malgun gothic', sans-serif;">{quant_grade}</strong>
++    <div style="display: flex; align-items: center; gap: 15px;">
++        <div>
++            <span style="font-size: 14px; color: #aaa; font-family: 'malgun gothic', sans-serif;">蹂댁젙 ?됯? ?깃툒:</span>
++            <strong style="font-size: 18px; color: {grade_color}; margin-left: 8px; font-family: 'malgun gothic', sans-serif;">{quant_grade}</strong>
++        </div>
++        <a href="?sel_code={code_disp}&sel_name={name_disp}&refresh_gemini=1" target="_self" style="text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background-color: #1a2333; color: #38bdf8; padding: 4.5px 12px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.4); font-size: 12px; font-family: 'malgun gothic', sans-serif; cursor: pointer; transition: all 0.2s; font-weight: 500;" onmouseover="this.style.backgroundColor='rgba(56, 189, 248, 0.15)'; this.style.borderColor='rgba(56, 189, 248, 0.7)';" onmouseout="this.style.backgroundColor='#1a2333'; this.style.borderColor='rgba(56, 189, 248, 0.4)';">
++            ?봽 AI 遺꾩꽍 ?ㅼ떆 諛쏄린
++        </a>
+     </div>
+     <div style="text-align: right; min-width: 140px;">
+         <span style="font-size: 13px; color: #2ecc71; font-family: 'malgun gothic', sans-serif;">留ㅼ닔 蹂댁젙 ?먯닔: <strong>{t_score_str}</strong> <span style="font-size: 11px; color: #888;">{t_score_raw_str}</span></span><br/>

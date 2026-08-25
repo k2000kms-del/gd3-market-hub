@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>GD3 Market Hub</title>
+  <meta name="description" content="실시간 퀀트 대시보드 - 코스피/코스닥 시장 분석 | 거래대금/상승률 리더, 종목 AI 분석">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<!-- ── 상단 헤더 ── -->
+<header id="header">
+  <div class="header-inner">
+    <div class="logo">
+      <span class="logo-icon">📊</span>
+      <span class="logo-text">GD3 Market Hub</span>
+      <span id="market-badge" class="badge badge-open">장중</span>
+    </div>
+    <div class="header-indices" id="header-indices">
+      <div class="idx-item" id="idx-kospi">
+        <span class="idx-name">KOSPI</span>
+        <span class="idx-val">--</span>
+        <span class="idx-chg">--</span>
+      </div>
+      <div class="idx-item" id="idx-kosdaq">
+        <span class="idx-name">KOSDAQ</span>
+        <span class="idx-val">--</span>
+        <span class="idx-chg">--</span>
+      </div>
+      <div class="idx-item" id="idx-usd">
+        <span class="idx-name">USD/KRW</span>
+        <span class="idx-val">--</span>
+        <span class="idx-chg">--</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <span id="last-update" class="update-ts">업데이트 중...</span>
+      <button class="btn-icon" onclick="manualRefresh()" title="새로고침">⟳</button>
+    </div>
+  </div>
+</header>
+
+<!-- ── 탭 네비게이션 ── -->
+<nav class="tab-nav" id="tab-nav">
+  <button class="tab-btn active" data-tab="market"    onclick="switchTab('market')">🏦 시장현황</button>
+  <button class="tab-btn"        data-tab="leaders"   onclick="switchTab('leaders')">🔥 거래/상승</button>
+  <button class="tab-btn"        data-tab="quant"     onclick="switchTab('quant')">⚡ 퀀트TOP10</button>
+  <button class="tab-btn"        data-tab="portfolio" onclick="switchTab('portfolio')">💼 포트폴리오</button>
+  <button class="tab-btn"        data-tab="stock"     onclick="switchTab('stock')">📈 종목분석</button>
+</nav>
+
+<!-- ── 메인 컨텐츠 ── -->
+<main class="main-content">
+
+  <!-- ══ 탭 1: 시장 현황 ══ -->
+  <section class="tab-panel active" id="tab-market">
+
+    <!-- 상단 2열 그리드: 코스피/코스닥 요약 + 실시간 투자자 수급 (기존 틀 유지) -->
+    <div class="panel-grid-2">
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">📈 코스피 / 코스닥</h2>
+        </div>
+        <div class="card-body" id="market-summary-body">
+          <div class="skeleton-loader"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">💰 투자자 수급</h2>
+        </div>
+        <div class="card-body" id="supply-body">
+          <div class="skeleton-loader"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 하단 2열 그리드: 수급 추이 차트 + 수급 Treemap (기존 틀 유지) -->
+    <div class="panel-grid-2 mt-16">
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">📊 수급 일중 추이 (Panel 5)</h2>
+          <div class="card-actions">
+            <button class="btn-sm active" onclick="setSupplyMarket('코스피', this)">코스피</button>
+            <button class="btn-sm" onclick="setSupplyMarket('코스닥', this)">코스닥</button>
+          </div>
+        </div>
+        <div id="supply-chart" style="height:300px;"></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">📊 실시간 수급 쏠림 Treemap (Panel 1)</h2>
+        </div>
+        <div id="supply-treemap" style="height:300px;"></div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ══ 탭 2: 거래대금 / 상승률 리더 (Panel 3·6) ══ -->
+  <section class="tab-panel" id="tab-leaders">
+    <div class="panel-grid-2">
+
+      <!-- Panel 3: 거래대금 리더 -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">🔥 거래대금 리더 TOP12</h2>
+          <span class="card-subtitle">매수/매도 거래대금 분리 (CLV 모델)</span>
+        </div>
+        <div id="volume-leaders-chart" style="height:420px;"></div>
+      </div>
+
+      <!-- Panel 6: 상승률 리더 -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">🚀 상승률 리더 TOP12</h2>
+          <span class="card-subtitle">당일 등락률 상위 종목</span>
+        </div>
+        <div id="change-leaders-chart" style="height:420px;"></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ══ 탭 3: 퀀트 TOP10 ══ -->
+  <section class="tab-panel" id="tab-quant">
+    <!-- 퀀트 수평 Bar Chart (Panel 2) -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">⚡ 퀀트 Buy TOP 10 — 점수 차트 (Panel 2)</h2>
+      </div>
+      <div id="quant-bar-chart" style="height:380px;"></div>
+    </div>
+
+    <!-- 퀀트 상세 테이블 -->
+    <div class="card mt-16">
+      <div class="card-header">
+        <h2 class="card-title">⚡ 퀀트 Buy TOP 10 — 상세 테이블</h2>
+        <span class="card-subtitle">퀀트 점수 기반 상위 10개 종목</span>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap" id="quant-table-body">
+          <div class="skeleton-loader"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 탭 4: 포트폴리오 ══ -->
+  <section class="tab-panel" id="tab-portfolio">
+    <!-- 포트폴리오 자산 총괄 요약 패널 (빈 공간 꽉 채우기) -->
+    <div class="card mb-12" style="background: linear-gradient(135deg, rgba(22,26,34,0.9), rgba(30,35,48,0.8));">
+      <div class="card-body" id="portfolio-summary-bar">
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; text-align:center;">
+          <div>
+            <div style="font-size:11px; color:var(--text-3);">총 투자금액</div>
+            <div style="font-size:16px; font-weight:700; color:var(--text-1);" id="port-total-entry">-</div>
+          </div>
+          <div>
+            <div style="font-size:11px; color:var(--text-3);">총 평가금액</div>
+            <div style="font-size:16px; font-weight:700; color:var(--text-1);" id="port-total-eval">-</div>
+          </div>
+          <div>
+            <div style="font-size:11px; color:var(--text-3);">총 평가손익</div>
+            <div style="font-size:16px; font-weight:700;" id="port-total-pnl">-</div>
+          </div>
+          <div>
+            <div style="font-size:11px; color:var(--text-3);">총 수익률</div>
+            <div style="font-size:16px; font-weight:700;" id="port-total-pct">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">💼 보유 포트폴리오</h2>
+        <button class="btn-primary btn-sm" onclick="showAddPortfolioModal()">+ 추가</button>
+      </div>
+      <div class="table-wrap" id="portfolio-table-body">
+        <div class="skeleton-loader"></div>
+      </div>
+    </div>
+
+    <!-- 포트폴리오 종목 아래 배치된 볼린저 밴드(20,2) 시장 에너지 진단 카드 -->
+    <div class="card mt-16" style="border:1px solid var(--accent); background:linear-gradient(135deg, rgba(30,34,45,0.9), rgba(15,18,25,0.95));">
+      <div class="card-header">
+        <h2 class="card-title">⚡ 시장 에너지 진단 (볼린저 밴드 20,2 상단 돌파)</h2>
+        <span class="card-subtitle" id="bollinger-universe-badge">KOSPI 200 + KOSDAQ 150 (350개 표본) 퀀트 분석</span>
+      </div>
+      <div class="card-body" id="bollinger-energy-body">
+        <div class="skeleton-loader" style="height:60px;"></div>
+      </div>
+      <div id="bollinger-energy-chart" style="height:210px; margin-top:8px;"></div>
+    </div>
+  </section>
+
+  <!-- ══ 탭 5: 종목 분석 ══ -->
+  <section class="tab-panel" id="tab-stock">
+    <!-- 종목 검색 -->
+    <div class="search-bar">
+      <input type="text" id="stock-search-input" class="search-input"
+             placeholder="종목코드 또는 이름 입력 (예: 005930, 삼성전자)"
+             onkeydown="if(event.key==='Enter') searchStock()">
+      <button class="btn-primary" onclick="searchStock()">분석</button>
+    </div>
+
+    <div id="stock-analysis-area" style="display:none;">
+      <!-- 종목 헤더 + 스캘핑 신호 -->
+      <div class="panel-grid-2 mt-16">
+        <div class="card">
+          <div class="card-body" id="stock-header-body"></div>
+        </div>
+        <!-- 스캘핑 신호 카드 -->
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">⚡ 스캘핑 신호</h2>
+          </div>
+          <div class="card-body" id="scalping-signal-body">
+            <div class="skeleton-loader" style="height:60px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 차트 2개 -->
+      <div class="panel-grid-2 mt-16">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title" id="daily-chart-title">📉 일봉 차트</h2>
+          </div>
+          <div id="daily-chart" style="height:350px;"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title" id="minute-chart-title">⚡ 1분봉 차트</h2>
+          </div>
+          <div id="minute-chart" style="height:350px;"></div>
+        </div>
+      </div>
+
+      <!-- 수급 + 뉴스 -->
+      <div class="panel-grid-2 mt-16">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">💰 수급 추이</h2>
+          </div>
+          <div class="card-body" id="stock-supply-body"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">📰 최근 뉴스</h2>
+          </div>
+          <div class="card-body" id="stock-news-body"></div>
+        </div>
+      </div>
+
+      <!-- 뉴스 아래 공백 위치: 볼린저 밴드(20,2) 시장 에너지 진단 카드 -->
+      <div class="card mt-16" style="border:1px solid var(--accent); background:linear-gradient(135deg, rgba(30,34,45,0.9), rgba(15,18,25,0.95));">
+        <div class="card-header">
+          <h2 class="card-title">⚡ 시장 에너지 진단 (볼린저 밴드 20,2 상단 돌파)</h2>
+          <span class="card-subtitle" id="bollinger-universe-badge">KOSPI 200 + KOSDAQ 150 (350개 표본) 퀀트 분석</span>
+        </div>
+        <div class="card-body" id="bollinger-energy-body">
+          <div class="skeleton-loader" style="height:60px;"></div>
+        </div>
+        <div id="bollinger-energy-chart" style="height:210px; margin-top:8px;"></div>
+      </div>
+
+      <!-- Gemini AI 코멘터리 (전체 너비) -->
+      <div class="card mt-16">
+        <div class="card-header">
+          <h2 class="card-title">🤖 Gemini AI 종목 분석</h2>
+          <button class="btn-sm active" id="ai-refresh-btn" onclick="loadAICommentary(true)">AI 분석 요청</button>
+        </div>
+        <div class="card-body" id="ai-commentary-body">
+          <div style="color:var(--text-3); font-size:13px;">종목을 선택하면 AI 분석 버튼이 활성화됩니다.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<!-- ── 포트폴리오 추가 모달 ── -->
+<div class="modal-overlay" id="portfolio-modal" onclick="if(event.target===this) closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>종목 추가</h3>
+      <button class="btn-icon" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>종목코드</label>
+        <input type="text" id="modal-code" class="form-input" placeholder="005930" maxlength="6">
+      </div>
+      <div class="form-group">
+        <label>종목명</label>
+        <input type="text" id="modal-name" class="form-input" placeholder="삼성전자">
+      </div>
+      <div class="form-group">
+        <label>매수단가 (원)</label>
+        <input type="number" id="modal-entry" class="form-input" placeholder="70000">
+      </div>
+      <div class="form-group">
+        <label>보유수량 (주)</label>
+        <input type="number" id="modal-qty" class="form-input" placeholder="10">
+      </div>
+      <div class="form-group">
+        <label>손절가 (원)</label>
+        <input type="number" id="modal-stop" class="form-input" placeholder="65000">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeModal()">취소</button>
+      <button class="btn-primary" onclick="addPortfolioItem()">추가</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 토스트 알림 ── -->
+<div id="toast" class="toast"></div>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/charts.js"></script>
+<script src="/static/js/dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+
+[나스닥선물 GC_F] status=404
+
+[S&P선물 ES_F] status=404
+
+[나스닥100 NQ_F] status=404
+
+[S&P Polling] status=404
+
+[나스닥 Polling] status=404
+
+[다우 Polling] status=404
+
+[S&P500선물 Polling] status=404
+
+[나스닥선물 Polling] status=404
+
+[세계지수 목록] status=404

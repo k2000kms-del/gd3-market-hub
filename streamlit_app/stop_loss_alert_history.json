@@ -1,0 +1,30 @@
+{
+  "217590": {
+    "status": "ALERTED",
+    "last_alert_ts": "2026-08-18 23:49:39"
+  },
+  "079550": {
+    "status": "ALERTED",
+    "last_alert_ts": "2026-08-18 23:49:40"
+  },
+  "000660": {
+    "status": "ALERTED",
+    "last_alert_ts": "2026-08-18 23:49:40"
+  },
+  "035420": {
+    "status": "ALERTED",
+    "last_alert_ts": "2026-08-18 23:49:41"
+  },
+  "010170": {
+    "status": "ALERTED",
+    "last_alert_ts": "2026-08-18 23:49:50"
+  },
+  "417200": {
+    "status": "ALERTED",
+    "last_alert_ts": "2026-08-18 23:49:52"
+  },
+  "009150": {
+    "status": "ALERTED",
+    "last_alert_ts": "2026-08-18 23:50:24"
+  }
+}

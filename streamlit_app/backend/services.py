@@ -872,7 +872,7 @@ def get_gemini_commentary_simple(code: str, name: str, api_key: str,
             f'[주의] 매수/매도 추천 문구는 절대 금지. 리스크 언급 포함.'
         )
         headers = {'Content-Type': 'application/json'}
-        models = ['gemini-2.0-flash', 'gemini-1.5-flash']
+        models = ['gemini-3.7-flash', 'gemini-3.6-flash']
         for model in models:
             try:
                 url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}'

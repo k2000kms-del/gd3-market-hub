@@ -1,0 +1,54 @@
+749: with st.sidebar.status("🔄 실시간 시세 및 지수 반영 중...", expanded=False) as status:
+1089: st.sidebar.title("🎛️ 대시보드 설정")
+1090: st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
+1091: q_sort_by = st.sidebar.radio(
+1144: st.sidebar.markdown('---')
+1145: st.sidebar.markdown('### 🔍 종목 검색')
+1146: st.sidebar.caption('종목명 또는 코드로 검색하면 대시보드 아래에 일봉 차트가 표시됩니다.')
+1147: _search_q = st.sidebar.text_input(
+1167: st.sidebar.caption('⚠️ 검색 결과가 없습니다.')
+1176: if st.sidebar.button(_btn_label, key=f"sb_{_r['Code']}", use_container_width=True):
+1183: st.sidebar.markdown('---')
+1187: st.sidebar.markdown('---')
+1188: st.sidebar.markdown('### 🤖 Gemini AI 헬프 센터')
+1189: st.sidebar.caption('대시보드 동작에 문제가 있거나 질문이 있는 경우, 구글 Gemini AI에게 물어보세요.')
+1195: gemini_api_key = st.sidebar.text_input(
+1203: attach_status = st.sidebar.checkbox("대시보드 상태 데이터 첨부", value=True, help="체크하면 대시보드 파일 크기, 시간대, 데이터 로드 상태 등의 디버깅 힌트가 질문과 함께 전송됩니다.")
+1206: gemini_prompt = st.sidebar.text_area(
+1212: if st.sidebar.button("Gemini에게 질문하기", use_container_width=True):
+1214: st.sidebar.error("🔑 API Key를 먼저 입력해 주세요.")
+1216: st.sidebar.warning("✏️ 질문을 입력해 주세요.")
+1218: with st.sidebar.spinner("🤖 Gemini가 대답을 생성하는 중..."):
+1269: st.sidebar.success("🤖 Gemini 답변:")
+1270: st.sidebar.markdown(ans)
+1282: st.sidebar.error(f"❌ Gemini 답변 생성 실패: {last_err}")
+1286: st.sidebar.markdown('---')
+1287: st.sidebar.markdown('### 🛠️ 모바일 자가 복구 도구')
+1288: st.sidebar.caption('외부 모바일 환경에서 데이터 누락이나 오류 발생 시 직접 안전하게 조치하는 기능입니다.')
+1291: if st.sidebar.button("⚡ 실시간 데이터 즉시 동기화", use_container_width=True, help="클릭 시 즉시 네이버 금융 API에서 최신 수급 데이터를 긁어와 Supabase DB에 강제 적재하고 차트를 새로고침합니다."):
+1292: with st.sidebar.spinner("⚡ 수급 데이터 수집 및 DB 적재 중..."):
+1303: st.sidebar.error("❌ 네이버 실시간 수급 API 조회 실패")
+1349: st.sidebar.success(f"✅ {now_time} 시점 수급 데이터 강제 동기화 성공!")
+1352: st.sidebar.error(f"❌ 동기화 실패: {sync_err}")
+1358: if st.sidebar.button("🔄 실시간 퀀트 데이터 즉시 갱신", use_container_width=True, help="로컬 엔진을 돌려 전체 시장의 실시간 가격과 수급을 분석하고 퀀트 점수(2번 패널)를 강제 갱신합니다."):
+1359: with st.sidebar.spinner("🎯 퀀트 연산 및 데이터 수집 중 (약 30~50초 소요)..."):
+1387: st.sidebar.warning("✅ 갱신 완료 (KIS 인증키가 없어 일부 데이터는 제외됨)")
+1389: st.sidebar.success("✅ 퀀트 데이터 실시간 갱신 성공!")
+1396: st.sidebar.error(f"❌ 갱신 실패 (코드 {res.returncode}): {err_msg[:200]}")
+1398: st.sidebar.error(f"❌ 퀀트 연산 중 오류 발생: {e}")
+1401: st.sidebar.markdown('<br>', unsafe_allow_html=True)
+1406: gh_token = st.sidebar.text_input(
+1413: if st.sidebar.button("🔄 깃허브 수집기 원격 재가동", use_container_width=True, help="깃허브 API를 호출하여 백그라운드 Actions 데이터 수집기(collect_data.yml)를 강제로 즉시 가동시킵니다."):
+1415: st.sidebar.error("🔑 GitHub Token을 먼저 입력해 주세요.")
+1417: with st.sidebar.spinner("🔄 GitHub Actions 실행 신호 전송 중..."):
+1433: st.sidebar.success("✅ 깃허브 원격 수집기 가동 성공! (약 2~3분 소요)")
+1435: st.sidebar.error(f"❌ 깃허브 API 오류 (코드 {r.status_code}): {r.text[:200]}")
+1437: st.sidebar.error(f"❌ 원격 제어 실패: {gh_err}")
+2530: # 💼 실시간 포트폴리오 관리 패널 구현
+2536: <h4 style="margin: 0; color: #00e5ff; font-size: 15px; font-family: 'malgun gothic', sans-serif;">💼 나의 실전 포트폴리오</h4>
+2576: st.toast(f"💼 {name_disp} 포트폴리오 저장 완료!", icon="✅")
+2585: st.toast(f"🗑️ {name_disp} 포트폴리오 삭제 완료", icon="ℹ️")
+2590: # 포트폴리오 목록 및 바로가기
+2608: # 포트폴리오 테이블 렌더링
+2702: st.info("등록된 포트폴리오 종목이 없습니다.")
+2821: # 나의 매수 단가선 (포트폴리오 등록 시 황금색 점선으로 표시)

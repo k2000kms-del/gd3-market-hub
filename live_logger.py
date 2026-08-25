@@ -358,3 +358,92 @@ def check_and_notify_stop_loss(
             print(f"DEBUG: 텔레그램 손절가 알림 전송 실패: {e}")
 
     return True
+
+
+# ══════════════════════════════════════════════════════════════
+# 트레일링 스탑 (추적 익절) 감지기
+# ══════════════════════════════════════════════════════════════
+
+TRAILING_STOP_PATH = "trailing_stop_history.json"
+
+def _load_trailing_history() -> dict:
+    if os.path.exists(TRAILING_STOP_PATH):
+        try:
+            with open(TRAILING_STOP_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_trailing_history(data: dict):
+    try:
+        with open(TRAILING_STOP_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"DEBUG: _save_trailing_history failed: {e}")
+
+
+def check_and_notify_trailing_stop(
+    code: str,
+    name: str,
+    current_price: float,
+    entry_price: float,
+    min_profit_pct: float = 4.0,   # 최소 +4% 이상 수익권 진입 시 활성화
+    drop_pct: float = 2.0,         # 고점 대비 -2% 밀릴 때 발동
+    tg_token: str = "",
+    tg_chat_id: str = "",
+) -> bool:
+    """수익권(+4% 이상) 도달 후 최고점 대비 -2% 하락 시 트레일링 스탑 알림."""
+    if not entry_price or entry_price <= 0 or current_price <= 0:
+        return False
+
+    history = _load_trailing_history()
+    stock_info = history.get(code, {'highest_price': entry_price, 'alerted': False, 'entry_price': entry_price})
+    
+    # 평단가가 바뀌었으면 초기화
+    if abs(stock_info.get('entry_price', 0) - entry_price) > 1:
+        stock_info = {'highest_price': max(current_price, entry_price), 'alerted': False, 'entry_price': entry_price}
+
+    highest = max(float(stock_info.get('highest_price', entry_price)), current_price)
+    stock_info['highest_price'] = highest
+    
+    # 수익률 계산
+    max_pnl_pct = ((highest - entry_price) / entry_price) * 100
+    cur_pnl_pct = ((current_price - entry_price) / entry_price) * 100
+    
+    # +4% 이상 도달한 적이 없는 경우 리턴
+    if max_pnl_pct < min_profit_pct:
+        _save_trailing_history(history)
+        return False
+
+    # 최고점 대비 하락률 계산
+    pullback_pct = ((highest - current_price) / highest) * 100
+    
+    # 최고점 갱신 시 알림 상태 리셋
+    if current_price >= highest:
+        stock_info['alerted'] = False
+        _save_trailing_history(history)
+        return False
+
+    # 고점 대비 drop_pct 이상 밀렸고 아직 알림 전인 경우
+    if pullback_pct >= drop_pct and not stock_info.get('alerted', False) and cur_pnl_pct > 0:
+        stock_info['alerted'] = True
+        _save_trailing_history(history)
+        
+        if _TG_AVAILABLE and tg_token and tg_chat_id:
+            try:
+                from telegram_notifier import notify_trailing_stop
+                return notify_trailing_stop(
+                    token=tg_token, chat_id=tg_chat_id,
+                    ticker=code, name=name,
+                    current_price=current_price,
+                    entry_price=entry_price,
+                    highest_price=highest,
+                    drop_pct=pullback_pct
+                )
+            except Exception as e:
+                print(f"DEBUG: 텔레그램 트레일링 스탑 알림 실패: {e}")
+
+    _save_trailing_history(history)
+    return False
