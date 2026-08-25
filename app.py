@@ -1724,6 +1724,15 @@ def fetch_live_indices():
     return result
 
 
+DATA_FILES = [
+    'df_full_market.csv',
+    'df_high_density.csv',
+    'df_quant_final.csv',
+    'df_market_summary.csv',
+    'df_supply_intraday.csv',
+]
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/k2000kms-del/gd3-market-hub/main/data"
+
 @st.cache_data(ttl=120)  # 2분 캐시
 def load_data(force_remote: bool = False):
     """
