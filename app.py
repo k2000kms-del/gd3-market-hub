@@ -62,6 +62,63 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import live_logger
 
+st.set_page_config(
+    page_title='GD 3.0 Market Hub',
+    page_icon='📊',
+    layout='wide',
+    initial_sidebar_state='collapsed'
+)
+
+# ── ⚡ 스마트 실시간 스캘핑 모드 최적화 ──
+if st.session_state.get('auto_refresh_enabled', False):
+    st_autorefresh(interval=5000, key="data_refresh_5s")
+else:
+    _now_for_refresh = datetime.now(timezone(timedelta(hours=9)))
+    _hm_for_refresh = _now_for_refresh.hour * 100 + _now_for_refresh.minute
+    if 900 <= _hm_for_refresh <= 1530 and _now_for_refresh.weekday() < 5:
+        st_autorefresh(interval=60000, key="supply_accumulate_refresh")
+
+# Plotly 차트 마우스 커서 강제 고정 및 태블릿/PC 좌우 뷰포트 여백 최적화
+st.markdown("""
+<style>
+.block-container {
+    padding-left: 1.0rem !important;
+    padding-right: 1.0rem !important;
+    padding-top: 1.0rem !important;
+    padding-bottom: 1.0rem !important;
+    max-width: 100% !important;
+}
+.js-plotly-plot .plotly .cursor-crosshair { cursor: default !important; }
+.js-plotly-plot .plotly .cursor-pointer { cursor: default !important; }
+
+button, a, select, input, .stButton button, [role="button"] {
+    touch-action: manipulation !important;
+    -webkit-tap-highlight-color: rgba(0, 242, 254, 0.2) !important;
+}
+
+.stButton > button {
+    min-height: 38px !important;
+    font-size: 13px !important;
+    border-radius: 6px !important;
+}
+
+@media (max-width: 1024px) {
+    .block-container {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+        padding-top: 0.8rem !important;
+        padding-bottom: 0.8rem !important;
+        max-width: 100% !important;
+    }
+    .stButton > button {
+        padding: 0.4rem 0.6rem !important;
+        min-height: 42px !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
+
 # ── 전역 상수 정의 ───────────────────────────────────────────────
 DATA_FILES = [
     'df_full_market.csv',
