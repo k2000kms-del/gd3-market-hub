@@ -261,10 +261,10 @@ def fetch_stock_recent_news(code: str, count: int = 3):
         print(f"DEBUG: fetch_stock_recent_news failed: {e}")
     return []
 
-def get_local_fallback_commentary(code, name, t_score_adj, s_score, change, market_cond,
+def get_local_fallback_commentary(code="", name="", t_score_adj=50.0, s_score=50.0, change=0.0, market_cond="중립",
                                   current_price=None, stop_loss_price=None, recent_high_price=None,
                                   rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None,
-                                  avg_price=None, supply_trend=None, recent_news=None):
+                                  avg_price=None, supply_trend=None, recent_news=None, **kwargs):
     ret_str = ""
     if avg_price and avg_price > 0 and current_price:
         ret = ((current_price - avg_price) / avg_price) * 100
@@ -462,12 +462,12 @@ def save_portfolio(portfolio):
     _backup_portfolio_daily(portfolio)
 
 # ── Gemini 3.7 / 3.6 Flash 최신 3단계 AI 코멘터리 엔진 ─────────
-def get_gemini_commentary(code, name, t_score, t_score_adj, s_score, change, market_cond, cash_ratio, stock_ratio, api_key,
+def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_score=50.0, change=0.0, market_cond="중립", cash_ratio=30, stock_ratio=70, api_key="",
                            recent_prices_str="", current_price=None, stop_loss_price=None,
                            recent_high_price=None, rsi=None, macd=None, macd_signal=None,
                            bb_upper=None, bb_middle=None, bb_lower=None,
                            vol_penalty=1.0, market_penalty=1.0, sector=None, raw_market_cond=None,
-                           avg_price=None, supply_trend=None, recent_news=None):
+                           avg_price=None, supply_trend=None, recent_news=None, **kwargs):
     """종목의 퀀트 지표 및 자산배분 비중을 기반으로 Gemini 3.7 / 3.6 Flash high/medium AI 리서치 코멘터리 생성"""
     if not api_key:
         raise RuntimeWarning("🔑 Gemini API Key가 설정되지 않아 AI 코멘터리를 출력할 수 없습니다. 좌측 사이드바에 키를 등록해 주세요.")
@@ -3460,19 +3460,53 @@ def render_gemini_commentary(params):
         with st.spinner("🤖 Gemini AI 퀀트 리스크 조언 분석 중..."):
             try:
                 ai_comment = get_gemini_commentary(
-                    _code, _name, params['t_score'], params['t_score_adj'], params['s_score'], params['daily_chg'], params['market_cond'], params['rec_cash'], params['rec_stock'], params['gemini_api_key'], params['avg_price_for_gemini'], params['recent_prices_str'], params['current_price_for_gemini'], params['stop_loss_for_gemini'], params['recent_high_for_gemini'], params['rsi_for_gemini'], params['macd_for_gemini'], params['macd_sig_for_gemini'], params['bb_upper_for_gemini'], params['bb_middle_for_gemini'], params['bb_lower_for_gemini'], params['supply_trend_prompt'], params['recent_news_prompt'],
-                    raw_market_cond=params.get('raw_market_cond'), vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0)
+                    code=_code, name=_name,
+                    t_score=params.get('t_score', 50.0),
+                    t_score_adj=params.get('t_score_adj', 50.0),
+                    s_score=params.get('s_score', 50.0),
+                    change=params.get('daily_chg', 0.0),
+                    market_cond=params.get('market_cond', '중립'),
+                    cash_ratio=params.get('rec_cash', 30),
+                    stock_ratio=params.get('rec_stock', 70),
+                    api_key=params.get('gemini_api_key', ''),
+                    recent_prices_str=params.get('recent_prices_str', ''),
+                    current_price=params.get('current_price_for_gemini'),
+                    stop_loss_price=params.get('stop_loss_for_gemini'),
+                    recent_high_price=params.get('recent_high_for_gemini'),
+                    rsi=params.get('rsi_for_gemini'),
+                    macd=params.get('macd_for_gemini'),
+                    macd_signal=params.get('macd_sig_for_gemini'),
+                    bb_upper=params.get('bb_upper_for_gemini'),
+                    bb_middle=params.get('bb_middle_for_gemini'),
+                    bb_lower=params.get('bb_lower_for_gemini'),
+                    vol_penalty=params.get('vol_penalty', 1.0),
+                    market_penalty=params.get('market_penalty', 1.0),
+                    sector=params.get('sector'),
+                    raw_market_cond=params.get('raw_market_cond'),
+                    avg_price=params.get('avg_price_for_gemini'),
+                    supply_trend=params.get('supply_trend_prompt'),
+                    recent_news=params.get('recent_news_prompt')
                 )
                 st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, False)
             except RuntimeWarning as e:
                 fallback_comment = get_local_fallback_commentary(
-                    _name, params['t_score_adj'], params['s_score'], params.get('raw_market_cond', '중립'), params['market_cond'],
-                    vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0), sector=params.get('sector'),
-                    current_price=params.get('current_price_for_gemini'), stop_loss_price=params.get('stop_loss_for_gemini'),
-                    recent_high_price=params.get('recent_high_for_gemini'), rsi=params.get('rsi_for_gemini'),
-                    macd=params.get('macd_for_gemini'), macd_signal=params.get('macd_sig_for_gemini'),
-                    bb_upper=params.get('bb_upper_for_gemini'), bb_middle=params.get('bb_middle_for_gemini'), bb_lower=params.get('bb_lower_for_gemini'),
-                    avg_price=params.get('avg_price_for_gemini'), supply_trend=params.get('supply_trend_prompt'), recent_news=params.get('recent_news_prompt')
+                    code=_code, name=_name,
+                    t_score_adj=params.get('t_score_adj', 50.0),
+                    s_score=params.get('s_score', 50.0),
+                    change=params.get('daily_chg', 0.0),
+                    market_cond=params.get('market_cond', '중립'),
+                    current_price=params.get('current_price_for_gemini'),
+                    stop_loss_price=params.get('stop_loss_for_gemini'),
+                    recent_high_price=params.get('recent_high_for_gemini'),
+                    rsi=params.get('rsi_for_gemini'),
+                    macd=params.get('macd_for_gemini'),
+                    macd_signal=params.get('macd_sig_for_gemini'),
+                    bb_upper=params.get('bb_upper_for_gemini'),
+                    bb_middle=params.get('bb_middle_for_gemini'),
+                    bb_lower=params.get('bb_lower_for_gemini'),
+                    avg_price=params.get('avg_price_for_gemini'),
+                    supply_trend=params.get('supply_trend_prompt'),
+                    recent_news=params.get('recent_news_prompt')
                 )
                 ai_comment = fallback_comment
                 is_ai_fallback = True
