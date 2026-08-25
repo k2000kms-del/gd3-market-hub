@@ -1724,6 +1724,194 @@ def fetch_live_indices():
     return result
 
 
+
+def clean_market_condition_korean(raw_cond_str: str) -> str:
+    """시장 판단 문자열을 한글 표준 국면명으로 정제"""
+    if not raw_cond_str:
+        return "중립"
+    s = str(raw_cond_str).strip()
+    if "강세" in s or "Bull" in s:
+        return "강세"
+    elif "약세" in s or "Bear" in s:
+        return "약세"
+    elif "과열" in s:
+        return "과열"
+    elif "침체" in s:
+        return "침체"
+    return "중립"
+
+def _get_josa(word: str, josa_type: str = '을를') -> str:
+    """한글 받침에 따른 조사 자동 생성"""
+    if not word:
+        return ''
+    last_char = word[-1]
+    if '가' <= last_char <= '힣':
+        has_batchim = (ord(last_char) - ord('가')) % 28 > 0
+        if josa_type == '을를':
+            return '을' if has_batchim else '를'
+        elif josa_type == '이가':
+            return '이' if has_batchim else '가'
+        elif josa_type == '은는':
+            return '은' if has_batchim else '는'
+        elif josa_type == '와과':
+            return '과' if has_batchim else '와'
+    return ''
+
+@st.cache_data(ttl=90)
+def fetch_naver_realtime_supply():
+    """네이버 금융 실시간 코스피/코스닥 외국인/기관/개인 순매수(가집계) 조회"""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        url = "https://m.stock.naver.com/api/home/market/trend"
+        r = requests.get(url, headers=headers, timeout=2.0)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"DEBUG: fetch_naver_realtime_supply failed: {e}")
+    return {}
+
+@st.cache_data(ttl=30)
+def fetch_naver_realtime_indices():
+    """네이버 금융 실시간 코스피/코스닥/환율 지수 조회"""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        url = "https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI,KOSDAQ"
+        r = requests.get(url, headers=headers, timeout=2.0)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"DEBUG: fetch_naver_realtime_indices failed: {e}")
+    return {}
+
+@st.cache_data(ttl=90)
+def fetch_stock_realtime_investors(code_list):
+    """네이버 금융 API로 개별 종목의 실시간 외국인/기관 수급(가집계) 조회 (병렬 처리)"""
+    res = {}
+    if not code_list:
+        return res
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    def _fetch_one(code):
+        try:
+            url = f"https://m.stock.naver.com/api/stock/{code}/trend?pageSize=1"
+            r = requests.get(url, headers=headers, timeout=1.5)
+            if r.status_code == 200:
+                data = r.json()
+                if data and len(data) > 0:
+                    item = data[0]
+                    fgn = str(item.get("foreignerPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    org = str(item.get("organPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    return code, {
+                        "foreign": int(fgn) if fgn.replace('-', '').isdigit() else 0,
+                        "institutional": int(org) if org.replace('-', '').isdigit() else 0
+                    }
+        except Exception as e:
+            pass
+        return code, None
+
+    with ThreadPoolExecutor(max_workers=min(len(code_list), 8)) as executor:
+        for code, data in executor.map(_fetch_one, code_list):
+            if data is not None:
+                res[code] = data
+    return res
+
+@st.cache_data(ttl=60)
+def fetch_stock_supply_trend(code: str, days: int = 10):
+    """네이버 금융 API로 최근 N영업일간 외국인/기관/개인 누적 수급 추이 및 일별 상세 데이터 조회"""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        url = f"https://m.stock.naver.com/api/stock/{code}/trend?pageSize={days}"
+        r = requests.get(url, headers=headers, timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0:
+                fgn_sum = 0
+                org_sum = 0
+                ind_sum = 0
+                daily_list = []
+                for item in data[:days]:
+                    fgn_str = str(item.get("foreignerPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    org_str = str(item.get("organPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    ind_str = str(item.get("individualPureBuyQuant", "0")).replace(',', '').replace('+', '')
+                    
+                    fgn = int(fgn_str) if fgn_str.replace('-', '').isdigit() else 0
+                    org = int(org_str) if org_str.replace('-', '').isdigit() else 0
+                    ind = int(ind_str) if ind_str.replace('-', '').isdigit() else 0
+                    
+                    fgn_sum += fgn
+                    org_sum += org
+                    ind_sum += ind
+                    
+                    daily_list.append({
+                        "date": item.get("bizdate", "")[-4:],
+                        "foreign": fgn,
+                        "institutional": org,
+                        "individual": ind,
+                        "close": int(str(item.get("closePrice", "0")).replace(',', ''))
+                    })
+                return {
+                    "success": True,
+                    "cumulative": {"foreigner": fgn_sum, "organ": org_sum, "individual": ind_sum},
+                    "daily": daily_list
+                }
+    except Exception as e:
+        print(f"DEBUG: fetch_stock_supply_trend failed: {e}")
+    return {"success": False, "cumulative": {}, "daily": []}
+
+@st.cache_data(ttl=120)
+def fetch_stock_recent_news(code: str, count: int = 3):
+    """네이버 금융 종목별 최근 뉴스 헤드라인 조회"""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        url = f"https://m.stock.naver.com/api/news/item/{code}?pageSize={count}"
+        r = requests.get(url, headers=headers, timeout=2.5)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list):
+                return [{"title": n.get("tit", ""), "date": n.get("dt", "")[:8], "office": n.get("onm", "")} for n in data[:count]]
+    except Exception as e:
+        print(f"DEBUG: fetch_stock_recent_news failed: {e}")
+    return []
+
+def get_local_fallback_commentary(code, name, t_score_adj, s_score, change, market_cond,
+                                  current_price=None, stop_loss_price=None, recent_high_price=None,
+                                  rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None,
+                                  avg_price=None, supply_trend=None, recent_news=None):
+    """Gemini API 일시 부하 시 작동하는 100% 로컬 퀀트 룰 기반 전문 조언 엔진"""
+    ret_str = ""
+    if avg_price and avg_price > 0 and current_price:
+        ret = ((current_price - avg_price) / avg_price) * 100
+        ret_str = f" (보유 평단가 대비 {ret:+.1f}% 수익권)"
+    
+    summary = f"1. <strong>현재 상황 요약</strong>: {name}은(는) 당일 등락률 {change:+.2f}%를 기록 중이며, 퀀트 매수 점수 {t_score_adj:.1f}점, 매도 점수 {s_score:.1f}점으로 시장 국면은 '{market_cond}' 상태입니다{ret_str}.<br>"
+    
+    tech = "2. <strong>기술적 차트 분석</strong>: "
+    tech_items = []
+    if rsi is not None:
+        tech_items.append(f"RSI는 {rsi:.1f}로 " + ("과매수 구간에 근접했습니다." if rsi > 70 else "과매도 구간으로 반등 기대가 있습니다." if rsi < 30 else "안정적인 중립 영역에 위치합니다."))
+    if macd is not None and macd_signal is not None:
+        tech_items.append(f"MACD({macd:.1f})가 Signal({macd_signal:.1f}) 대비 " + ("골든크로스를 유지 중입니다." if macd > macd_signal else "데드크로스 경계 국면입니다."))
+    if bb_upper is not None and current_price is not None:
+        tech_items.append(f"볼린저 상한선({bb_upper:,.0f}원) 및 중심선({bb_middle:,.0f}원) 대비 지지/저항을 시험 중입니다.")
+    tech += " ".join(tech_items) + "<br>"
+    
+    strat = "3. <strong>매매 대응 전략</strong>: "
+    if t_score_adj >= 70:
+        strat += f"강력한 매수 모멘텀이 포착되었습니다. "
+        if recent_high_price:
+            strat += f"1차 목표가는 {recent_high_price:,.0f}원이며, "
+        if stop_loss_price:
+            strat += f"손절선은 {stop_loss_price:,.0f}원으로 설정하여 분할 접근을 권장합니다."
+    elif s_score >= 60:
+        strat += f"매도 압력이 높아지고 있습니다. "
+        if stop_loss_price:
+            strat += f"손절/수익보전 기준선({stop_loss_price:,.0f}원) 이탈 시 비중 축소 대응이 유효합니다."
+    else:
+        strat += f"단기 관망 및 기존 포지션 홀딩을 권장하며, 명확한 수급 돌파 확인 후 대응하세요."
+        
+    return f"{summary}\n{tech}\n{strat}"
+
+
 @st.cache_data(ttl=60)
 def fetch_remote_portfolio():
     gh_token = st.secrets.get("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))
