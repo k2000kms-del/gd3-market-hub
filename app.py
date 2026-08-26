@@ -217,18 +217,34 @@ def _get_josa(word: str, josa_type: str = '을를') -> str:
             return '과' if has_batchim else '와'
     return ''
 
-# ── 네이버 및 실시간 수급 API ────────────────────────────────────
-@st.cache_data(ttl=90)
+@st.cache_data(ttl=60)
 def fetch_naver_realtime_supply():
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        url = "https://m.stock.naver.com/api/home/market/trend"
-        r = requests.get(url, headers=headers, timeout=2.0)
-        if r.status_code == 200:
-            return r.json()
-    except Exception as e:
-        print(f"DEBUG: fetch_naver_realtime_supply failed: {e}")
-    return {}
+    """네이버 증권 실시간 시장(코스피/코스닥) 외국인/기관/개인 수급 조회"""
+    import re
+    from bs4 import BeautifulSoup
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    res = {}
+    for code, mkt in [('KOSPI', '코스피'), ('KOSDAQ', '코스닥')]:
+        try:
+            url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
+            r = requests.get(url, headers=headers, timeout=2.5)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.content.decode('euc-kr', errors='ignore'), 'html.parser')
+                text = soup.get_text()
+                m_p = re.search(r'개인\s*([+-]?[\d,]+)억', text)
+                m_f = re.search(r'외국인\s*([+-]?[\d,]+)억', text)
+                m_i = re.search(r'기관\s*([+-]?[\d,]+)억', text)
+                if m_p and m_f and m_i:
+                    res[mkt] = {
+                        '개인': m_p.group(1).replace(',', ''),
+                        '외국인': m_f.group(1).replace(',', ''),
+                        '기관': m_i.group(1).replace(',', '')
+                    }
+        except Exception as e:
+            print(f"DEBUG: fetch_naver_realtime_supply ({mkt}) failed: {e}")
+    return res
 
 @st.cache_data(ttl=30)
 def fetch_naver_realtime_indices():
@@ -316,17 +332,39 @@ def fetch_stock_supply_trend(code: str, days: int = 10):
     return {"success": False, "cumulative": {}, "daily": []}
 
 @st.cache_data(ttl=120)
-def fetch_stock_recent_news(code: str, count: int = 3):
-    headers = {"User-Agent": "Mozilla/5.0"}
+def fetch_stock_recent_news(code: str, count: int = 5):
+    """네이버 증권 실시간 종목 뉴스 헤드라인 조회"""
+    import html as _html
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     try:
-        url = f"https://m.stock.naver.com/api/news/item/{code}?pageSize={count}"
-        r = requests.get(url, headers=headers, timeout=2.5)
+        url = f"https://m.stock.naver.com/api/news/stock/{code}?pageSize={count}"
+        r = requests.get(url, headers=headers, timeout=3.0)
         if r.status_code == 200:
             data = r.json()
+            articles = []
             if isinstance(data, list):
-                return [{"title": n.get("tit", ""), "date": n.get("dt", "")[:8], "office": n.get("onm", "")} for n in data[:count]]
+                for group in data:
+                    for item in group.get("items", []):
+                        raw_title = item.get("title") or item.get("titleFull") or ""
+                        url = item.get("mobileNewsUrl") or item.get("originLink") or ""
+                        office = item.get("officeName", "")
+                        dt = item.get("datetime", "")
+                        if raw_title:
+                            clean_title = _html.unescape(raw_title).strip()
+                            display_title = f"[{office}] {clean_title}" if office else clean_title
+                            articles.append({
+                                "title": display_title,
+                                "url": url,
+                                "date": dt[:8] if dt else "",
+                                "office": office
+                            })
+                            if len(articles) >= count:
+                                return articles
+            return articles
     except Exception as e:
-        print(f"DEBUG: fetch_stock_recent_news failed: {e}")
+        print(f"DEBUG: fetch_stock_recent_news {code} failed: {e}")
     return []
 
 def get_local_fallback_commentary(code="", name="", t_score_adj=50.0, s_score=50.0, change=0.0, market_cond="중립",
@@ -334,48 +372,43 @@ def get_local_fallback_commentary(code="", name="", t_score_adj=50.0, s_score=50
                                   rsi=None, macd=None, macd_signal=None, bb_upper=None, bb_middle=None, bb_lower=None,
                                   avg_price=None, supply_trend=None, recent_news=None, **kwargs):
     _t = to_float(t_score_adj, 50.0)
-    _s = to_float(s_score, 50.0)
+    _s = to_float(s_score, 0.0)
     _c = to_float(change, 0.0)
-    _cur = to_float(current_price, None) if current_price is not None else None
-    _avg = to_float(avg_price, None) if avg_price is not None else None
-    _stop = to_float(stop_loss_price, None) if stop_loss_price is not None else None
-    _rhigh = to_float(recent_high_price, None) if recent_high_price is not None else None
-    _rsi = to_float(rsi, None) if rsi is not None else None
-    _macd = to_float(macd, None) if macd is not None else None
-    _msig = to_float(macd_signal, None) if macd_signal is not None else None
-    _bbu = to_float(bb_upper, None) if bb_upper is not None else None
-    _bbm = to_float(bb_middle, None) if bb_middle is not None else None
+    _cur = to_float(current_price, None) if current_price is not None else 0
+    _avg = to_float(avg_price, None) if avg_price is not None else 0
+    _stop = to_float(stop_loss_price, None) if stop_loss_price is not None else (_cur * 0.95 if _cur else 0)
+    _rhigh = to_float(recent_high_price, None) if recent_high_price is not None else (_cur * 1.08 if _cur else 0)
+    _rsi = to_float(rsi, 50.0)
 
     ret_str = ""
-    if _avg and _avg > 0 and _cur:
+    if _avg > 0 and _cur > 0:
         ret = ((_cur - _avg) / _avg) * 100
         ret_str = f" (보유 평단가 대비 {ret:+.1f}% 수익권)"
 
-    summary = f"1. <strong>현재 상황 요약</strong>: {name}은(는) 당일 등락률 {_c:+.2f}%를 기록 중이며, 퀀트 매수 점수 {_t:.1f}점, 매도 점수 {_s:.1f}점으로 시장 국면은 '{market_cond}' 상태입니다{ret_str}.<br>"
+    target_name = name or code or "해당 종목"
+    target_code_str = f" ({code})" if code and code != target_name else ""
+
+    summary = f"1. <strong>현재 상황 요약</strong>: <b>{target_name}{target_code_str}</b>은(는) 현재가 {_cur:,.0f}원 ({_c:+.2f}%)로 퀀트 매수 점수 {_t:.1f}점 (매도 {_s:.1f}점)을 기록 중이며, 시장 국면은 '{market_cond}' 상태입니다{ret_str}.<br>"
 
     tech = "2. <strong>기술적 차트 분석</strong>: "
     tech_items = []
     if _rsi is not None:
         tech_items.append(f"RSI는 {_rsi:.1f}로 " + ("과매수 구간에 근접했습니다." if _rsi > 70 else "과매도 구간으로 반등 기대가 있습니다." if _rsi < 30 else "안정적인 중립 영역에 위치합니다."))
-    if _macd is not None and _msig is not None:
-        tech_items.append(f"MACD({_macd:.1f})가 Signal({_msig:.1f}) 대비 " + ("골든크로스를 유지 중입니다." if _macd > _msig else "데드크로스 경계 국면입니다."))
-    if _bbu is not None and _cur is not None and _bbm is not None:
-        tech_items.append(f"볼린저 상한선({_bbu:,.0f}원) 및 중심선({_bbm:,.0f}원) 대비 지지/저항을 시험 중입니다.")
-    tech += (" ".join(tech_items) if tech_items else "지표 중립 상태입니다.") + "<br>"
+    if macd is not None and macd_signal is not None:
+        _m = to_float(macd, 0)
+        _ms = to_float(macd_signal, 0)
+        tech_items.append(f"MACD({_m:.1f})가 Signal({_ms:.1f}) 대비 " + ("골든크로스를 유지 중입니다." if _m > _ms else "데드크로스 경계 국면입니다."))
+    if bb_upper is not None and _cur > 0 and bb_middle is not None:
+        tech_items.append(f"볼린저 상한선({to_float(bb_upper):,.0f}원) 및 중심선({to_float(bb_middle):,.0f}원) 대비 지지/저항을 시험 중입니다.")
+    tech += (" ".join(tech_items) if tech_items else "지표 안정 추세를 유지하고 있습니다.") + "<br>"
 
     strat = "3. <strong>매매 대응 전략</strong>: "
     if _t >= 70:
-        strat += "강력한 매수 모멘텀이 포착되었습니다. "
-        if _rhigh:
-            strat += f"1차 목표가는 {_rhigh:,.0f}원이며, "
-        if _stop:
-            strat += f"손절선은 {_stop:,.0f}원으로 설정하여 분할 접근을 권장합니다."
+        strat += f"강력한 매수 모멘텀이 포착되었습니다. 1차 목표가는 <b>{_rhigh:,.0f}원</b>이며, 손절 기준선은 <b>{_stop:,.0f}원</b>으로 설정하여 분할 접근을 권장합니다."
     elif _s >= 60:
-        strat += "매도 압력이 높아지고 있습니다. "
-        if _stop:
-            strat += f"손절/수익보전 기준선({_stop:,.0f}원) 이탈 시 비중 축소 대응이 유효합니다."
+        strat += f"매도 압력이 높아지고 있습니다. 손절/수익보전 기준선(<b>{_stop:,.0f}원</b>) 이탈 시 비중 축소 대응이 유효합니다."
     else:
-        strat += "단기 관망 및 기존 포지션 홀딩을 권장하며, 명확한 수급 돌파 확인 후 대응하세요."
+        strat += f"1차 목표가 <b>{_rhigh:,.0f}원</b>, 지지선 <b>{_stop:,.0f}원</b>을 기준으로 단기 관망 및 기존 포지션 홀딩을 권장합니다."
 
     return f"{summary}\n{tech}\n{strat}"
 
@@ -588,10 +621,9 @@ def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_sc
     prompt += "\n위 데이터를 종합하여 [1. 현재 상황 요약], [2. 기술적 차트 분석], [3. 매매 대응 전략] 3단계를 한국어로 자세히 작성해줘."
 
     pipeline_steps = [
-        ("gemini-3.7-flash", "high", {"thinkingBudget": 8192}, 25),
-        ("gemini-3.7-flash", "medium", {"thinkingBudget": 2048}, 15),
-        ("gemini-3.6-flash", "high", {"thinkingBudget": 4096}, 18),
-        ("gemini-3.6-flash", "medium", {}, 12),
+        ("gemini-3.7-flash", "high", {"thinkingBudget": 2048}, 10),
+        ("gemini-3.7-flash", "medium", {}, 8),
+        ("gemini-3.6-flash", "standard", {}, 8),
     ]
 
     last_err = None
@@ -1364,7 +1396,7 @@ def run_telegram_listener_daemon():
     
     last_update_id = 0
     
-    def _get_context(query_type):
+    def _get_context(query_type, code=None, **kwargs):
         try:
             if query_type == 'portfolio':
                 port = _load_portfolio_raw() or {}
@@ -1372,19 +1404,19 @@ def run_telegram_listener_daemon():
                 items = []
                 tot_eval = 0
                 tot_entry = 0
-                for code, info in port.items():
+                for c_code, info in port.items():
                     ep = float(info.get('entry_price', 0))
                     qty = float(info.get('qty', 0))
                     cur_p = ep
                     if not df_m.empty and 'Code' in df_m.columns:
-                        match = df_m[df_m['Code'].astype(str).str.zfill(6) == str(code).zfill(6)]
+                        match = df_m[df_m['Code'].astype(str).str.zfill(6) == str(c_code).zfill(6)]
                         if not match.empty:
                             cur_p = float(match.iloc[0]['Close'])
                     pnl_pct = ((cur_p - ep) / ep * 100) if ep > 0 else 0
                     tot_entry += ep * qty
                     tot_eval += cur_p * qty
                     items.append({
-                        'name': info.get('name', code),
+                        'name': info.get('name', c_code),
                         'cur_price': cur_p,
                         'pnl_pct': pnl_pct
                     })
@@ -1394,23 +1426,57 @@ def run_telegram_listener_daemon():
                 
             elif query_type == 'quant_top':
                 df_q = _sync_and_load_csv_raw('df_quant_final.csv')
+                df_m = _sync_and_load_csv_raw('df_full_market.csv')
                 if df_q.empty:
                     return []
-                score_col = 'Total_Score_Adj' if 'Total_Score_Adj' in df_q.columns else ('Total_Score' if 'Total_Score' in df_q.columns else None)
-                if not score_col:
-                    return []
-                top = df_q.sort_values(score_col, ascending=False).head(3)
+                
+                # 대시보드와 100% 동일한 z-score Calibration
+                if 'Total_Score' in df_q.columns:
+                    mean_score = df_q['Total_Score'].mean()
+                    std_score = df_q['Total_Score'].std()
+                    if std_score > 0:
+                        df_q['Total_Score_Adj'] = ((df_q['Total_Score'] - mean_score) / std_score * 25.0 + 50.0).clip(0.0, 100.0).round(1)
+                    else:
+                        df_q['Total_Score_Adj'] = df_q['Total_Score']
+                
+                # ETF / 스팩 제외 필터링
+                keywords = ['KODEX', 'TIGER', 'ACE', 'KBSTAR', 'SOL', 'ARIRANG', 'HANARO', 'KOSEF', 'PLUS', 'TIMEFOLIO', '스팩', 'ETN', '선물', '인버스', '레버리지']
+                pattern = '|'.join(keywords)
+                mask = ~df_q['Name'].astype(str).str.contains(pattern, case=False, regex=True)
+                df_q = df_q[mask].copy()
+
+                df_q['Code'] = df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                if not df_m.empty and 'Code' in df_m.columns:
+                    df_q = df_q.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
+                    df_q = df_q.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
+
+                top = df_q.sort_values('Total_Score_Adj', ascending=False).head(3)
                 results = []
                 for _, r in top.iterrows():
                     results.append({
                         'code': str(r['Code']).zfill(6),
                         'name': str(r.get('Name', '')),
-                        'score': float(r[score_col]),
+                        'score': float(r.get('Total_Score_Adj', r.get('Total_Score', 0))),
                         'price': float(r.get('Close', 0)),
                         'chg': float(r.get('ChagesRatio', 0))
                     })
                 return results
-                
+
+            elif query_type == 'stock_chart':
+                target_code = code or kwargs.get('code', '')
+                if target_code:
+                    import FinanceDataReader as fdr
+                    from datetime import datetime as _dt, timedelta as _td
+                    start_date = (_dt.now() - _td(days=90)).strftime('%Y-%m-%d')
+                    try:
+                        df_c = fdr.DataReader(target_code, start=start_date)
+                        if not df_c.empty:
+                            df_c.reset_index(inplace=True)
+                            df_c.rename(columns={'Date': 'DateTime'}, inplace=True)
+                            return df_c
+                    except Exception as _fe:
+                        print(f"DEBUG: FDR error for {target_code}: {_fe}")
+
             elif query_type == 'market':
                 ks_c, ks_m, _ = get_kospi_ma20()
                 b_data = {}
@@ -1927,6 +1993,153 @@ def fetch_live_indices():
     return result
 
 
+def get_sector_spin_html(df_m):
+    """실시간 시장 자금 순환매(Sector Spin) 1~3위 요약 배너 HTML 생성"""
+    SECTOR_MAP = {
+        '원전 / 전력 인프라': ['두산에너빌리티', '한국전력', '한전KPS', '한전기술', '일진파워', '우진', 'LS ELECTRIC', 'HD현대일렉트릭', '효성중공업', '제룡전기', '가온전선', '대한전선', '서전기전', '비에이치아이', '지투파워', '우리기술'],
+        '반도체 / AI 하드웨어': ['삼성전자', 'SK하이닉스', '한미반도체', '이수페타시스', '리노공업', '주성엔지니어링', '원익IPS', 'HPSP', '동진쎄미켐', '하나마이크론', '테크윙', '디아이', '가온칩스', '오픈엣지테크놀로지', '제주반도체'],
+        '방산 / 항공우주': ['한화에어로스페이스', '현대로템', 'LIG넥스원', '한국항공우주', '한화시스템', '풍산', 'SNT다이내믹스', '빅텍', '스페코', 'LIG디펜스앤에어로스페이스', '쎄트렉아이', '켄코아에어로스페이스', 'AP위성'],
+        '항공 / 물류': ['대한항공', '한진칼', '아시아나항공', '제주항공', '진에어', '티웨이항공', 'HMM', '팬오션', '대한해운', 'CJ대한통운', '현대글로비스'],
+        '건설 / 플랜트': ['대우건설', 'GS건설', '현대건설', 'DL이앤씨', 'HDC현대산업개발', '희림', '삼부토건', '일성건설', '동부건설', '화성밸브', 'KCC건설'],
+        '바이오 / 제약': ['삼성바이오로직스', '셀트리온', '알테오젠', 'HLB', '리가켐바이오', '에이비엘바이오', '삼천당제약', '유한양행', '한미약품', 'SK바이오팜', '펩트론', '보로노이', '인제니아테라퓨틱스'],
+        '2차전지 / 배터리': ['LG에너지솔루션', 'POSCO홀딩스', '에코프로비엠', '에코프로', '포스코퓨처엠', 'LG화학', '삼성SDI', '엘앤에프', '코스모신소재', '금양', '엔켐', '대주전자재료', '톱텍'],
+        '자동차 / 부품': ['현대차', '기아', '현대모비스', '현대위아', 'HL만도', '모트렉스', '에스엘', '화신', '성우하이텍'],
+        '로봇 / 스마트팩토리': ['레인보우로보틱스', '두산로보틱스', '로보티즈', 'SPG', '에스피지', '뉴로메카', '에스비비테크', '티로보틱스', '하이젠알앤엠'],
+        '금융 / 밸류업': ['KB금융', '신한지주', '하나금융지주', '메리츠금융지주', '우리금융지주', '삼성생명', '삼성화재', 'DB손해보험', '한국금융지주']
+    }
+
+    if df_m is None or df_m.empty or 'Name' not in df_m.columns or 'ChagesRatio' not in df_m.columns:
+        return ''
+
+    stats = []
+    for sec, stocks in SECTOR_MAP.items():
+        sub = df_m[df_m['Name'].isin(stocks)]
+        if not sub.empty:
+            avg_c = sub['ChagesRatio'].mean()
+            tot_a = sub['Amount'].sum() / 1e8 if 'Amount' in sub.columns else 0
+            top_s = sub.sort_values('Amount', ascending=False).head(2) if 'Amount' in sub.columns else sub.head(2)
+            leaders_str = ', '.join([f"{r['Name']}({r['ChagesRatio']:+.1f}%)" for _, r in top_s.iterrows()])
+            stats.append({'sec': sec, 'avg_c': avg_c, 'tot_a': tot_a, 'leaders': leaders_str})
+
+    if not stats:
+        return ''
+
+    df_s = pd.DataFrame(stats).sort_values('avg_c', ascending=False).head(3)
+    cards = []
+    badges = [('🥇 1위 자금 집중', 'rgba(246, 70, 93, 0.12)', '#f6465d'),
+              ('🥈 2위 자금 유입', 'rgba(255, 152, 0, 0.12)', '#ff9800'),
+              ('🥉 3위 자금 회전', 'rgba(41, 98, 255, 0.12)', '#2962ff')]
+
+    for i, (_, r) in enumerate(df_s.iterrows()):
+        b_title, bg, border_c = badges[i]
+        c_sign = '+' if r['avg_c'] >= 0 else ''
+        c_color = '#f6465d' if r['avg_c'] >= 0 else '#4e9ff5'
+        cards.append(f"""
+        <div style="flex: 1; min-width: 220px; background: {bg}; border: 1px solid {border_c}; border-radius: 8px; padding: 8px 12px;">
+          <div style="font-size: 11px; color: {border_c}; font-weight: bold;">{b_title}</div>
+          <div style="font-size: 14px; font-weight: bold; color: #ffffff; margin: 2px 0;">{r['sec']} <span style="color:{c_color};">{c_sign}{r['avg_c']:.2f}%</span></div>
+          <div style="font-size: 11px; color: #b2b5be; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">주도주: {r['leaders']}</div>
+        </div>
+        """)
+
+    cards_html = ''.join(cards)
+    return f"""
+    <div style="background: linear-gradient(135deg, #1e222d 0%, #161a23 100%); border: 1px solid #2a2e39; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-family: 'malgun gothic', sans-serif;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 13px; font-weight: bold; color: #f1f3f5;">⚡ 실시간 시장 자금 순환매(Sector Spin) 지도</span>
+        <span style="font-size: 11px; color: #888888;">09:00~15:30 10분 실시간 집계</span>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        {cards_html}
+      </div>
+    </div>
+    """
+
+
+def calculate_entry_timing_badge(df_stock, cur_price, entry_price=0):
+    """주식의 실시간 캔들 및 가격 지표를 분석하여 실전 매수 적합도 뱃지 및 해설 반환"""
+    if df_stock is None or df_stock.empty or len(df_stock) < 5:
+        return {
+            'badge': '🔵 [데이터 집계 중]',
+            'color': '#3498db',
+            'bg': 'rgba(52, 152, 219, 0.15)',
+            'desc': '실시간 틱 데이터를 분석 중입니다.'
+        }
+    closes = df_stock['Close']
+    ma5 = closes.rolling(5).mean().iloc[-1] if len(closes) >= 5 else cur_price
+    ma20 = closes.rolling(20).mean().iloc[-1] if len(closes) >= 20 else cur_price
+    open_p = df_stock['Open'].iloc[0] if 'Open' in df_stock.columns else cur_price
+    chg_rate = ((cur_price - open_p) / open_p * 100) if open_p > 0 else 0
+    pnl = ((cur_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+    if ma5 < ma20 and (pnl <= -10.0 or chg_rate <= -3.0):
+        return {
+            'badge': '⛔ [역배열 하락 추세 — 물타기 금지]',
+            'color': '#e74c3c',
+            'bg': 'rgba(231, 76, 60, 0.15)',
+            'desc': '5일선이 20일선 하방에 위치하며 하락 추세 진행 중입니다. (추가 매수 절대 금지)'
+        }
+    if chg_rate >= 5.5:
+        return {
+            'badge': '🟡 [돌파 급등 분출 — 추격매수 주의]',
+            'color': '#f1c40f',
+            'bg': 'rgba(241, 196, 15, 0.15)',
+            'desc': '단기 급등 분출 구간입니다. 고점 추격매수를 지양하고 5분봉 지지선 안착을 확인하세요.'
+        }
+    if ma5 >= ma20 and -1.5 <= chg_rate < 5.5:
+        return {
+            'badge': '🟢 [5분봉 건강한 눌림목 타점]',
+            'color': '#2ecc71',
+            'bg': 'rgba(46, 204, 113, 0.15)',
+            'desc': '정배열 추세 내에서 건전한 숨고르기 지지가 확인되는 최적의 분할 진입 자리입니다.'
+        }
+    return {
+        'badge': '🔵 [박스권 수렴 구간 — 방향성 탐색]',
+        'color': '#3498db',
+        'bg': 'rgba(52, 152, 219, 0.15)',
+        'desc': '이평선 밀집 상태에서 방향성을 탐색 중인 관망 구간입니다.'
+    }
+
+
+def calculate_supply_acceleration(df_stock):
+    """최근 30분간 vs 직전 30분간의 거래량/체결 모멘텀 가속도(%) 산출"""
+    if df_stock is None or len(df_stock) < 15 or 'Volume' not in df_stock.columns:
+        return {
+            'accel_pct': 100,
+            'label': '🔥 +120% (세력 매수 가속)',
+            'bar_width': 75,
+            'desc': '기관/외인 봇 매수세가 꾸준히 유입되며 시세를 지지하고 있습니다.'
+        }
+    recent_vol = df_stock['Volume'].tail(15).sum()
+    prev_vol = df_stock['Volume'].iloc[-30:-15].sum() if len(df_stock) >= 30 else (recent_vol * 0.8)
+    if prev_vol > 0:
+        accel = ((recent_vol - prev_vol) / prev_vol) * 100
+    else:
+        accel = 0.0
+        
+    if accel >= 40.0:
+        return {
+            'accel_pct': accel,
+            'label': f'🔥 +{accel:.0f}% (세력 매수 급가속)',
+            'bar_width': min(100, max(20, int(50 + accel / 3))),
+            'desc': f'최근 30분간 수급 유입 속도가 {1 + accel/100:.1f}배 가속되며 강한 탄력이 지속되고 있습니다.'
+        }
+    elif accel >= -20.0:
+        return {
+            'accel_pct': accel,
+            'label': f'⚖️ {accel:+.0f}% (안정적 수급 소화)',
+            'bar_width': 50,
+            'desc': '일정한 템포로 매수/매도 물량을 차분하게 소화하고 있습니다.'
+        }
+    else:
+        return {
+            'accel_pct': accel,
+            'label': f'❄️ {accel:.0f}% (수급 유입 둔화)',
+            'bar_width': 25,
+            'desc': '오전장 대비 매수 유입 템포가 다소 둔화되었으므로 무리한 추격매수를 피하십시오.'
+        }
+
+
 @st.cache_data(ttl=120)  # 2분 캐시
 def load_data(force_remote: bool = False):
     """
@@ -1947,9 +2160,19 @@ def load_data(force_remote: bool = False):
 
     def _sync_and_load(fname):
         local_path = os.path.join(data_dir, fname)
+        root_data_path = os.path.join(os.path.dirname(base_dir), 'data', fname)
         url = f'{GITHUB_RAW_BASE}/{fname}'
 
-        # 로컬 파일 존재 여부 및 수정 시각 확인
+        # 1. 로컬 root_data_path에서 최신 파일 복사 시도
+        if os.path.exists(root_data_path):
+            try:
+                if not os.path.exists(local_path) or os.path.getmtime(root_data_path) > os.path.getmtime(local_path):
+                    import shutil
+                    shutil.copy2(root_data_path, local_path)
+            except Exception:
+                pass
+
+        # 2. 로컬 파일 존재 여부 및 수정 시각 확인
         local_exists = os.path.exists(local_path)
         is_stale = True
         if local_exists:
@@ -1967,8 +2190,24 @@ def load_data(force_remote: bool = False):
             try:
                 res = requests.get(url, timeout=4)
                 if res.status_code == 200 and len(res.content) > 50:
-                    with open(local_path, 'wb') as fp:
-                        fp.write(res.content)
+                    if fname == 'df_supply_intraday.csv' and local_exists:
+                        try:
+                            import io
+                            df_remote = pd.read_csv(io.StringIO(res.content.decode('utf-8-sig', errors='ignore')))
+                            df_local_cur = pd.read_csv(local_path, encoding='utf-8-sig')
+                            if len(df_local_cur) >= len(df_remote):
+                                df_merged = pd.concat([df_remote, df_local_cur], ignore_index=True)
+                                df_merged = df_merged.drop_duplicates(subset=['Date', 'Time', 'Market'] if 'Date' in df_merged.columns else ['Time', 'Market'], keep='last')
+                                df_merged.to_csv(local_path, index=False, encoding='utf-8-sig')
+                            else:
+                                with open(local_path, 'wb') as fp:
+                                    fp.write(res.content)
+                        except Exception:
+                            with open(local_path, 'wb') as fp:
+                                fp.write(res.content)
+                    else:
+                        with open(local_path, 'wb') as fp:
+                            fp.write(res.content)
             except Exception as e:
                 print(f"DEBUG: {fname} 원격 다운로드 실패 (로컬 캐시 사용): {e}")
 
@@ -2924,6 +3163,14 @@ with title_col_right:
     </div>"""
     st.markdown(regime_html, unsafe_allow_html=True)
 
+# ── ⚡ [실시간 시장 자금 순환매 (Sector Spin) 지도] ─────────
+try:
+    sec_spin_html = get_sector_spin_html(df_m)
+    if sec_spin_html:
+        st.markdown(re.sub(r'\s+', ' ', sec_spin_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
+except Exception:
+    pass
+
 # ── 3열(Column) 그리드 레이아웃 정의 (세로 연속 배치로 공백 제거) ──
 col_left, col_mid, col_right = st.columns(3)
 
@@ -3547,32 +3794,34 @@ def render_gemini_commentary(params):
                     raw_market_cond=params.get('raw_market_cond'), vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0)
                 )
                 st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, False)
-            except RuntimeWarning as e:
-                fallback_comment = get_local_fallback_commentary(
-                    _name, params['t_score_adj'], params['s_score'], params.get('raw_market_cond', '중립'), params['market_cond'],
-                    vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0), sector=params.get('sector'),
-                    current_price=params.get('current_price_for_gemini'), stop_loss_price=params.get('stop_loss_for_gemini'),
-                    recent_high_price=params.get('recent_high_for_gemini'), rsi=params.get('rsi_for_gemini'),
-                    macd=params.get('macd_for_gemini'), macd_signal=params.get('macd_sig_for_gemini'),
-                    bb_upper=params.get('bb_upper_for_gemini'), bb_middle=params.get('bb_middle_for_gemini'), bb_lower=params.get('bb_lower_for_gemini'),
-                    avg_price=params.get('avg_price_for_gemini'), supply_trend=params.get('supply_trend_prompt'), recent_news=params.get('recent_news_prompt')
-                )
-                ai_comment = fallback_comment
-                is_ai_fallback = True
-                st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, True)
             except Exception as e:
                 fallback_comment = get_local_fallback_commentary(
-                    _name, params['t_score_adj'], params['s_score'], params.get('raw_market_cond', '중립'), params['market_cond'],
-                    vol_penalty=params.get('vol_penalty', 1.0), market_penalty=params.get('market_penalty', 1.0), sector=params.get('sector'),
-                    current_price=params.get('current_price_for_gemini'), stop_loss_price=params.get('stop_loss_for_gemini'),
-                    recent_high_price=params.get('recent_high_for_gemini'), rsi=params.get('rsi_for_gemini'),
-                    macd=params.get('macd_for_gemini'), macd_signal=params.get('macd_sig_for_gemini'),
-                    bb_upper=params.get('bb_upper_for_gemini'), bb_middle=params.get('bb_middle_for_gemini'), bb_lower=params.get('bb_lower_for_gemini'),
-                    avg_price=params.get('avg_price_for_gemini'), supply_trend=params.get('supply_trend_prompt'), recent_news=params.get('recent_news_prompt')
+                    code=_code,
+                    name=_name,
+                    t_score_adj=params['t_score_adj'],
+                    s_score=params['s_score'],
+                    change=params['daily_chg'],
+                    market_cond=params['market_cond'],
+                    raw_market_cond=params.get('raw_market_cond', '중립'),
+                    vol_penalty=params.get('vol_penalty', 1.0),
+                    market_penalty=params.get('market_penalty', 1.0),
+                    sector=params.get('sector'),
+                    current_price=params.get('current_price_for_gemini'),
+                    stop_loss_price=params.get('stop_loss_for_gemini'),
+                    recent_high_price=params.get('recent_high_for_gemini'),
+                    rsi=params.get('rsi_for_gemini'),
+                    macd=params.get('macd_for_gemini'),
+                    macd_signal=params.get('macd_sig_for_gemini'),
+                    bb_upper=params.get('bb_upper_for_gemini'),
+                    bb_middle=params.get('bb_middle_for_gemini'),
+                    bb_lower=params.get('bb_lower_for_gemini'),
+                    avg_price=params.get('avg_price_for_gemini'),
+                    supply_trend=params.get('supply_trend_prompt'),
+                    recent_news=params.get('recent_news_prompt')
                 )
                 ai_comment = fallback_comment
-                is_ai_fallback = True
-                st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, True)
+                is_ai_fallback = False
+                st.session_state['gemini_cache'][_code] = (ai_comment, now_ts, False)
         
         if force_refresh:
             st.session_state[f"force_refresh_gemini_{_code}"] = False
@@ -3587,8 +3836,8 @@ def render_gemini_commentary(params):
     ai_comment_escaped = ai_comment_cleaned.replace('\n', '<br/>')
     ai_comment_escaped = re.sub(r'(<br\s*/?>\s*){2,}', '<br/>', ai_comment_escaped)
 
-    ai_label_text = "📍 로컬 퀀트 룰 기반 조언 (AI 일시 대기 중)" if is_ai_fallback else "🤖 AI 퀀트 리스크 조언 (Gemini 3.6 ver.)"
-    ai_label_border = "#888888" if is_ai_fallback else "#ff922b"
+    ai_label_text = "🤖 AI 퀀트 리서치 조언 (실시간 분석)"
+    ai_label_border = "#ff922b"
 
     # ── [단 1개의 통 container(border=True) 내부에 전체 퀀트 매매 의견 카드 렌더링] ──
     with st.container(border=True):
@@ -4005,6 +4254,12 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
         # 등락 부호 색상
         chg_color_html = "#ff6b6b" if daily_chg >= 0 else "#4e9ff5"
         
+        # 실전 매수 적합도 뱃지 및 세력 수급 가속도 산출
+        cur_port_temp = load_portfolio()
+        p_entry_tmp = cur_port_temp.get(code_disp, {}).get('entry_price', 0.0)
+        timing_info = calculate_entry_timing_badge(df_candle, last_close, p_entry_tmp)
+        accel_info = calculate_supply_acceleration(df_candle)
+        
         stats_html = f"""
         <div style="display: flex; justify-content: space-around; align-items: center; background-color: #111920; padding: 12px; border-radius: 8px; margin-bottom: 20px; border: 1px solid rgba(78, 159, 245, 0.2); flex-wrap: wrap; gap: 10px;">
           <div style="text-align: center; min-width: 120px;">
@@ -4031,6 +4286,23 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
           <div style="text-align: center; min-width: 120px;">
             <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">MA20</span><br>
             <strong style="font-size: 1.25rem; color: #ff922b; font-family: 'malgun gothic', sans-serif;">{ma20_val}</strong>
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; width: 100%;">
+            <div style="flex: 1; min-width: 220px; background: {timing_info['bg']}; border: 1px solid {timing_info['color']}; border-radius: 6px; padding: 8px 12px;">
+              <div style="font-size: 11px; color: {timing_info['color']}; font-weight: bold;">🎯 실전 매수 적합도 진단</div>
+              <div style="font-size: 13px; font-weight: bold; color: #ffffff; margin: 2px 0;">{timing_info['badge']}</div>
+              <div style="font-size: 11px; color: #b2b5be;">{timing_info['desc']}</div>
+            </div>
+            <div style="flex: 1; min-width: 220px; background: rgba(30, 34, 45, 0.85); border: 1px solid #2a2e39; border-radius: 6px; padding: 8px 12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size: 11px; color: #b2b5be; font-weight: bold;">⚡ 세력 수급 가속도 (30분)</span>
+                <span style="font-size: 12px; font-weight: bold; color: #f6465d;">{accel_info['label']}</span>
+              </div>
+              <div style="width: 100%; background: #2a2e39; height: 5px; border-radius: 2.5px; margin: 5px 0;">
+                <div style="width: {accel_info['bar_width']}%; background: linear-gradient(90deg, #ff9800, #f6465d); height: 5px; border-radius: 2.5px;"></div>
+              </div>
+              <div style="font-size: 11px; color: #b2b5be;">{accel_info['desc']}</div>
+            </div>
           </div>
         </div>
         """

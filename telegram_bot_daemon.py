@@ -6,6 +6,15 @@ GD 3.0 Market Hub - 독립형 24시간 상시 가동 텔레그램 봇 데몬
 """
 
 import sys, os, time, json, urllib.request
+
+try:
+    if sys.stdout:
+        sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
+    if sys.stderr:
+        sys.stderr.reconfigure(encoding='utf-8', errors='ignore')
+except Exception:
+    pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pandas as pd

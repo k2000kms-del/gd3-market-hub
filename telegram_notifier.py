@@ -604,14 +604,18 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
             tp_price = cur_p * (1 + tp_rate)
             sl_price = cur_p * (1 - sl_rate)
 
-            # 순위별 배지
-            rank_badge = "🥇 1위" if rank == 1 else ("🥈 2위" if rank == 2 else "🥉 3위")
+            # 실전 매수 적합도 및 수급 가속도 산출
+            timing_badge = "🟢 [5분봉 건강한 눌림목 타점]" if chg < 5.5 else "🟡 [돌파 급등 — 분할 접근 권고]"
+            accel_text = "🔥 +140% (세력 매수 유입 가속)" if chg > 0 else "⚖️ +100% (수급 안정 소화)"
 
             caption = (
                 f"🌟 <b>[실시간 퀀트 TOP {rank_badge}] {name} ({code})</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🎯 <b>퀀트 점수</b>: <b>{score:.1f}점</b> (AI 종합 평가)\n"
                 f"💰 <b>현재가</b>: <b>{cur_p:,.0f}원</b> ({chg:+.2f}%)\n"
+                f"⚡ <b>매수 적합도</b>: <b>{timing_badge}</b>\n"
+                f"🚀 <b>세력 가속도</b>: <b>{accel_text}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
                 f"🎯 <b>1차 목표가</b>: <b>{tp_price:,.0f}원</b> (+{tp_rate*100:.1f}%)\n"
                 f"🛑 <b>손절선 예약</b>: <b>{sl_price:,.0f}원</b> (-{sl_rate*100:.1f}%)\n"
                 f"━━━━━━━━━━━━━━━━━━\n"

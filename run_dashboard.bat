@@ -14,7 +14,7 @@ set "PY_EXE=C:\Users\김실근\.gemini\antigravity\scratch\gd3_market_hub\.venv\
 set "ST_EXE=C:\Users\김실근\.gemini\antigravity\scratch\gd3_market_hub\.venv\Scripts\streamlit.exe"
 
 echo [1/3] 기존 프로세스 점검 중...
-powershell -Command "Get-Process -Name streamlit, python -ErrorAction SilentlyContinue | Where-Object { .CommandLine -like '*gd3_market_hub*' -or .CommandLine -like '*streamlit_app*' } | Stop-Process -Force -ErrorAction SilentlyContinue" > nul 2>&1
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*telegram_bot_daemon.py*' -or $_.CommandLine -like '*streamlit*app.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" > nul 2>&1
 timeout /t 1 /nobreak > nul
 
 echo [2/3] 24시간 독립형 텔레그램 봇 데몬 가동 중...
