@@ -6,12 +6,12 @@ on:
   schedule:
     # 1. 장전 브리핑 (KST 08:50 = UTC 23:50) 평일
     - cron: '50 23 * * 0-4'
-    # 2. 한국 정규장 (KST 09:00~15:30 = UTC 00:00~06:30) 평일 10분마다 실행
-    # → 하루 39회, 4번 패널 수급 현황 10분 단위 누적 + 실시간 텔레그램 알림
-    - cron: '*/10 0-5 * * 1-5'
-    - cron: '0,10,20,30 6 * * 1-5'
-    # 3. 장 마감 및 마감 브리핑 (KST 15:40, 16:00 = UTC 06:40, 07:00)
-    - cron: '40 6 * * 1-5'
+    # 2. 한국 정규장 5분 초정밀 스케줄 (KST 09:00~15:30 = UTC 00:00~06:30) 평일 5분마다 실행
+    # → 장중 하루 최대 78회, 4번 패널 일중 수급 5분 단위 초정밀 누적 + 실시간 텔레그램 감시
+    - cron: '*/5 0-5 * * 1-5'
+    - cron: '0,5,10,15,20,25,30 6 * * 1-5'
+    # 3. 장 마감 및 마감 브리핑 (KST 15:35, 15:40, 16:00 = UTC 06:35, 06:40, 07:00)
+    - cron: '35,40 6 * * 1-5'
     - cron: '0 7 * * 1-5'
   workflow_dispatch:
 
@@ -59,9 +59,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/*.csv data/*.json streamlit_app/data/*.csv streamlit_app/data/*.json
-          git diff --staged --quiet || git commit -m "chore: 시장 데이터 및 수급 자동 업데이트 $(date +'%Y-%m-%d %H:%M KST')"
+          git diff --staged --quiet || git commit -m "chore: 시장 데이터 및 수급 5분 자동 업데이트 $(date +'%Y-%m-%d %H:%M KST')"
           git push
 
       - name: Summarize execution
         if: always()
-        run: echo "Cloud Collection & Notification completed successfully!"
+        run: echo "5-minute Cloud Collection & Notification completed successfully!"
