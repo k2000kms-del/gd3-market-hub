@@ -2140,6 +2140,158 @@ def calculate_supply_acceleration(df_stock):
         }
 
 
+def calculate_real_stock_pattern_badge(df_stock, cur_price):
+    """정우영 전문가(진짜주식TV) 실전 차트 패턴 감별기:
+    1. 짝꿍댕이(Higher Low) + 60일선 거래량 돌파: 🔥 [짝꿍댕이 60일선 돌파]
+    2. 양봉 밀집 개미털기 반등: 🌱 [양봉 밀집 개미털기 반등]
+    3. 60일선 저항 헤딩 주의: ⛔ [60일선 저항 헤딩 주의]
+    """
+    if df_stock is None or df_stock.empty or len(df_stock) < 15:
+        return {
+            'badge': '📊 [이평선 정배열 추세]',
+            'color': '#4e9ff5',
+            'bg': 'rgba(78, 159, 245, 0.15)',
+            'desc': '기본 이동평균선 정배열 추세 내에서 안정적인 흐름을 유지하고 있습니다.',
+            'step': 1,
+            'pattern': 'normal'
+        }
+    closes = df_stock['Close']
+    highs = df_stock['High'] if 'High' in df_stock.columns else closes
+    lows = df_stock['Low'] if 'Low' in df_stock.columns else closes
+    opens = df_stock['Open'] if 'Open' in df_stock.columns else closes
+    vols = df_stock['Volume'] if 'Volume' in df_stock.columns else pd.Series([1]*len(df_stock))
+
+    ma20 = closes.rolling(20, min_periods=5).mean().iloc[-1]
+    ma60 = closes.rolling(60, min_periods=10).mean().iloc[-1]
+    vol_ma20 = vols.rolling(20, min_periods=5).mean().iloc[-1]
+    cur_vol = vols.iloc[-1] if len(vols) > 0 else 0
+
+    # 1. 60일선 저항 헤딩 (60일선 터치 후 윗꼬리 달고 밀림)
+    cur_high = highs.iloc[-1]
+    cur_close = closes.iloc[-1]
+    cur_open = opens.iloc[-1]
+    upper_shadow = cur_high - max(cur_close, cur_open)
+    body = abs(cur_close - cur_open)
+    
+    if cur_high >= ma60 and cur_close < ma60 and upper_shadow > max(1, body * 0.8):
+        return {
+            'badge': '⛔ [60일선 저항 헤딩 주의]',
+            'color': '#e74c3c',
+            'bg': 'rgba(231, 76, 60, 0.15)',
+            'desc': f'60일 수급선({ma60:,.0f}원) 저항에 부딪혀 윗꼬리가 발생했습니다. (기계적 분할 익절/손절 구간)',
+            'step': 0,
+            'pattern': '60ma_resistance'
+        }
+
+    # 2. 짝꿍댕이 (Higher Low) + 60일선 거래량 돌파
+    min_recent = lows.tail(5).min()
+    min_prev = lows.iloc[-15:-5].min() if len(lows) >= 15 else min_recent
+    higher_low = min_recent >= min_prev * 0.99
+    
+    ma60_breakout = cur_close >= ma60 and (closes.iloc[-2] < ma60 or cur_close >= ma20 * 1.01)
+    vol_surge = cur_vol >= (vol_ma20 * 1.3) or (cur_vol > 0 and vol_ma20 == 0)
+
+    if higher_low and ma60_breakout and (cur_close >= ma20):
+        return {
+            'badge': '🔥 [짝꿍댕이 60일선 거래량 돌파]',
+            'color': '#ff922b',
+            'bg': 'rgba(255, 146, 43, 0.18)',
+            'desc': f'우상향 쌍바닥(짝꿍댕이) 형성 후 20일선 지지 ➡️ 60일 수급선({ma60:,.0f}원) 거래량 돌파 완성! (최상의 종가 타점)',
+            'step': 3,
+            'pattern': 'twin_bottom_breakout'
+        }
+
+    # 3. 양봉 밀집 및 개미털기 밑꼬리 반등
+    green_candles = (closes.tail(5) >= opens.tail(5)).sum()
+    lower_shadow = min(cur_close, cur_open) - lows.iloc[-1]
+    shakeout_tail = lower_shadow > max(1, body * 0.6) and cur_close >= cur_open
+
+    if green_candles >= 3 or (shakeout_tail and cur_close >= ma20 * 0.98):
+        return {
+            'badge': '🌱 [양봉 밀집 개미털기 반등]',
+            'color': '#20c997',
+            'bg': 'rgba(32, 201, 151, 0.15)',
+            'desc': '최근 양봉 밀집 패턴 및 장초반 허매도 개미털기 후 종가 끌어올리기 손바뀜이 확인되었습니다.',
+            'step': 2,
+            'pattern': 'green_cluster'
+        }
+
+    # 기본 20일선 지지 1단계
+    if cur_close >= ma20:
+        return {
+            'badge': '🟢 [20일선 지지 1단계 안착]',
+            'color': '#2ecc71',
+            'bg': 'rgba(46, 204, 113, 0.15)',
+            'desc': f'20일선({ma20:,.0f}원) 엉덩이 디딤(지지선)을 확보하며 1단계 분할매수 유효 구간입니다.',
+            'step': 1,
+            'pattern': 'ma20_support'
+        }
+    else:
+        return {
+            'badge': '🔵 [박스권 수렴 — 20일선 안착 대기]',
+            'color': '#3498db',
+            'bg': 'rgba(52, 152, 219, 0.15)',
+            'desc': '20일선 돌파 및 안착을 확인한 후 진입하는 전략이 유효합니다.',
+            'step': 1,
+            'pattern': 'neutral'
+        }
+
+
+def render_123_split_strategy_html(pattern_info, cur_price=0):
+    """정우영 전문가의 1-2-3 분할매수 3단계 진단기 위젯 HTML"""
+    step = pattern_info.get('step', 1)
+    
+    s1_active = (step >= 1)
+    s2_active = (step >= 2)
+    s3_active = (step >= 3)
+    
+    def _box_style(active, is_current, bg_color):
+        border = "2px solid " + bg_color if is_current else ("1px solid rgba(255,255,255,0.2)" if active else "1px solid rgba(255,255,255,0.06)")
+        bg = bg_color if is_current else ("rgba(255,255,255,0.05)" if active else "rgba(0,0,0,0.2)")
+        opacity = "1.0" if active else "0.45"
+        return f"border: {border}; background: {bg}; opacity: {opacity};"
+
+    s1_style = _box_style(s1_active, step == 1, "rgba(46, 204, 113, 0.25)")
+    s2_style = _box_style(s2_active, step == 2, "rgba(32, 201, 151, 0.25)")
+    s3_style = _box_style(s3_active, step == 3, "rgba(255, 146, 43, 0.25)")
+    
+    s1_mark = "🎯 현재 타점!" if step == 1 else ("✅ 완료" if step > 1 else "대기")
+    s2_mark = "🎯 현재 타점!" if step == 2 else ("✅ 완료" if step > 2 else "대기")
+    s3_mark = "🎯 현재 타점!" if step == 3 else "대기"
+
+    html = f"""
+    <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 12px 14px; margin-top: 10px; margin-bottom: 12px; font-family: 'malgun gothic', sans-serif;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-size: 13px; font-weight: 700; color: #ff922b;">📊 [진짜주식 실전 분할매수 1-2-3 진단기]</span>
+        <span style="font-size: 11px; color: #aaa;">정우영 전문가 실전 타점 공식</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 6px; align-items: center; text-align: center;">
+        <div style="{s1_style} padding: 8px 6px; border-radius: 6px;">
+          <div style="font-size: 12px; font-weight: 600; color: #eee;">1단계: 20일선 지지</div>
+          <div style="font-size: 10px; color: #aaa; margin: 2px 0;">비중 10% 진입</div>
+          <div style="font-size: 11px; font-weight: 700; color: #2ecc71;">{s1_mark}</div>
+        </div>
+        <div style="color: #666; font-size: 14px;">➡️</div>
+        <div style="{s2_style} padding: 8px 6px; border-radius: 6px;">
+          <div style="font-size: 12px; font-weight: 600; color: #eee;">2단계: 갭하락 양봉 지지</div>
+          <div style="font-size: 10px; color: #aaa; margin: 2px 0;">비중 20% 확대</div>
+          <div style="font-size: 11px; font-weight: 700; color: #20c997;">{s2_mark}</div>
+        </div>
+        <div style="color: #666; font-size: 14px;">➡️</div>
+        <div style="{s3_style} padding: 8px 6px; border-radius: 6px;">
+          <div style="font-size: 12px; font-weight: 600; color: #eee;">3단계: 60일선 거래량 돌파</div>
+          <div style="font-size: 10px; color: #aaa; margin: 2px 0;">비중 30% Full 베팅</div>
+          <div style="font-size: 11px; font-weight: 700; color: #ff922b;">{s3_mark}</div>
+        </div>
+      </div>
+      <div style="margin-top: 8px; font-size: 12px; color: #ccc; background: rgba(0,0,0,0.25); padding: 6px 10px; border-radius: 4px; border-left: 3px solid {pattern_info.get('color', '#ff922b')};">
+        💡 <b>실전 진단</b>: {pattern_info.get('desc', '')}
+      </div>
+    </div>
+    """
+    return html
+
+
 @st.cache_data(ttl=120)  # 2분 캐시
 def load_data(force_remote: bool = False):
     """
@@ -3856,6 +4008,10 @@ def render_gemini_commentary(params):
 </div>"""
         st.markdown(re.sub(r'\s+', ' ', opinion_hdr_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
 
+        # 1-2. 진짜주식 1-2-3 분할매수 진단기 위젯 렌더링
+        if params.get('split_strategy_html'):
+            st.markdown(re.sub(r'\s+', ' ', params['split_strategy_html'].replace('\n', ' ')).strip(), unsafe_allow_html=True)
+
         # 2. 중간 행: 좌측 라벨, 우측 AI 분석 다시 받기 버튼
         col_label, col_btn = st.columns([6.5, 3.5])
         with col_label:
@@ -4254,11 +4410,13 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
         # 등락 부호 색상
         chg_color_html = "#ff6b6b" if daily_chg >= 0 else "#4e9ff5"
         
-        # 실전 매수 적합도 뱃지 및 세력 수급 가속도 산출
+        # 실전 매수 적합도 뱃지, 세력 수급 가속도, 진짜주식 실전 차트 패턴 산출
         cur_port_temp = load_portfolio()
         p_entry_tmp = cur_port_temp.get(code_disp, {}).get('entry_price', 0.0)
         timing_info = calculate_entry_timing_badge(df_candle, last_close, p_entry_tmp)
         accel_info = calculate_supply_acceleration(df_candle)
+        pattern_info = calculate_real_stock_pattern_badge(df_candle, last_close)
+        split_strategy_html = render_123_split_strategy_html(pattern_info, last_close)
         
         stats_html = f"""
         <div style="display: flex; justify-content: space-around; align-items: center; background-color: #111920; padding: 12px; border-radius: 8px; margin-bottom: 20px; border: 1px solid rgba(78, 159, 245, 0.2); flex-wrap: wrap; gap: 10px;">
@@ -4288,12 +4446,17 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             <strong style="font-size: 1.25rem; color: #ff922b; font-family: 'malgun gothic', sans-serif;">{ma20_val}</strong>
           </div>
           <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; width: 100%;">
-            <div style="flex: 1; min-width: 220px; background: {timing_info['bg']}; border: 1px solid {timing_info['color']}; border-radius: 6px; padding: 8px 12px;">
-              <div style="font-size: 11px; color: {timing_info['color']}; font-weight: bold;">🎯 실전 매수 적합도 진단</div>
-              <div style="font-size: 13px; font-weight: bold; color: #ffffff; margin: 2px 0;">{timing_info['badge']}</div>
+            <div style="flex: 1; min-width: 200px; background: {timing_info['bg']}; border: 1px solid {timing_info['color']}; border-radius: 6px; padding: 8px 12px;">
+              <div style="font-size: 11px; color: {timing_info['color']}; font-weight: bold;">🎯 실전 매수 적합도</div>
+              <div style="font-size: 12px; font-weight: bold; color: #ffffff; margin: 2px 0;">{timing_info['badge']}</div>
               <div style="font-size: 11px; color: #b2b5be;">{timing_info['desc']}</div>
             </div>
-            <div style="flex: 1; min-width: 220px; background: rgba(30, 34, 45, 0.85); border: 1px solid #2a2e39; border-radius: 6px; padding: 8px 12px;">
+            <div style="flex: 1; min-width: 200px; background: {pattern_info['bg']}; border: 1px solid {pattern_info['color']}; border-radius: 6px; padding: 8px 12px;">
+              <div style="font-size: 11px; color: {pattern_info['color']}; font-weight: bold;">📈 진짜주식 차트 패턴</div>
+              <div style="font-size: 12px; font-weight: bold; color: #ffffff; margin: 2px 0;">{pattern_info['badge']}</div>
+              <div style="font-size: 11px; color: #b2b5be;">{pattern_info['desc']}</div>
+            </div>
+            <div style="flex: 1; min-width: 200px; background: rgba(30, 34, 45, 0.85); border: 1px solid #2a2e39; border-radius: 6px; padding: 8px 12px;">
               <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size: 11px; color: #b2b5be; font-weight: bold;">⚡ 세력 수급 가속도 (30분)</span>
                 <span style="font-size: 12px; font-weight: bold; color: #f6465d;">{accel_info['label']}</span>
@@ -4523,6 +4686,8 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 't_score_str': t_score_str,
                 't_score_raw_str': t_score_raw_str,
                 's_score_str': s_score_str,
+                'pattern_info': pattern_info,
+                'split_strategy_html': split_strategy_html,
             }
 
             stats_html_clean = re.sub(r'\s+', ' ', stats_html.replace('\n', ' ')).strip()
