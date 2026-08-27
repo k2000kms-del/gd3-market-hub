@@ -1,24 +1,26 @@
-name: Market Data Auto Collector
+name: Market Data Auto Collector & Cloud Notifier
 
 on:
   push:
     branches: [ main ]
   schedule:
-    # 한국 장 시간(KST 09:00~15:30 = UTC 00:00~06:30) 평일 10분마다 실행
-    # → 하루 최대 39회, 5번 패널 수급 현황 10분 단위로 촘촘하게 적재
-    - cron: '*/10 0,1,2,3,4,5 * * 1-5'   # UTC 00:00~05:59 = KST 09:00~14:59
-    - cron: '0,10,20,30 6 * * 1-5'        # UTC 06:00~06:30 = KST 15:00~15:30
-    # 장 마감 후 최종 종가 및 수급 반영을 위한 추가 실행 (KST 15:40, 16:00)
+    # 1. 장전 브리핑 (KST 08:50 = UTC 23:50) 평일
+    - cron: '50 23 * * 0-4'
+    # 2. 한국 정규장 (KST 09:00~15:30 = UTC 00:00~06:30) 평일 10분마다 실행
+    # → 하루 39회, 4번 패널 수급 현황 10분 단위 누적 + 실시간 텔레그램 알림
+    - cron: '*/10 0-5 * * 1-5'
+    - cron: '0,10,20,30 6 * * 1-5'
+    # 3. 장 마감 및 마감 브리핑 (KST 15:40, 16:00 = UTC 06:40, 07:00)
     - cron: '40 6 * * 1-5'
     - cron: '0 7 * * 1-5'
   workflow_dispatch:
 
 jobs:
-  collect-market-data:
+  collect-and-notify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write  # data/ 폴더 커밋·푸시를 위해 필요
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -35,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run data collector
+      - name: Run Market Data Collector
         env:
           KIS_APP_KEY:       ${{ secrets.KIS_APP_KEY }}
           KIS_APP_SECRET:    ${{ secrets.KIS_APP_SECRET }}
@@ -43,15 +45,23 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: python data_collector.py
 
-      - name: Commit and push updated CSV files
+      - name: Run Cloud Telegram Notifier & Portfolio Monitor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY:  ${{ secrets.SUPABASE_ANON_KEY }}
+        run: python cloud_runner.py
+
+      - name: Commit and push updated data files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/*.csv
-          # 변경사항이 있을 때만 커밋 (없으면 에러 방지)
-          git diff --staged --quiet || git commit -m "chore: 시장 데이터 자동 업데이트 $(date +'%Y-%m-%d %H:%M KST')"
+          git add data/*.csv data/*.json streamlit_app/data/*.csv streamlit_app/data/*.json
+          git diff --staged --quiet || git commit -m "chore: 시장 데이터 및 수급 자동 업데이트 $(date +'%Y-%m-%d %H:%M KST')"
           git push
 
       - name: Summarize execution
         if: always()
-        run: echo "Collection completed at $(date +'%Y-%m-%d %H:%M:%S KST')"
+        run: echo "Cloud Collection & Notification completed successfully!"
