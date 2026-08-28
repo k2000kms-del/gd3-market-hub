@@ -3982,26 +3982,11 @@ def render_gemini_commentary(params):
 
     # ── [단 1개의 통 container(border=True) 내부에 전체 퀀트 매매 의견 카드 렌더링] ──
     with st.container(border=True):
-        # 1. 상단 헤더 행 (통 박스 내부의 1자 헤더 & 1px 점선 구분선)
-        opinion_hdr_html = f"""<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255, 255, 255, 0.15); margin-bottom: 12px;">
-    <div style="display: flex; align-items: center; gap: 15px;">
-        <h4 style="margin: 0; color: #ff922b; font-size: 16px; font-family: 'malgun gothic', sans-serif;">💡 퀀트 종합 매매 의견</h4>
-        <span style="font-size: 14px; font-family: 'malgun gothic', sans-serif; color: #ccc;">
-            보정 평가 등급: <strong style="color: {params['grade_color']}; font-size: 15px;">{params['quant_grade']}</strong>
-        </span>
-    </div>
-    <div style="text-align: right; min-width: 140px;">
-        <span style="font-size: 13px; color: #2ecc71; font-family: 'malgun gothic', sans-serif;">매수 보정 점수: <strong>{params['t_score_str']}</strong> <span style="font-size: 11px; color: #888;">{params['t_score_raw_str']}</span></span><br/>
-        <span style="font-size: 13px; color: #e74c3c; font-family: 'malgun gothic', sans-serif;">매도 퀀트 점수: <strong>{params['s_score_str']}</strong></span>
-    </div>
-</div>"""
-        st.markdown(re.sub(r'\s+', ' ', opinion_hdr_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
-
-        # 1-2. 진짜주식 1-2-3 분할매수 진단기 위젯 렌더링
+        # 1. 상황별 맞춤 로드맵 위젯 (손실방어 / 분할익절 / 1-2-3 매수)
         if params.get('split_strategy_html'):
-            st.markdown(re.sub(r'\s+', ' ', params['split_strategy_html'].replace('\n', ' ')).strip(), unsafe_allow_html=True)
-
-        # 2. 중간 행: 좌측 라벨, 우측 AI 분석 다시 받기 버튼
+            st.markdown(params['split_strategy_html'].strip(), unsafe_allow_html=True)
+        
+        # 2. AI 분석 라벨 & 버튼
         col_label, col_btn = st.columns([6.5, 3.5])
         with col_label:
             st.markdown(f"""<div style="padding-top: 4px;"><strong style="color: {ai_label_border}; font-size: 14px; font-family: 'malgun gothic', sans-serif;">{ai_label_text}:</strong></div>""", unsafe_allow_html=True)
