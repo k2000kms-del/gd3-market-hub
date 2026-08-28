@@ -3156,18 +3156,61 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
             if attach_status:
                 cur_code = st.session_state.get('sel_code', '005930')
                 cur_name = st.session_state.get('sel_name', '삼성전자')
-                diag_info = "=== [실시간 대시보드 및 시장 컨텍스트] ===\n"
-                diag_info += f"- 현재 시각: {datetime.now(_KST).strftime('%Y-%m-%d %H:%M:%S')}\n"
-                diag_info += f"- 분석 대상 종목: {cur_name} ({cur_code})\n"
-                if 'current_price_for_gemini' in locals() and current_price_for_gemini:
-                    diag_info += f"- 현재가: {current_price_for_gemini:,.0f}원 (당일 등락률: {daily_chg:+.2f}%)\n"
-                if 't_score_adj' in locals():
-                    diag_info += f"- 매수 퀀트 점수: {t_score_adj:.1f}점 (원점수: {t_score:.1f}점), 매도 점수: {s_score:.1f}점\n"
-                if 'market_cond' in locals():
-                    diag_info += f"- 시장 국면: {market_cond} (권장 비중: 주식 {rec_stock:.0f}% / 현금 {rec_cash:.0f}%)\n"
-                if 'supply_trend_prompt' in locals() and supply_trend_prompt:
-                    diag_info += f"- 최근 10일 수급 동향: {supply_trend_prompt}\n"
-                diag_info += "========================================\n\n"
+                
+                # 대시보드 실시간 팩트 데이터 전수 수집 및 주입
+                c_price = 0
+                c_chg = 0.0
+                c_vol = 0
+                if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
+                    m_row = df_m[df_m['Code'].astype(str).str.zfill(6) == str(cur_code).zfill(6)]
+                    if not m_row.empty:
+                        c_price = float(m_row.iloc[0].get('Close', 0))
+                        c_chg = float(m_row.iloc[0].get('ChagesRatio', 0))
+                        c_vol = float(m_row.iloc[0].get('Volume', 0))
+
+                # 포트폴리오 보유 상태
+                port_curr = load_portfolio()
+                port_item = port_curr.get(cur_code, port_curr.get(str(int(cur_code)) if str(cur_code).isdigit() else cur_code, {}))
+                p_ep = float(port_item.get('entry_price', 0))
+                p_qty = float(port_item.get('qty', port_item.get('shares', 0)))
+                p_pnl = ((c_price - p_ep) / p_ep * 100) if (p_ep > 0 and c_price > 0) else 0.0
+
+                # 수급 데이터 실시간 집계
+                supply_text = "외국인/기관 최근 수급 데이터 집계 중"
+                try:
+                    s_data = fetch_stock_supply_trend(cur_code)
+                    if s_data and s_data.get('success'):
+                        cum = s_data.get('cumulative', {})
+                        f_cum = cum.get('foreigner', 0)
+                        o_cum = cum.get('organ', 0)
+                        f_str = f"외국인 {f_cum:+,}주"
+                        o_str = f"기관 {o_cum:+,}주"
+                        supply_text = f"최근 10일 누적: {f_str}, {o_str}"
+                except Exception:
+                    pass
+
+                # 시장 지수 상태
+                mkt_text = "코스피 / 코스닥 정상 국면"
+                try:
+                    df_sum = _sync_and_load_csv_raw('df_market_summary.csv')
+                    if not df_sum.empty and 'Name' in df_sum.columns:
+                        mkt_items = [f"{r['Name']}: {r.get('Close','')} ({r.get('ChgRate','')})" for _, r in df_sum.head(4).iterrows()]
+                        mkt_text = " / ".join(mkt_items)
+                except Exception:
+                    pass
+
+                holding_str = f"보유 중 (평단가: {int(p_ep):,}원, 수량: {int(p_qty)}주, 손익률: {p_pnl:+.2f}%)" if p_ep > 0 else "미보유 (신규 진입 검토 종목)"
+                diag_info = f"""=== [GD 3.0 Market Hub 실시간 퀀트 대시보드 컨텍스트] ===
+- 현재 일시: {datetime.now(_KST).strftime('%Y-%m-%d %H:%M:%S')}
+- 분석 종목: {cur_name} ({cur_code})
+- 실시간 현재가: {int(c_price):,}원 (당일 등락률: {c_chg:+.2f}%, 거래량: {int(c_vol):,}주)
+- 포트폴리오 보유 여부: {holding_str}
+- 실시간 수급 동향: {supply_text}
+- 주요 시장 지표: {mkt_text}
+- 시스템 분석 지침: 상기 실시간 팩트 데이터(현재가, 평단가 손익, 외인/기관 수급)를 바탕으로, 지금 추가 매수해야 할지, 매도/익절해야 할지, 관망해야 할지 목표가와 손절가를 명확히 제시하여 한국어로 답변할 것.
+======================================================
+
+"""
 
             models_to_try = [
                 "gemini-3.7-flash",
