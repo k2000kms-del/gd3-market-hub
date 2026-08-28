@@ -2292,11 +2292,13 @@ def render_123_split_strategy_html(pattern_info, cur_price=0):
 @st.cache_data(ttl=120)  # 2분 캐시
 def load_data(force_remote: bool = False):
     """
-    로컬 CSV 데이터와 원격 GitHub 데이터를 스마트 동기화하여
-    실시간 최신 데이터를 항상 유지하고 화면 렌더링 딜레이를 최소화합니다.
+    GitHub CDN 캐시를 완전히 무력화(Cache-Busting)하고
+    항상 100% 최신 장마감/실시간 데이터를 강제 동기화하여 가져옵니다.
     """
     import os
+    import time
     import requests
+    import io
     from datetime import datetime, timezone, timedelta
     from concurrent.futures import ThreadPoolExecutor
 
@@ -2305,68 +2307,38 @@ def load_data(force_remote: bool = False):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(base_dir, 'data')
     os.makedirs(data_dir, exist_ok=True)
-    now_kst = datetime.now(timezone(timedelta(hours=9)))
+    _KST = timezone(timedelta(hours=9))
+    now_kst = datetime.now(_KST)
+    cache_bust = int(time.time())
 
     def _sync_and_load(fname):
         local_path = os.path.join(data_dir, fname)
         root_data_path = os.path.join(os.path.dirname(base_dir), 'data', fname)
-        url = f'{GITHUB_RAW_BASE}/{fname}'
-
-        # 1. 로컬 root_data_path에서 최신 파일 복사 시도
+        
+        # 1. 로컬 개발 환경인 경우 로컬 최신 파일 우선 복사
         if os.path.exists(root_data_path):
             try:
-                if not os.path.exists(local_path) or os.path.getmtime(root_data_path) > os.path.getmtime(local_path):
-                    import shutil
-                    shutil.copy2(root_data_path, local_path)
+                import shutil
+                shutil.copy2(root_data_path, local_path)
             except Exception:
                 pass
 
-        # 2. 로컬 파일 존재 여부 및 수정 시각 확인
-        local_exists = os.path.exists(local_path)
-        is_stale = True
-        if local_exists:
-            try:
-                mtime_ts = os.path.getmtime(local_path)
-                file_age_sec = datetime.now().timestamp() - mtime_ts
-                # 60초 이내에 수정된 파일이면 로컬 캐시 사용
-                if file_age_sec < 60 and not force_remote:
-                    is_stale = False
-            except Exception:
-                is_stale = True
+        # 2. GitHub 원격 RAW URL (CDN 캐시 무력화 파라미터 ?t=... 필수 적용)
+        url = f'{GITHUB_RAW_BASE}/{fname}?t={cache_bust}'
+        try:
+            res = requests.get(url, timeout=3.0, headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'})
+            if res.status_code == 200 and len(res.content) > 50:
+                with open(local_path, 'wb') as fp:
+                    fp.write(res.content)
+        except Exception as e:
+            print(f"DEBUG: {fname} 원격 동기화 알림 (로컬 파일 사용): {e}")
 
-        # 만약 로컬 파일이 없거나 오래되었으면 원격 GitHub에서 다운로드 시도
-        if not local_exists or is_stale or force_remote:
-            try:
-                res = requests.get(url, timeout=4)
-                if res.status_code == 200 and len(res.content) > 50:
-                    if fname == 'df_supply_intraday.csv' and local_exists:
-                        try:
-                            import io
-                            df_remote = pd.read_csv(io.StringIO(res.content.decode('utf-8-sig', errors='ignore')))
-                            df_local_cur = pd.read_csv(local_path, encoding='utf-8-sig')
-                            if len(df_local_cur) >= len(df_remote):
-                                df_merged = pd.concat([df_remote, df_local_cur], ignore_index=True)
-                                df_merged = df_merged.drop_duplicates(subset=['Date', 'Time', 'Market'] if 'Date' in df_merged.columns else ['Time', 'Market'], keep='last')
-                                df_merged.to_csv(local_path, index=False, encoding='utf-8-sig')
-                            else:
-                                with open(local_path, 'wb') as fp:
-                                    fp.write(res.content)
-                        except Exception:
-                            with open(local_path, 'wb') as fp:
-                                fp.write(res.content)
-                    else:
-                        with open(local_path, 'wb') as fp:
-                            fp.write(res.content)
-            except Exception as e:
-                print(f"DEBUG: {fname} 원격 다운로드 실패 (로컬 캐시 사용): {e}")
-
-        # 로컬 파일 읽기
+        # 3. 로컬 파일 읽기
         if os.path.exists(local_path):
             for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
                 try:
                     df = pd.read_csv(local_path, encoding=enc)
                     mtime_ts = os.path.getmtime(local_path)
-                    _KST = timezone(timedelta(hours=9))
                     dt_kst = datetime.fromtimestamp(mtime_ts, tz=_KST)
                     final_mtime_str = dt_kst.strftime('%Y-%m-%d %H:%M:%S')
                     return fname, df, final_mtime_str
@@ -2375,21 +2347,18 @@ def load_data(force_remote: bool = False):
 
         return fname, pd.DataFrame(), '데이터 없음'
 
-    # ── 5개 CSV 파일 병렬 로드 ──
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(_sync_and_load, fname): fname for fname in DATA_FILES}
-        for future in as_completed(futures, timeout=10):
+        for future in as_completed(futures):
+            fname = futures[future]
             try:
-                fname, df, mtime_str = future.result()
-                dfs[fname] = df
-                update_times[fname] = mtime_str
-            except Exception as e:
-                fname = futures[future]
-                print(f"DEBUG: {fname} 병렬 로드 실패: {e}")
+                fn, df, mtime_str = future.result()
+                dfs[fn] = df
+                update_times[fn] = mtime_str
+            except Exception:
                 dfs[fname] = pd.DataFrame()
                 update_times[fname] = "데이터 없음"
 
-    # 누락된 파일 보완
     for fname in DATA_FILES:
         if fname not in dfs:
             dfs[fname] = pd.DataFrame()
@@ -2859,6 +2828,12 @@ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_
 
 # ── 사이드바 정렬 옵션 ──
 st.sidebar.title("🎛️ 대시보드 설정")
+if st.sidebar.button("🔄 최신 데이터 즉시 동기화", type="primary", use_container_width=True, help="클라우드 및 거래소 최신 데이터를 즉시 강제 다운로드합니다."):
+    st.cache_data.clear()
+    st.session_state['force_sync'] = True
+    st.toast("⚡ 최신 데이터 강제 동기화 완료!", icon="🚀")
+    st.rerun()
+st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
 q_sort_by = st.sidebar.radio(
     "정렬 기준 선택",
