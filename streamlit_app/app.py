@@ -2234,7 +2234,7 @@ def calculate_real_stock_pattern_badge(df_stock, cur_price):
         }
 
 
-def render_123_split_strategy_html(pattern_info, cur_price=0):
+def render_123_split_strategy_html(pattern_info, cur_price=0, is_loss_holding=False, loss_pct=0.0, **kwargs):
     """정우영 전문가의 1-2-3 분할매수 3단계 진단기 위젯 HTML"""
     step = pattern_info.get('step', 1)
     
