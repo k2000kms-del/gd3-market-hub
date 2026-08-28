@@ -1305,8 +1305,22 @@ def collect_market_summary(token, df_intraday):
         def trend(v):
             return '▲' if v > 0 else ('▼' if v < 0 else '-')
 
-        # 수급 데이터 (intraday 마지막 값)
+        # 수급 데이터 (네이버 실시간 API 1순위 -> intraday 마지막 값 폴백)
         def get_supply(market):
+            try:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                ep = 'KOSPI' if market == '코스피' else 'KOSDAQ'
+                r = requests.get(f'https://m.stock.naver.com/api/index/{ep}/trend', headers=headers, timeout=2.0)
+                if r.status_code == 200:
+                    d = r.json()
+                    fgn = int(str(d.get('foreignValue', '0')).replace(',', '').replace('+', ''))
+                    psn = int(str(d.get('personalValue', '0')).replace(',', '').replace('+', ''))
+                    org = int(str(d.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
+                    if fgn != 0 or psn != 0 or org != 0:
+                        return fgn, psn, org
+            except Exception as e:
+                print(f'DEBUG naver trend fetch error for {market}: {e}')
+
             if df_intraday.empty or 'Market' not in df_intraday.columns:
                 return 0, 0, 0
             df_m = df_intraday[df_intraday['Market'] == market]

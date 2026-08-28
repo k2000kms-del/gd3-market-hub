@@ -217,33 +217,30 @@ def _get_josa(word: str, josa_type: str = '을를') -> str:
             return '과' if has_batchim else '와'
     return ''
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def fetch_naver_realtime_supply():
-    """네이버 증권 실시간 시장(코스피/코스닥) 외국인/기관/개인 수급 조회"""
-    import re
-    from bs4 import BeautifulSoup
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    """네이버 실시간 코스피/코스닥 투자자별 수급(외인/개인/기관 억원 단위) 실시간 수집"""
+    headers = {"User-Agent": "Mozilla/5.0"}
     res = {}
-    for code, mkt in [('KOSPI', '코스피'), ('KOSDAQ', '코스닥')]:
-        try:
-            url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
-            r = requests.get(url, headers=headers, timeout=2.5)
-            if r.status_code == 200:
-                soup = BeautifulSoup(r.content.decode('euc-kr', errors='ignore'), 'html.parser')
-                text = soup.get_text()
-                m_p = re.search(r'개인\s*([+-]?[\d,]+)억', text)
-                m_f = re.search(r'외국인\s*([+-]?[\d,]+)억', text)
-                m_i = re.search(r'기관\s*([+-]?[\d,]+)억', text)
-                if m_p and m_f and m_i:
-                    res[mkt] = {
-                        '개인': m_p.group(1).replace(',', ''),
-                        '외국인': m_f.group(1).replace(',', ''),
-                        '기관': m_i.group(1).replace(',', '')
-                    }
-        except Exception as e:
-            print(f"DEBUG: fetch_naver_realtime_supply ({mkt}) failed: {e}")
+    try:
+        r_ks = requests.get("https://m.stock.naver.com/api/index/KOSPI/trend", headers=headers, timeout=2.0)
+        if r_ks.status_code == 200:
+            d_ks = r_ks.json()
+            res['코스피'] = {
+                'foreign': int(str(d_ks.get('foreignValue', '0')).replace(',', '').replace('+', '')),
+                'personal': int(str(d_ks.get('personalValue', '0')).replace(',', '').replace('+', '')),
+                'institutional': int(str(d_ks.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
+            }
+        r_kq = requests.get("https://m.stock.naver.com/api/index/KOSDAQ/trend", headers=headers, timeout=2.0)
+        if r_kq.status_code == 200:
+            d_kq = r_kq.json()
+            res['코스닥'] = {
+                'foreign': int(str(d_kq.get('foreignValue', '0')).replace(',', '').replace('+', '')),
+                'personal': int(str(d_kq.get('personalValue', '0')).replace(',', '').replace('+', '')),
+                'institutional': int(str(d_kq.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
+            }
+    except Exception as e:
+        print(f"DEBUG: fetch_naver_realtime_supply error: {e}")
     return res
 
 @st.cache_data(ttl=30)
@@ -3655,7 +3652,24 @@ with col_right:
 with col_left:
     st.markdown("##### 📉 시장 요약")
     fig_p4 = go.Figure()
+    
+    # ── 실시간 시장 수급 및 지수 오버레이 (0.05초 즉시 반영) ──
+    live_market_sup = fetch_naver_realtime_supply()
     if not df_summary.empty:
+        df_sum_render = df_summary.copy()
+        if live_market_sup:
+            for idx, row in df_sum_render.iterrows():
+                m_name = str(row.get('종목/종류', ''))
+                for target_m in ['코스피', '코스닥']:
+                    if target_m in m_name and target_m in live_market_sup:
+                        s_info = live_market_sup[target_m]
+                        if '외국인(억)' in df_sum_render.columns:
+                            df_sum_render.at[idx, '외국인(억)'] = f"{s_info['foreign']:+,}"
+                        if '개인(억)' in df_sum_render.columns:
+                            df_sum_render.at[idx, '개인(억)'] = f"{s_info['personal']:+,}"
+                        if '기관(억)' in df_sum_render.columns:
+                            df_sum_render.at[idx, '기관(억)'] = f"{s_info['institutional']:+,}"
+        df_summary = df_sum_render
         def get_color(v):
             try:
                 f = float(str(v).replace(',', '').replace('%', '').replace('+', ''))
