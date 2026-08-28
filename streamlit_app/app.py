@@ -4416,21 +4416,36 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             t_score_raw_str = ""
             s_score_str = "평가 대상 아님 (N/A)"
 
-        # 2. 패턴 및 수급 가속도 계산
+                # 2. 패턴 및 수급 가속도 & 포트폴리오 손익 연동
         cur_port_temp = load_portfolio()
-        p_entry_tmp = cur_port_temp.get(code_disp, {}).get('entry_price', 0.0)
+        port_item = cur_port_temp.get(code_disp, {})
+        p_entry_tmp = float(port_item.get('entry_price', 0.0))
+        is_held = p_entry_tmp > 0
+        holding_loss_pct = ((last_close - p_entry_tmp) / p_entry_tmp * 100.0) if is_held else 0.0
+        
         timing_info = calculate_entry_timing_badge(df_candle, last_close, p_entry_tmp)
         accel_info = calculate_supply_acceleration(df_candle)
         pattern_info = calculate_real_stock_pattern_badge(df_candle, last_close)
-        split_strategy_html = render_123_split_strategy_html(pattern_info, last_close)
+        split_strategy_html = render_123_split_strategy_html(pattern_info, last_close, is_loss_holding=is_held, loss_pct=holding_loss_pct)
 
-        # 3. 통일된 실전 매매 종합 판정 (모순 0% 박멸)
+        # 3. 통일된 실전 매매 종합 판정 (모순 0% 박멸 & 보유 손실 종목 완벽 대응)
         target_buy_guide = ""
         decision_badge = ""
         decision_color = "#7f8c8d"
         decision_bg = "rgba(127, 140, 141, 0.15)"
         
-        if pattern_info.get('step1_active', False) and t_score_adj >= 60.0 and accel_info.get('ratio', 0) >= -10:
+        if is_held and holding_loss_pct <= -5.0:
+            # 보유 중이고 손실이 -5% 이상 이탈한 경우 (티엠씨 등)
+            decision_badge = "🔴 [손절선 이탈 / 반등 시 비중축소]"
+            decision_color = "#e74c3c"
+            decision_bg = "rgba(231, 76, 60, 0.18)"
+            target_buy_guide = f"평단가({int(p_entry_tmp):,}원) 대비 {holding_loss_pct:.1f}% 손실. 추가 물타기 절대 금지! 20일선({ma20_val}) 반등 시 손실 축소 탈출 권장."
+        elif is_held and holding_loss_pct >= 8.0:
+            decision_badge = "💰 [수익 실현 / 분할 익절]"
+            decision_color = "#2ecc71"
+            decision_bg = "rgba(46, 204, 113, 0.18)"
+            target_buy_guide = f"평단가({int(p_entry_tmp):,}원) 대비 +{holding_loss_pct:.1f}% 수익 중. ATR 손절선 올려잡고 분할 익절 유효."
+        elif pattern_info.get('step1_active', False) and t_score_adj >= 60.0 and accel_info.get('ratio', 0) >= -10:
             decision_badge = "🟢 [1단계 분할매수 적합]"
             decision_color = "#2ecc71"
             decision_bg = "rgba(46, 204, 113, 0.15)"
