@@ -1363,22 +1363,31 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
         df['Fall_Signal'] = fall_signal_list
         df.drop(columns=['ATR_Scalp', 'Raw_Buy'], inplace=True, errors='ignore')
 
-        # ── [노이즈 제거 & 상단 의견 100% 일치화 필터] ──
-        if is_loss_holding:
-            # 손실 보유 종목은 물타기 매수 신호를 전면 숨기고, 반등 탈출 매도(Exit_Signal)만 표시
-            df['Buy_Signal'] = False
-            df['Fall_Signal'] = False
-            df['Add_Signal'] = False
-        else:
-            # 신규/일반 종목: 5봉 내 중복 매수 신호 억제 (노이즈 방지)
-            if 'Buy_Signal' in df.columns:
-                last_buy = -999
+        # ── [5분봉 & 1분봉 실전 신호 안정화 보정] ──
+        # 5분봉: MA5/MA20 골든/데드크로스 및 거래량 기반 핵심 타점 보강
+        if timeframe == '5min':
+            ma5 = df['Close'].rolling(5).mean()
+            ma20 = df['Close'].rolling(20).mean()
+            vol_avg = df['Volume'].rolling(10).mean()
+            
+            # 5분봉 매수: MA5가 MA20 상향 돌파 또는 지지 + 양봉
+            gc = (ma5 > ma20) & (ma5.shift(1) <= ma20.shift(1)) & (df['Close'] >= df['Open'])
+            # 5분봉 매도: MA5가 MA20 하향 돌파 또는 음봉 이탈
+            dc = (ma5 < ma20) & (ma5.shift(1) >= ma20.shift(1)) & (df['Close'] < df['Open'])
+            
+            df['Buy_Signal'] = df['Buy_Signal'] | gc
+            df['Exit_Signal'] = df['Exit_Signal'] | dc
+            
+        # 연속된 중복 신호 쿨다운 (최소 3봉 간격 유지로 깔끔한 가시성 확보)
+        for sig_col in ['Buy_Signal', 'Exit_Signal', 'Fall_Signal']:
+            if sig_col in df.columns:
+                last_idx = -999
                 for i in range(len(df)):
-                    if df.loc[df.index[i], 'Buy_Signal']:
-                        if i - last_buy < 6:
-                            df.loc[df.index[i], 'Buy_Signal'] = False
+                    if df.loc[df.index[i], sig_col]:
+                        if i - last_idx < 3:
+                            df.loc[df.index[i], sig_col] = False
                         else:
-                            last_buy = i
+                            last_idx = i
 
     except Exception as e:
         print(f"DEBUG: calculate_intraday_signals error: {e}")
@@ -4147,10 +4156,8 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             is_held_tmp = p_entry_tmp > 0
             cur_p_for_loss = df_candle['Close'].iloc[-1] if not df_candle.empty else 0.0
             holding_loss_pct = ((cur_p_for_loss - p_entry_tmp) / p_entry_tmp * 100.0) if is_held_tmp and p_entry_tmp > 0 else 0.0
-            is_loss_held = is_held_tmp and holding_loss_pct <= -5.0
-
-            df_1min = calculate_intraday_signals(df_1min, my_entry_price=p_entry_tmp, timeframe='1min', code=code_disp, is_portfolio=is_held_tmp, marcap=marcap_val, is_loss_holding=is_loss_held)
-            df_5min = calculate_intraday_signals(df_5min, my_entry_price=p_entry_tmp, timeframe='5min', code=code_disp, is_portfolio=is_held_tmp, marcap=marcap_val, is_loss_holding=is_loss_held)
+            df_1min = calculate_intraday_signals(df_1min, my_entry_price=p_entry_tmp, timeframe='1min', code=code_disp, is_portfolio=is_held_tmp, marcap=marcap_val, is_loss_holding=False)
+            df_5min = calculate_intraday_signals(df_5min, my_entry_price=p_entry_tmp, timeframe='5min', code=code_disp, is_portfolio=is_held_tmp, marcap=marcap_val, is_loss_holding=False)
 
             # 이전 종목 캐시 정리 (메모리 절약: 현재 종목 외 나머지 삭제)
             for k in list(st.session_state.keys()):
