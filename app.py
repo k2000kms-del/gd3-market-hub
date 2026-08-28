@@ -4400,66 +4400,101 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
         chg_color_html = "#ff6b6b" if daily_chg >= 0 else "#4e9ff5"
         
         # 실전 매수 적합도 뱃지, 세력 수급 가속도, 진짜주식 실전 차트 패턴 산출
-        cur_port_temp = load_portfolio()
-        p_entry_tmp = cur_port_temp.get(code_disp, {}).get('entry_price', 0.0)
-        timing_info = calculate_entry_timing_badge(df_candle, last_close, p_entry_tmp)
-        accel_info = calculate_supply_acceleration(df_candle)
-        pattern_info = calculate_real_stock_pattern_badge(df_candle, last_close)
-        split_strategy_html = render_123_split_strategy_html(pattern_info, last_close)
+                # ── 통일된 실전 매매 종합 판정 (모순 0% 박멸) ──
+        target_buy_guide = ""
+        decision_badge = ""
+        decision_color = "#7f8c8d"
+        decision_bg = "rgba(127, 140, 141, 0.15)"
         
+        if pattern_info.get('step1_active', False) and t_score_adj >= 60.0 and accel_info.get('ratio', 0) >= -10:
+            decision_badge = "🟢 [1단계 분할매수 적합]"
+            decision_color = "#2ecc71"
+            decision_bg = "rgba(46, 204, 113, 0.15)"
+            target_buy_guide = f"20일선({ma20_val}) 지지선 확보. 비중 10% 분할매수 유효 구간."
+        elif pattern_info.get('step2_active', False) or pattern_info.get('step3_active', False):
+            decision_badge = "🔥 [강력 추세 돌파 매수]"
+            decision_color = "#ff9800"
+            decision_bg = "rgba(255, 152, 0, 0.15)"
+            target_buy_guide = "돌파 타점 발생. 비중 20~30% 확대 유효."
+        elif accel_info.get('ratio', 0) < -20 or s_score >= 50.0:
+            decision_badge = "🔴 [추격매수 금지 / 비중관리]"
+            decision_color = "#e74c3c"
+            decision_bg = "rgba(231, 76, 60, 0.15)"
+            target_buy_guide = "세력 수급 둔화 및 저항선 접근. 고점 추격매수 금지."
+        else:
+            decision_badge = "⚪ [관망 / 지지선 확인 (Hold)]"
+            decision_color = "#94a3b8"
+            decision_bg = "rgba(148, 163, 184, 0.15)"
+            target_buy_guide = f"20일선({ma20_val}) 안착 여부를 관찰하며 신규 진입 자제."
+
         stats_html = f"""
-        <div style="display: flex; justify-content: space-around; align-items: center; background-color: #111920; padding: 12px; border-radius: 8px; margin-bottom: 20px; border: 1px solid rgba(78, 159, 245, 0.2); flex-wrap: wrap; gap: 10px;">
-          <div style="text-align: center; min-width: 120px;">
-            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">현재가</span><br>
-            <strong style="font-size: 1.25rem; color: #ffffff; font-family: 'malgun gothic', sans-serif;">{int(last_close):,}원</strong>
-            <span style="font-size: 0.9rem; color: {chg_color_html}; font-weight: bold;">{chg_str}</span>
-          </div>
-          <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
-          <div style="text-align: center; min-width: 120px;">
-            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">90일 최고</span><br>
-            <strong style="font-size: 1.25rem; color: #ff6b6b; font-family: 'malgun gothic', sans-serif;">{high_90}</strong>
-          </div>
-          <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
-          <div style="text-align: center; min-width: 120px;">
-            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">90일 최저</span><br>
-            <strong style="font-size: 1.25rem; color: #4e9ff5; font-family: 'malgun gothic', sans-serif;">{low_90}</strong>
-          </div>
-          <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
-          <div style="text-align: center; min-width: 120px;">
-            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">MA5</span><br>
-            <strong style="font-size: 1.25rem; color: #ffd43b; font-family: 'malgun gothic', sans-serif;">{ma5_val}</strong>
-          </div>
-          <div style="width: 1px; height: 30px; background-color: rgba(255,255,255,0.1);"></div>
-          <div style="text-align: center; min-width: 120px;">
-            <span style="color: #888; font-size: 0.85rem; font-family: 'malgun gothic', sans-serif;">MA20</span><br>
-            <strong style="font-size: 1.25rem; color: #ff922b; font-family: 'malgun gothic', sans-serif;">{ma20_val}</strong>
-          </div>
-          <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; width: 100%;">
-            <div style="flex: 1; min-width: 200px; background: {timing_info['bg']}; border: 1px solid {timing_info['color']}; border-radius: 6px; padding: 8px 12px;">
-              <div style="font-size: 11px; color: {timing_info['color']}; font-weight: bold;">🎯 실전 매수 적합도</div>
-              <div style="font-size: 12px; font-weight: bold; color: #ffffff; margin: 2px 0;">{timing_info['badge']}</div>
-              <div style="font-size: 11px; color: #b2b5be;">{timing_info['desc']}</div>
+        <div style="background-color: #111920; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid rgba(78, 159, 245, 0.2);">
+          <div style="display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08);">
+            <div style="text-align: center; min-width: 110px;">
+              <span style="color: #888; font-size: 0.85rem;">현재가</span><br>
+              <strong style="font-size: 1.25rem; color: #ffffff;">{int(last_close):,}원</strong>
+              <span style="font-size: 0.85rem; color: {chg_color_html}; font-weight: bold;">{chg_str}</span>
             </div>
-            <div style="flex: 1; min-width: 200px; background: {pattern_info['bg']}; border: 1px solid {pattern_info['color']}; border-radius: 6px; padding: 8px 12px;">
-              <div style="font-size: 11px; color: {pattern_info['color']}; font-weight: bold;">📈 진짜주식 차트 패턴</div>
-              <div style="font-size: 12px; font-weight: bold; color: #ffffff; margin: 2px 0;">{pattern_info['badge']}</div>
-              <div style="font-size: 11px; color: #b2b5be;">{pattern_info['desc']}</div>
+            <div style="width: 1px; height: 28px; background-color: rgba(255,255,255,0.1);"></div>
+            <div style="text-align: center; min-width: 110px;">
+              <span style="color: #888; font-size: 0.85rem;">90일 최고</span><br>
+              <strong style="font-size: 1.25rem; color: #ff6b6b;">{high_90}</strong>
             </div>
-            <div style="flex: 1; min-width: 200px; background: rgba(30, 34, 45, 0.85); border: 1px solid #2a2e39; border-radius: 6px; padding: 8px 12px;">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-size: 11px; color: #b2b5be; font-weight: bold;">⚡ 세력 수급 가속도 (30분)</span>
+            <div style="width: 1px; height: 28px; background-color: rgba(255,255,255,0.1);"></div>
+            <div style="text-align: center; min-width: 110px;">
+              <span style="color: #888; font-size: 0.85rem;">90일 최저</span><br>
+              <strong style="font-size: 1.25rem; color: #4e9ff5;">{low_90}</strong>
+            </div>
+            <div style="width: 1px; height: 28px; background-color: rgba(255,255,255,0.1);"></div>
+            <div style="text-align: center; min-width: 110px;">
+              <span style="color: #888; font-size: 0.85rem;">MA5</span><br>
+              <strong style="font-size: 1.25rem; color: #ffd43b;">{ma5_val}</strong>
+            </div>
+            <div style="width: 1px; height: 28px; background-color: rgba(255,255,255,0.1);"></div>
+            <div style="text-align: center; min-width: 110px;">
+              <span style="color: #888; font-size: 0.85rem;">MA20</span><br>
+              <strong style="font-size: 1.25rem; color: #ff922b;">{ma20_val}</strong>
+            </div>
+          </div>
+          
+          <!-- 3대 핵심 실전 스마트 카드 (일치된 결론) -->
+          <div style="display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; width: 100%;">
+            <!-- 카드 1: 최종 매매 결론 -->
+            <div style="flex: 1.2; min-width: 220px; background: {decision_bg}; border: 1.5px solid {decision_color}; border-radius: 6px; padding: 10px 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: {decision_color}; font-weight: bold;">🎯 실전 종합 판정</span>
+                <span style="font-size: 10px; color: #aaa;">퀀트: <b style="color:{decision_color};">{t_score_str}</b></span>
+              </div>
+              <div style="font-size: 13px; font-weight: bold; color: #ffffff; margin: 3px 0;">{decision_badge}</div>
+              <div style="font-size: 11px; color: #b2b5be; line-height: 1.3;">{target_buy_guide}</div>
+            </div>
+            
+            <!-- 카드 2: 세력 수급 가속도 -->
+            <div style="flex: 1; min-width: 200px; background: rgba(30, 34, 45, 0.85); border: 1px solid #2a2e39; border-radius: 6px; padding: 10px 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #b2b5be; font-weight: bold;">⚡ 세력 수급 가속도</span>
                 <span style="font-size: 12px; font-weight: bold; color: #f6465d;">{accel_info['label']}</span>
               </div>
-              <div style="width: 100%; background: #2a2e39; height: 5px; border-radius: 2.5px; margin: 5px 0;">
+              <div style="width: 100%; background: #2a2e39; height: 5px; border-radius: 2.5px; margin: 6px 0;">
                 <div style="width: {accel_info['bar_width']}%; background: linear-gradient(90deg, #ff9800, #f6465d); height: 5px; border-radius: 2.5px;"></div>
               </div>
               <div style="font-size: 11px; color: #b2b5be;">{accel_info['desc']}</div>
             </div>
+
+            <!-- 카드 3: 리스크 & 권장 비중 -->
+            <div style="flex: 1; min-width: 200px; background: rgba(30, 34, 45, 0.85); border: 1px solid #2a2e39; border-radius: 6px; padding: 10px 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #b2b5be; font-weight: bold;">🛡️ 리스크 & 자산 가이드</span>
+                <span style="font-size: 11px; font-weight: bold; color: {regime_color};">{market_regime}</span>
+              </div>
+              <div style="font-size: 12px; font-weight: bold; color: #4e9ff5; margin: 3px 0;">권장 비중: {rec_stock:.0f}% 이내 운용</div>
+              <div style="font-size: 11px; color: #b2b5be;">손절선 이탈 방어 철저 준수</div>
+            </div>
           </div>
         </div>
         """
-        
-        # ── 💡 퀀트 종합 매매 의견 카드 추가 ──────────────────────────────────
+
+# ── 💡 퀀트 종합 매매 의견 카드 추가 ──────────────────────────────────
         q_row = df_q[df_q['Code'] == code_disp]
         
         t_score = 0.0
