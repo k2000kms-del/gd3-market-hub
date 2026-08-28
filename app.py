@@ -1363,28 +1363,42 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
         df['Fall_Signal'] = fall_signal_list
         df.drop(columns=['ATR_Scalp', 'Raw_Buy'], inplace=True, errors='ignore')
 
-        # ── [5분봉 & 1분봉 실전 신호 안정화 보정] ──
-        # 5분봉: MA5/MA20 골든/데드크로스 및 거래량 기반 핵심 타점 보강
-        if timeframe == '5min':
-            ma5 = df['Close'].rolling(5).mean()
-            ma20 = df['Close'].rolling(20).mean()
-            vol_avg = df['Volume'].rolling(10).mean()
-            
-            # 5분봉 매수: MA5가 MA20 상향 돌파 또는 지지 + 양봉
-            gc = (ma5 > ma20) & (ma5.shift(1) <= ma20.shift(1)) & (df['Close'] >= df['Open'])
-            # 5분봉 매도: MA5가 MA20 하향 돌파 또는 음봉 이탈
-            dc = (ma5 < ma20) & (ma5.shift(1) >= ma20.shift(1)) & (df['Close'] < df['Open'])
-            
-            df['Buy_Signal'] = df['Buy_Signal'] | gc
-            df['Exit_Signal'] = df['Exit_Signal'] | dc
-            
-        # 연속된 중복 신호 쿨다운 (최소 3봉 간격 유지로 깔끔한 가시성 확보)
+        # ── [세계적 거장 4대 퀀트 분봉 알고리즘 (5분봉 & 1분봉)] ──
+        # 1. 래리 윌리엄스 변동성 돌파 (Volatility Breakout)
+        range_val = (df['High'].shift(1) - df['Low'].shift(1)).clip(lower=0)
+        target_breakout = df['Open'] + range_val * 0.5
+        vol_surge = df['Volume'] >= df['Volume'].rolling(10).mean().shift(1) * 1.2
+        breakout_buy = (df['Close'] >= target_breakout) & vol_surge & (df['Close'] >= df['Open'])
+
+        # 2. 린다 라슈케 터틀 수프 (Turtle Soup - 신저가 페이크 바닥 반등)
+        lowest_15 = df['Low'].rolling(15).min().shift(1)
+        turtle_buy = (df['Low'] < lowest_15) & (df['Close'] > lowest_15) & (df['Close'] >= df['Open'])
+
+        # 3. 알렉산더 엘더 삼중창 풀백 (MA20 눌림목 지지 반등)
+        ma5_s = df['Close'].rolling(5).mean()
+        ma20_s = df['Close'].rolling(20).mean()
+        pullback_buy = (df['Low'] <= ma20_s * 1.003) & (df['Close'] >= ma20_s) & (df['Close'] >= df['Open']) & (ma5_s >= ma20_s)
+
+        # 4. 볼린저 상단 과열 이탈 및 MA5 하향 이탈 매도
+        rolling_std = df['Close'].rolling(20).std()
+        bb_up = ma20_s + rolling_std * 2.0
+        bb_exit = (df['High'] >= bb_up) & (df['Close'] < df['Open'])
+        gc_sig = (ma5_s > ma20_s) & (ma5_s.shift(1) <= ma20_s.shift(1)) & (df['Close'] >= df['Open'])
+        dc_sig = (ma5_s < ma20_s) & (ma5_s.shift(1) >= ma20_s.shift(1)) & (df['Close'] < df['Open'])
+
+        # 신호 종합 병합 (5분봉 & 1분봉 공통)
+        df['Buy_Signal'] = df['Buy_Signal'] | gc_sig | breakout_buy | pullback_buy
+        df['Fall_Signal'] = df['Fall_Signal'] | turtle_buy
+        df['Exit_Signal'] = df['Exit_Signal'] | dc_sig | bb_exit
+
+        # 가시성 최적화: 1분봉은 4봉 쿨다운, 5분봉은 2봉 쿨다운
+        cd_step = 4 if timeframe == '1min' else 2
         for sig_col in ['Buy_Signal', 'Exit_Signal', 'Fall_Signal']:
             if sig_col in df.columns:
                 last_idx = -999
                 for i in range(len(df)):
                     if df.loc[df.index[i], sig_col]:
-                        if i - last_idx < 3:
+                        if i - last_idx < cd_step:
                             df.loc[df.index[i], sig_col] = False
                         else:
                             last_idx = i
