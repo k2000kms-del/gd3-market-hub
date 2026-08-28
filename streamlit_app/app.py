@@ -2269,19 +2269,50 @@ def calculate_real_stock_pattern_badge(df_stock, cur_price):
         }
 
 
-def render_123_split_strategy_html(pattern_info, cur_price=0, is_loss_holding=False, loss_pct=0.0, **kwargs):
-    """정우영 전문가의 실전 로드맵 (손실 방어 / 수익 극대화 / 신규 분할매수 100% 일치화)"""
+def render_123_split_strategy_html(pattern_info, cur_price=0, is_loss_holding=False, loss_pct=0.0, weight_pct=0.0, can_smart_water=False, **kwargs):
+    """정우영 전문가의 실전 로드맵 (비중 과다 방어 / 소액 스마트 평단인하 / 수익 극대화 / 신규 분할매수 100% 일치화)"""
+    # 1. 소액 종목 스마트 평단 낮추기 로드맵 (비중 12% 이하 & 손실 종목 중 바닥 타점 포착 시)
+    if is_loss_holding and can_smart_water:
+        return f"""
+        <div style="background-color: rgba(255, 152, 0, 0.12); padding: 12px 14px; border-radius: 8px; border: 1.5px solid #ff9800; margin-top: 10px; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 13px; font-weight: 700; color: #ff9800;">🟡 [스마트 평단 낮추기 실전 로드맵 - 비중 여유({weight_pct:.1f}%)]</span>
+                <span style="font-size: 11px; color: #ff9800; font-weight: bold;">현재 손실률: {loss_pct:.1f}% (소액 평단 조절 구간)</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <div style="flex: 1; background: rgba(46, 204, 113, 0.15); border: 1px solid #2ecc71; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #2ecc71;">🎯 1단계: 바닥 지지선 확인</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">20일선 및 저점 안착 포착</div>
+                    <div style="font-size: 10px; font-weight: bold; color: #2ecc71;">✅ 확인 완료</div>
+                </div>
+                <span style="color: #ff9800; font-weight: bold; font-size: 12px;">➔</span>
+                <div style="flex: 1; background: rgba(255, 152, 0, 0.25); border: 1.5px solid #ff9800; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #ff9800;">💰 2단계: 소액 1회 분할 추가매수</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">평단가 대폭 인하 효과</div>
+                    <div style="font-size: 10px; font-weight: bold; color: #ff9800;">🎯 현재 유효 타점!</div>
+                </div>
+                <span style="color: #ff9800; font-weight: bold; font-size: 12px;">➔</span>
+                <div style="flex: 1; background: rgba(78, 159, 245, 0.15); border: 1px solid #4e9ff5; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #4e9ff5;">🚀 3단계: 빠른 본절/익절 탈출</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">낮아진 평단가 기준 즉시 수익 회수</div>
+                    <div style="font-size: 10px; color: #4e9ff5;">목표 달성</div>
+                </div>
+            </div>
+        </div>
+        """
+
+    # 2. 비중 과다 종목 물타기 절대 금지 로드맵 (비중 12% 초과 또는 -40% 이하 초과낙폭)
     if is_loss_holding and loss_pct <= -5.0:
         return f"""
         <div style="background-color: rgba(231, 76, 60, 0.12); padding: 12px 14px; border-radius: 8px; border: 1.5px solid #e74c3c; margin-top: 10px; margin-bottom: 12px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span style="font-size: 13px; font-weight: 700; color: #ff6b6b;">🚨 [포트폴리오 손절선 이탈 종목 - 실전 대응 로드맵]</span>
-                <span style="font-size: 11px; color: #ff6b6b; font-weight: bold;">현재 손실률: {loss_pct:.1f}% (손절선 이탈)</span>
+                <span style="font-size: 13px; font-weight: 700; color: #ff6b6b;">🚨 [비중 과다 손실 종목 - 실전 대응 로드맵]</span>
+                <span style="font-size: 11px; color: #ff6b6b; font-weight: bold;">계좌 비중: {weight_pct:.1f}% | 손실률: {loss_pct:.1f}%</span>
             </div>
             <div style="display: flex; gap: 8px; align-items: center;">
                 <div style="flex: 1; background: rgba(231, 76, 60, 0.2); border: 1.5px solid #e74c3c; border-radius: 6px; padding: 8px; text-align: center;">
                     <div style="font-size: 11px; font-weight: bold; color: #ff6b6b;">⛔ 1단계: 추가매수(물타기) 금지</div>
-                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">바닥 없는 하락 시 추가 자금 차단</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">비중 과다로 추가 자금 투입 차단</div>
                     <div style="font-size: 10px; font-weight: bold; color: #ff6b6b;">엄격 준수!</div>
                 </div>
                 <span style="color: #e74c3c; font-weight: bold; font-size: 12px;">➔</span>
@@ -2300,6 +2331,7 @@ def render_123_split_strategy_html(pattern_info, cur_price=0, is_loss_holding=Fa
         </div>
         """
 
+    # 3. 수익 종목 수익 극대화 로드맵
     if is_loss_holding and loss_pct >= 8.0:
         return f"""
         <div style="background-color: rgba(46, 204, 113, 0.12); padding: 12px 14px; border-radius: 8px; border: 1.5px solid #2ecc71; margin-top: 10px; margin-bottom: 12px;">
@@ -2329,6 +2361,7 @@ def render_123_split_strategy_html(pattern_info, cur_price=0, is_loss_holding=Fa
         </div>
         """
 
+    # 4. 신규/관심 종목 1-2-3 분할매수 로드맵
     step = pattern_info.get('step', 1) if isinstance(pattern_info, dict) else 1
     s1_active = (step >= 1)
     s2_active = (step >= 2)
@@ -4499,31 +4532,51 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             t_score_raw_str = ""
             s_score_str = "평가 대상 아님 (N/A)"
 
-                # 2. 패턴 및 수급 가속도 & 포트폴리오 손익 연동
+                # 2. 패턴 및 수급 가속도 & 포트폴리오 비중/손익 연동
         cur_port_temp = load_portfolio()
-        port_item = cur_port_temp.get(code_disp, {})
+        tot_port_invest = sum(float(v.get('entry_price', 0)) * float(v.get('qty', v.get('shares', 0))) for v in cur_port_temp.values())
+        if tot_port_invest <= 0:
+            tot_port_invest = 1.0
+
+        port_item = cur_port_temp.get(code_disp, cur_port_temp.get(str(int(code_disp)) if str(code_disp).isdigit() else code_disp, {}))
         p_entry_tmp = float(port_item.get('entry_price', 0.0))
+        p_qty_tmp = float(port_item.get('qty', port_item.get('shares', 0.0)))
+        item_invest_won = p_entry_tmp * p_qty_tmp
+        weight_pct = (item_invest_won / tot_port_invest * 100.0) if tot_port_invest > 0 else 0.0
+
         is_held = p_entry_tmp > 0
         holding_loss_pct = ((last_close - p_entry_tmp) / p_entry_tmp * 100.0) if is_held else 0.0
         
         timing_info = calculate_entry_timing_badge(df_candle, last_close, p_entry_tmp)
         accel_info = calculate_supply_acceleration(df_candle)
         pattern_info = calculate_real_stock_pattern_badge(df_candle, last_close)
-        split_strategy_html = render_123_split_strategy_html(pattern_info, last_close, is_loss_holding=is_held, loss_pct=holding_loss_pct)
 
-        # 3. 통일된 실전 매매 종합 판정 (모순 0% 박멸 & 보유 손실 종목 완벽 대응)
+        # 스마트 물타기 가능 여부 판정 (비중 12% 이하 소액 & 손실 -5%~-35% & 20일선 지지 또는 낙폭과대 반등)
+        is_bottom_bounce = pattern_info.get('step1_active', False) or (accel_info.get('ratio', 0) >= -10) or (df_candle['Close'].iloc[-1] >= df_candle['MA5'].iloc[-1])
+        can_smart_water = is_held and (weight_pct < 12.0) and (-35.0 <= holding_loss_pct <= -5.0) and is_bottom_bounce
+
+        split_strategy_html = render_123_split_strategy_html(pattern_info, last_close, is_loss_holding=is_held, loss_pct=holding_loss_pct, weight_pct=weight_pct, can_smart_water=can_smart_water)
+
+        # 3. 통일된 실전 매매 종합 판정 (비중 고려 스마트 시스템)
         target_buy_guide = ""
         decision_badge = ""
         decision_color = "#7f8c8d"
         decision_bg = "rgba(127, 140, 141, 0.15)"
         
-        if is_held and holding_loss_pct <= -5.0:
-            # 보유 중이고 손실이 -5% 이상 이탈한 경우 (티엠씨 등)
-            decision_badge = "🔴 [손절선 이탈 / 반등 시 비중축소]"
+        if is_held and can_smart_water:
+            # 소액 비중 여유 종목 스마트 평단 낮추기 타점 (NAVER, 삼성전기 등)
+            decision_badge = "🟡 [스마트 평단 낮추기 유효 타점]"
+            decision_color = "#ff9800"
+            decision_bg = "rgba(255, 152, 0, 0.18)"
+            target_buy_guide = f"계좌 비중({weight_pct:.1f}%) 여유 충분. 20일선({ma20_val}) 바닥 지지 확인. 소액 1회 분할 추가매수로 평단가 대폭 인하 및 빠른 본절 탈출 유효!"
+        elif is_held and holding_loss_pct <= -5.0:
+            # 비중 과다 또는 초과낙폭 종목 (LS머트, 티엠씨 등)
+            decision_badge = "🔴 [비중 과다 / 반등 시 비중축소]"
             decision_color = "#e74c3c"
             decision_bg = "rgba(231, 76, 60, 0.18)"
-            target_buy_guide = f"평단가({int(p_entry_tmp):,}원) 대비 {holding_loss_pct:.1f}% 손실. 추가 물타기 절대 금지! 20일선({ma20_val}) 반등 시 손실 축소 탈출 권장."
+            target_buy_guide = f"계좌 비중({weight_pct:.1f}%) 과다 및 {holding_loss_pct:.1f}% 손실. 추가 자금 투입 절대 금지! 20일선({ma20_val}) 반등 시 손실 축소 탈출 우선."
         elif is_held and holding_loss_pct >= 8.0:
+            # 수익 종목 (LS ELECTRIC, 삼성전자 등)
             decision_badge = "💰 [수익 실현 / 분할 익절]"
             decision_color = "#2ecc71"
             decision_bg = "rgba(46, 204, 113, 0.18)"
