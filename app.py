@@ -3154,9 +3154,11 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
         with st.sidebar.spinner("🤖 Gemini 3.7 AI가 실시간 분석 답변을 생성하는 중..."):
             diag_info = ""
             if attach_status:
+                cur_code = st.session_state.get('sel_code', '005930')
+                cur_name = st.session_state.get('sel_name', '삼성전자')
                 diag_info = "=== [실시간 대시보드 및 시장 컨텍스트] ===\n"
                 diag_info += f"- 현재 시각: {datetime.now(_KST).strftime('%Y-%m-%d %H:%M:%S')}\n"
-                diag_info += f"- 분석 대상 종목: {name_disp} ({code_disp})\n"
+                diag_info += f"- 분석 대상 종목: {cur_name} ({cur_code})\n"
                 if 'current_price_for_gemini' in locals() and current_price_for_gemini:
                     diag_info += f"- 현재가: {current_price_for_gemini:,.0f}원 (당일 등락률: {daily_chg:+.2f}%)\n"
                 if 't_score_adj' in locals():
