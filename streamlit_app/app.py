@@ -3170,11 +3170,12 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
                 diag_info += "========================================\n\n"
 
             models_to_try = [
+                "gemini-2.5-flash",
+                "gemini-flash-latest",
+                "gemini-2.5-pro",
+                "gemini-pro-latest",
                 "gemini-3.7-flash",
-                "gemini-3.7-pro",
-                "gemini-3.6-flash",
-                "gemini-2.0-flash",
-                "gemini-1.5-flash"
+                "gemini-2.5-flash-lite"
             ]
 
             headers = {"Content-Type": "application/json"}
