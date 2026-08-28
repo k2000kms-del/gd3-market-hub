@@ -4377,7 +4377,13 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             for i in range(len(df_candle)):
                 close_val = df_candle['Close'].iloc[i]
                 open_val = df_candle['Open'].iloc[i] if 'Open' in df_candle.columns else close_val
+                high_val = df_candle['High'].iloc[i] if 'High' in df_candle.columns else close_val
+                low_val = df_candle['Low'].iloc[i] if 'Low' in df_candle.columns else close_val
                 ma5_val = df_candle['MA5'].iloc[i]
+                ma20_val = df_candle['MA20'].iloc[i] if 'MA20' in df_candle.columns else close_val
+                raw_sl = dynamic_raw_sl.iloc[i]
+                bb_lower_val = df_candle['BB_Lower'].iloc[i] if 'BB_Lower' in df_candle.columns else (ma20_val * 0.95)
+                prev_close = df_candle['Close'].iloc[i-1] if i > 0 else close_val
                 ma20_val = df_candle['MA20'].iloc[i] if 'MA20' in df_candle.columns else close_val
                 raw_sl = dynamic_raw_sl.iloc[i]
                 
