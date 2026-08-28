@@ -4399,8 +4399,32 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
         # 등락 부호 색상
         chg_color_html = "#ff6b6b" if daily_chg >= 0 else "#4e9ff5"
         
-        # 실전 매수 적합도 뱃지, 세력 수급 가속도, 진짜주식 실전 차트 패턴 산출
-                # ── 통일된 실전 매매 종합 판정 (모순 0% 박멸) ──
+        # 1. 퀀트 스코어 및 수급/패턴 선행 계산
+        q_row = df_q[df_q['Code'] == code_disp] if df_q is not None and not df_q.empty else pd.DataFrame()
+        t_score = 0.0
+        t_score_adj = 0.0
+        s_score = 0.0
+        if not q_row.empty:
+            t_score = q_row.iloc[0].get('Total_Score', 0.0)
+            t_score_adj = q_row.iloc[0].get('Total_Score_Adj', t_score)
+            s_score = q_row.iloc[0].get('Sell_Score', 0.0)
+            t_score_str = f"{t_score_adj:.1f}점"
+            t_score_raw_str = f"(원점수: {t_score:.1f}점)"
+            s_score_str = f"{s_score:.1f}점"
+        else:
+            t_score_str = "평가 대상 아님 (N/A)"
+            t_score_raw_str = ""
+            s_score_str = "평가 대상 아님 (N/A)"
+
+        # 2. 패턴 및 수급 가속도 계산
+        cur_port_temp = load_portfolio()
+        p_entry_tmp = cur_port_temp.get(code_disp, {}).get('entry_price', 0.0)
+        timing_info = calculate_entry_timing_badge(df_candle, last_close, p_entry_tmp)
+        accel_info = calculate_supply_acceleration(df_candle)
+        pattern_info = calculate_real_stock_pattern_badge(df_candle, last_close)
+        split_strategy_html = render_123_split_strategy_html(pattern_info, last_close)
+
+        # 3. 통일된 실전 매매 종합 판정 (모순 0% 박멸)
         target_buy_guide = ""
         decision_badge = ""
         decision_color = "#7f8c8d"
@@ -4493,25 +4517,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
           </div>
         </div>
         """
-
-# ── 💡 퀀트 종합 매매 의견 카드 추가 ──────────────────────────────────
-        q_row = df_q[df_q['Code'] == code_disp]
         
-        t_score = 0.0
-        t_score_adj = 0.0
-        s_score = 0.0
-        if not q_row.empty:
-            t_score = q_row.iloc[0].get('Total_Score', 0.0)
-            t_score_adj = q_row.iloc[0].get('Total_Score_Adj', t_score)
-            s_score = q_row.iloc[0].get('Sell_Score', 0.0)
-            t_score_str = f"{t_score_adj:.1f}점"
-            t_score_raw_str = f"(원점수: {t_score:.1f}점)"
-            s_score_str = f"{s_score:.1f}점"
-        else:
-            t_score_str = "평가 대상 아님 (N/A)"
-            t_score_raw_str = ""
-            s_score_str = "평가 대상 아님 (N/A)"
-
         if True:
             # KOSPI 시장 국면 변수 재사용 (상단에서 이미 계산 완료 — 이중 API 호출 방지)
             # market_regime, rec_cash, rec_stock, regime_desc, regime_color 이미 설정됨
