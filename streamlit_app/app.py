@@ -2235,13 +2235,70 @@ def calculate_real_stock_pattern_badge(df_stock, cur_price):
 
 
 def render_123_split_strategy_html(pattern_info, cur_price=0, is_loss_holding=False, loss_pct=0.0, **kwargs):
-    """정우영 전문가의 1-2-3 분할매수 3단계 진단기 위젯 HTML"""
-    step = pattern_info.get('step', 1)
-    
+    """정우영 전문가의 실전 로드맵 (손실 방어 / 수익 극대화 / 신규 분할매수 100% 일치화)"""
+    if is_loss_holding and loss_pct <= -5.0:
+        return f"""
+        <div style="background-color: rgba(231, 76, 60, 0.12); padding: 12px 14px; border-radius: 8px; border: 1.5px solid #e74c3c; margin-top: 10px; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 13px; font-weight: 700; color: #ff6b6b;">🚨 [포트폴리오 손절선 이탈 종목 - 실전 대응 로드맵]</span>
+                <span style="font-size: 11px; color: #ff6b6b; font-weight: bold;">현재 손실률: {loss_pct:.1f}% (손절선 이탈)</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <div style="flex: 1; background: rgba(231, 76, 60, 0.2); border: 1.5px solid #e74c3c; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #ff6b6b;">⛔ 1단계: 추가매수(물타기) 금지</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">바닥 없는 하락 시 추가 자금 차단</div>
+                    <div style="font-size: 10px; font-weight: bold; color: #ff6b6b;">엄격 준수!</div>
+                </div>
+                <span style="color: #e74c3c; font-weight: bold; font-size: 12px;">➔</span>
+                <div style="flex: 1; background: rgba(255, 152, 0, 0.15); border: 1px solid #ff9800; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #ff9800;">🛡️ 2단계: 기술적 반등 대기</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">20일선 및 지지선 부근 단기 반등 관찰</div>
+                    <div style="font-size: 10px; color: #ff9800;">대기/관찰</div>
+                </div>
+                <span style="color: #e74c3c; font-weight: bold; font-size: 12px;">➔</span>
+                <div style="flex: 1; background: rgba(46, 204, 113, 0.15); border: 1px solid #2ecc71; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #2ecc71;">🎯 3단계: 반등 시 분할 탈출/비중축소</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">손실 축소 후 현금 확보 및 주도주 교체</div>
+                    <div style="font-size: 10px; color: #2ecc71;">실행 목표</div>
+                </div>
+            </div>
+        </div>
+        """
+
+    if is_loss_holding and loss_pct >= 8.0:
+        return f"""
+        <div style="background-color: rgba(46, 204, 113, 0.12); padding: 12px 14px; border-radius: 8px; border: 1.5px solid #2ecc71; margin-top: 10px; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 13px; font-weight: 700; color: #2ecc71;">💰 [포트폴리오 수익 극대화 로드맵 - 트레일링 스탑 & 분할 익절]</span>
+                <span style="font-size: 11px; color: #2ecc71; font-weight: bold;">현재 수익률: +{loss_pct:.1f}% (수익권)</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <div style="flex: 1; background: rgba(46, 204, 113, 0.2); border: 1.5px solid #2ecc71; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #2ecc71;">🛡️ 1단계: 본절가 손절선 상향</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">원금 손실 위험 0% 완벽 방어</div>
+                    <div style="font-size: 10px; font-weight: bold; color: #2ecc71;">✅ 설정 완료</div>
+                </div>
+                <span style="color: #2ecc71; font-weight: bold; font-size: 12px;">➔</span>
+                <div style="flex: 1; background: rgba(255, 152, 0, 0.2); border: 1.5px solid #ff9800; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #ff9800;">💰 2단계: 1차 목표가 50% 분할 익절</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">확정 수익 계좌 입금</div>
+                    <div style="font-size: 10px; font-weight: bold; color: #ff9800;">🎯 현재 실행 타점!</div>
+                </div>
+                <span style="color: #2ecc71; font-weight: bold; font-size: 12px;">➔</span>
+                <div style="flex: 1; background: rgba(78, 159, 245, 0.15); border: 1px solid #4e9ff5; border-radius: 6px; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; color: #4e9ff5;">🚀 3단계: 전고점 추세 홀딩</div>
+                    <div style="font-size: 9px; color: #ddd; margin: 2px 0;">잔여 50% 물량으로 대세 랠리 향유</div>
+                    <div style="font-size: 10px; color: #4e9ff5;">추세 관찰</div>
+                </div>
+            </div>
+        </div>
+        """
+
+    step = pattern_info.get('step', 1) if isinstance(pattern_info, dict) else 1
     s1_active = (step >= 1)
     s2_active = (step >= 2)
     s3_active = (step >= 3)
-    
+
     def _box_style(active, is_current, bg_color):
         border = "2px solid " + bg_color if is_current else ("1px solid rgba(255,255,255,0.2)" if active else "1px solid rgba(255,255,255,0.06)")
         bg = bg_color if is_current else ("rgba(255,255,255,0.05)" if active else "rgba(0,0,0,0.2)")
@@ -2251,42 +2308,38 @@ def render_123_split_strategy_html(pattern_info, cur_price=0, is_loss_holding=Fa
     s1_style = _box_style(s1_active, step == 1, "rgba(46, 204, 113, 0.25)")
     s2_style = _box_style(s2_active, step == 2, "rgba(32, 201, 151, 0.25)")
     s3_style = _box_style(s3_active, step == 3, "rgba(255, 146, 43, 0.25)")
-    
+
     s1_mark = "🎯 현재 타점!" if step == 1 else ("✅ 완료" if step > 1 else "대기")
     s2_mark = "🎯 현재 타점!" if step == 2 else ("✅ 완료" if step > 2 else "대기")
     s3_mark = "🎯 현재 타점!" if step == 3 else "대기"
 
-    html = f"""
-    <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 12px 14px; margin-top: 10px; margin-bottom: 12px; font-family: 'malgun gothic', sans-serif;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <span style="font-size: 13px; font-weight: 700; color: #ff922b;">📊 [진짜주식 실전 분할매수 1-2-3 진단기]</span>
-        <span style="font-size: 11px; color: #aaa;">정우영 전문가 실전 타점 공식</span>
-      </div>
-      <div style="display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 6px; align-items: center; text-align: center;">
-        <div style="{s1_style} padding: 8px 6px; border-radius: 6px;">
-          <div style="font-size: 12px; font-weight: 600; color: #eee;">1단계: 20일선 지지</div>
-          <div style="font-size: 10px; color: #aaa; margin: 2px 0;">비중 10% 진입</div>
-          <div style="font-size: 11px; font-weight: 700; color: #2ecc71;">{s1_mark}</div>
+    return f"""
+    <div style="background-color: #111920; padding: 12px 14px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-top: 10px; margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-size: 12px; font-weight: 700; color: #ff922b;">📊 [진짜주식 실전 분할매수 1-2-3 로드맵]</span>
+            <span style="font-size: 10px; color: #888;">정우영 전문가 실전 타점 공식</span>
         </div>
-        <div style="color: #666; font-size: 14px;">➡️</div>
-        <div style="{s2_style} padding: 8px 6px; border-radius: 6px;">
-          <div style="font-size: 12px; font-weight: 600; color: #eee;">2단계: 갭하락 양봉 지지</div>
-          <div style="font-size: 10px; color: #aaa; margin: 2px 0;">비중 20% 확대</div>
-          <div style="font-size: 11px; font-weight: 700; color: #20c997;">{s2_mark}</div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <div style="flex: 1; {s1_style} border-radius: 6px; padding: 8px; text-align: center;">
+                <div style="font-size: 11px; font-weight: bold; color: #eee;">1단계: 20일선 지지</div>
+                <div style="font-size: 9px; color: #aaa; margin: 2px 0;">비중 10% 정찰 진입</div>
+                <div style="font-size: 10px; font-weight: bold; color: #2ecc71;">{s1_mark}</div>
+            </div>
+            <span style="color: #4e9ff5; font-weight: bold; font-size: 12px;">➔</span>
+            <div style="flex: 1; {s2_style} border-radius: 6px; padding: 8px; text-align: center;">
+                <div style="font-size: 11px; font-weight: bold; color: #eee;">2단계: 갭하락 양봉 지지</div>
+                <div style="font-size: 9px; color: #aaa; margin: 2px 0;">비중 20% 확대</div>
+                <div style="font-size: 10px; font-weight: bold; color: #20c997;">{s2_mark}</div>
+            </div>
+            <span style="color: #4e9ff5; font-weight: bold; font-size: 12px;">➔</span>
+            <div style="flex: 1; {s3_style} border-radius: 6px; padding: 8px; text-align: center;">
+                <div style="font-size: 11px; font-weight: bold; color: #eee;">3단계: 60일선 거래량 돌파</div>
+                <div style="font-size: 9px; color: #aaa; margin: 2px 0;">비중 30% 주도주 풀베팅</div>
+                <div style="font-size: 10px; font-weight: bold; color: #ff922b;">{s3_mark}</div>
+            </div>
         </div>
-        <div style="color: #666; font-size: 14px;">➡️</div>
-        <div style="{s3_style} padding: 8px 6px; border-radius: 6px;">
-          <div style="font-size: 12px; font-weight: 600; color: #eee;">3단계: 60일선 거래량 돌파</div>
-          <div style="font-size: 10px; color: #aaa; margin: 2px 0;">비중 30% Full 베팅</div>
-          <div style="font-size: 11px; font-weight: 700; color: #ff922b;">{s3_mark}</div>
-        </div>
-      </div>
-      <div style="margin-top: 8px; font-size: 12px; color: #ccc; background: rgba(0,0,0,0.25); padding: 6px 10px; border-radius: 4px; border-left: 3px solid {pattern_info.get('color', '#ff922b')};">
-        💡 <b>실전 진단</b>: {pattern_info.get('desc', '')}
-      </div>
     </div>
     """
-    return html
 
 
 @st.cache_data(ttl=120)  # 2분 캐시
