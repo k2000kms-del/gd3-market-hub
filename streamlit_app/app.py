@@ -4427,8 +4427,11 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     # 미보유 상태: 차트 시각화를 위해 raw_sl 표시 (래칫 없이 위아래 변동)
                     stop_loss_series.append(raw_sl)
                     
-                    # 낙폭과대 매수 판단 (RSI 과매도 30 이하 탈출)
-                    cond_fall_indicator = (not pd.isna(prev_rsi) and prev_rsi <= 30 and curr_rsi > 30)
+                    # 낙폭과대 매수 판단 (RSI 35 이하 반등 OR 볼린저 하단 지지 반등 OR 5일선 상향 반등 양봉)
+                    cond_fall_rsi = (not pd.isna(curr_rsi) and curr_rsi <= 38 and close_val >= open_val)
+                    cond_fall_bb  = (low_val <= bb_lower_val and close_val > bb_lower_val and close_val >= open_val)
+                    cond_fall_ma  = (close_val < ma20_val and close_val > ma5_val and not pd.isna(prev_close) and prev_close <= ma5_val and close_val >= open_val)
+                    cond_fall_indicator = cond_fall_rsi or cond_fall_bb or cond_fall_ma
                     
                     if cond_fall_indicator:
                         fall_signal_list.append(True)
@@ -5188,7 +5191,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                             x=[None], y=[None],
                             mode='markers',
                             name='낙폭과대 매수',
-                            marker=dict(symbol='triangle-up', size=10, color='#94d82d'),
+                            marker=dict(symbol='triangle-up', size=10, color='#a29bfe'),
                             showlegend=True
                         ), row=1, col=1)
                         
@@ -5197,7 +5200,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                             y=fall_signals['Low'] * 0.985,
                             mode='markers',
                             name='낙폭과대 매수',
-                            marker=dict(symbol='arrow-up', size=14, color='#94d82d'),
+                            marker=dict(symbol='arrow-up', size=14, color='#a29bfe'),
                             text=hover_texts_fall,
                             hovertemplate="%{text}<extra></extra>",
                             showlegend=False
