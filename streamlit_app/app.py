@@ -982,7 +982,7 @@ def detect_volume_surge(df: pd.DataFrame, lookback: int = 10, multiplier: float 
     df['Vol_Surge'] = df['Volume'] > (avg_vol * multiplier)
     return df
 
-def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=None, is_portfolio=False, marcap=0.0):
+def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=None, is_portfolio=False, marcap=0.0, is_loss_holding=False, **kwargs):
     """
     분봉(1분/5분) 스캘핑 신호 계산 — 백테스트 최적 파라미터 반영
 
@@ -1362,6 +1362,23 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
         df['Add_Signal']  = add_signal_list
         df['Fall_Signal'] = fall_signal_list
         df.drop(columns=['ATR_Scalp', 'Raw_Buy'], inplace=True, errors='ignore')
+
+        # ── [노이즈 제거 & 상단 의견 100% 일치화 필터] ──
+        if is_loss_holding:
+            # 손실 보유 종목은 물타기 매수 신호를 전면 숨기고, 반등 탈출 매도(Exit_Signal)만 표시
+            df['Buy_Signal'] = False
+            df['Fall_Signal'] = False
+            df['Add_Signal'] = False
+        else:
+            # 신규/일반 종목: 5봉 내 중복 매수 신호 억제 (노이즈 방지)
+            if 'Buy_Signal' in df.columns:
+                last_buy = -999
+                for i in range(len(df)):
+                    if df.loc[df.index[i], 'Buy_Signal']:
+                        if i - last_buy < 6:
+                            df.loc[df.index[i], 'Buy_Signal'] = False
+                        else:
+                            last_buy = i
 
     except Exception as e:
         print(f"DEBUG: calculate_intraday_signals error: {e}")
@@ -4123,8 +4140,17 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
 
             df_5min = resample_to_5min(df_1min)
 
-            df_1min = calculate_intraday_signals(df_1min, my_entry_price=0.0, timeframe='1min', code=code_disp, is_portfolio=is_portfolio, marcap=marcap_val)
-            df_5min = calculate_intraday_signals(df_5min, my_entry_price=0.0, timeframe='5min', code=code_disp, is_portfolio=is_portfolio, marcap=marcap_val)
+            # 포트폴리오 보유 손익 상태 파악
+            cur_port_tmp = load_portfolio()
+            p_item = cur_port_tmp.get(code_disp, cur_port_tmp.get(str(int(code_disp)) if str(code_disp).isdigit() else code_disp, {}))
+            p_entry_tmp = float(p_item.get('entry_price', 0.0))
+            is_held_tmp = p_entry_tmp > 0
+            cur_p_for_loss = df_candle['Close'].iloc[-1] if not df_candle.empty else 0.0
+            holding_loss_pct = ((cur_p_for_loss - p_entry_tmp) / p_entry_tmp * 100.0) if is_held_tmp and p_entry_tmp > 0 else 0.0
+            is_loss_held = is_held_tmp and holding_loss_pct <= -5.0
+
+            df_1min = calculate_intraday_signals(df_1min, my_entry_price=p_entry_tmp, timeframe='1min', code=code_disp, is_portfolio=is_held_tmp, marcap=marcap_val, is_loss_holding=is_loss_held)
+            df_5min = calculate_intraday_signals(df_5min, my_entry_price=p_entry_tmp, timeframe='5min', code=code_disp, is_portfolio=is_held_tmp, marcap=marcap_val, is_loss_holding=is_loss_held)
 
             # 이전 종목 캐시 정리 (메모리 절약: 현재 종목 외 나머지 삭제)
             for k in list(st.session_state.keys()):
