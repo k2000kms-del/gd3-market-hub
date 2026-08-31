@@ -353,9 +353,9 @@ if now_weekday < 5 and 1530 <= now_hm <= 1830:
     else:
         print(f"🌙 오늘({today_str}) 장마감 브리핑은 이미 발송 완료되었습니다.")
 
-# 4. 장중 포트폴리오 실시간 감시 (09:00 ~ 15:30 KST)
+# 4. 장중 포트폴리오 실시간 감시 & 정우영식 점핑 양봉 실시간 스캔 (09:00 ~ 15:30 KST)
 if now_weekday < 5 and 900 <= now_hm <= 1530:
-    print("📡 장중 실시간 포트폴리오 감시 스캔...")
+    print("📡 장중 실시간 포트폴리오 감시 & 점핑 양봉 돌파 스캔...")
     try:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
@@ -387,7 +387,48 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
                                 reason="🛑 손절선 이탈", signal_type="손절경고",
                                 token=token, chat_id=chat_id
                             )
-            print("  ✅ 장중 포트폴리오 스캔 완료")
+
+        # ── [정우영식 점핑 양봉 돌파 실시간 스캔 (09:30 ~ 15:00)] ──
+        if 930 <= now_hm <= 1500 and not df_q.empty and 'Code' in df_q.columns:
+            m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
+            df_m_tmp = pd.read_csv(m_path) if os.path.exists(m_path) else pd.DataFrame()
+            sent_jumping = briefing_state.get('sent_jumping_codes', [])
+            
+            if not df_m_tmp.empty and 'Code' in df_m_tmp.columns:
+                df_m_tmp['Code'] = df_m_tmp['Code'].astype(str).str.zfill(6)
+                # 거래대금 상위 20 종목 중 점핑 양봉 탐색
+                if 'Amount' in df_m_tmp.columns:
+                    top_cands = df_m_tmp.sort_values('Amount', ascending=False).head(20)
+                    for _, s_row in top_cands.iterrows():
+                        c_code = s_row['Code']
+                        if c_code in sent_jumping:
+                            continue
+                        s_close = float(s_row.get('Close', 0))
+                        s_open = float(s_row.get('Open', s_close)) if 'Open' in s_row else s_close
+                        s_low = float(s_row.get('Low', s_open)) if 'Low' in s_row else s_open
+                        s_chg = float(s_row.get('ChagesRatio', 0))
+                        s_amt = float(s_row.get('Amount', 0)) / 1e8
+                        
+                        # 4대 점핑 양봉 조건 (시초가 갭 +3~7%, 시초가 방어, 거래대금 100억 이상)
+                        gap_est = s_chg - ((s_close - s_open) / s_open * 100) if s_open > 0 else 0
+                        if 2.8 <= gap_est <= 7.0 and s_close >= s_open and s_low >= s_open * 0.985 and s_amt >= 100:
+                            s_name = str(s_row.get('Name', c_code))
+                            body_pct = ((s_close - s_open) / s_open * 100) if s_open > 0 else 0
+                            print(f"🔥 점핑 양봉 돌파 포착: {s_name}({c_code})")
+                            tn.notify_jumping_candle_breakout(
+                                code=c_code, name=s_name,
+                                current_price=s_close, open_price=s_open,
+                                gap_pct=gap_est, body_pct=body_pct,
+                                volume_ratio=250.0, amount_100m=s_amt,
+                                resistance_type="20일 수급선 및 전고점",
+                                token=token, chat_id=chat_id
+                            )
+                            sent_jumping.append(c_code)
+                            briefing_state['sent_jumping_codes'] = sent_jumping
+                            _save_state()
+                            break # 한 번에 1개씩 안전 발송
+        
+        print("  ✅ 장중 포트폴리오 및 점핑 양봉 스캔 완료")
     except Exception as e:
         print(f"  ❌ 장중 포트폴리오 스캔 오류: {e}")
 

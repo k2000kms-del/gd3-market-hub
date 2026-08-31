@@ -788,3 +788,43 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
         return _send(token, chat_id, reply, force_send=True)
 
     return False
+
+
+# ─────────────────────────────────────────────────────────────
+# 🎯 [정우영식 점핑 양봉 징검다리 돌파 전용 알림]
+# ─────────────────────────────────────────────────────────────
+
+def notify_jumping_candle_breakout(
+    code: str,
+    name: str,
+    current_price: float,
+    open_price: float,
+    gap_pct: float,
+    body_pct: float,
+    volume_ratio: float,
+    amount_100m: float,
+    resistance_type: str = "20일 이동평균선",
+    token: str = None,
+    chat_id: str = None
+) -> bool:
+    """정우영식 점핑 양봉(Jumping Bullish Candle) 징검다리 매물벽 돌파 실시간 포착 알림."""
+    text = (
+        f"🔥 <b>[GD 3.0 정우영식 점핑 양봉 돌파 포착!]</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 <b>종목명</b>: <b>{name} ({code})</b>\n"
+        f"💵 <b>현재가</b>: <b>{current_price:,.0f}원</b> (당일 시초가: {open_price:,.0f}원)\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ <b>점핑 양봉 4대 수급 조건 완성</b>:\n"
+        f"├ 🚀 <b>징검다리 갭</b>: <b>▲+{gap_pct:.1f}%</b> ({resistance_type} 갭 돌파!)\n"
+        f"├ 🛡️ <b>시초가 방어</b>: 장중 저가가 시초가를 지켜내며 <b>양봉 몸통(▲+{body_pct:.1f}%)</b> 유지 🟢\n"
+        f"├ 💰 <b>거래대금</b>: <b>{amount_100m:,.0f}억원</b> (5일 평균 대비 거래량 <b>{volume_ratio:.0f}% 폭증</b>)\n"
+        f"└ 🎯 <b>세력 절대 방어선</b>: 🟢 <b>{open_price:,.0f}원</b> (오늘 시초가 지지 시 추가 상승 유력)\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <b>실전 매매 가이드</b>:\n"
+        f"비싸게 시작했는데도 기존 매물을 전부 흡수하고 더 비싸게 사려는 강력한 메이저 수급이 유입되었습니다.\n"
+        f"👉 <b>시초가({open_price:,.0f}원)를 손절선/지지선</b>으로 잡고 1차 분할 매수 타점으로 유효합니다!\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<i>원칙 매매로 안전하게 수익을 극대화하십시오! 🚀</i>"
+    )
+    return _send(token, chat_id, text, force_send=True)
+

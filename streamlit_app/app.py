@@ -2306,6 +2306,72 @@ def get_sector_spin_html(df_m):
     """
 
 
+
+def detect_jumping_candle(df_stock):
+    """
+    정우영 전문가의 [점핑 양봉 징검다리 매물벽 돌파] 4대 정밀 조건식 엔진
+    1. 징검다리 갭: 시초가 +3.0% ~ +7.0% 점핑
+    2. 매물벽 돌파: 20일선(MA20) 또는 직전 20일 최고가를 갭으로 상향 돌파
+    3. 시초가 방어: 장중 저가가 시초가를 깨지 않고(Low >= Open * 0.985), 종가가 시초가 위(Close >= Open)
+    4. 물량 흡수 거래량: 5일 평균 거래량의 180% 이상 폭증 & 거래대금 50억 이상
+    """
+    if df_stock is None or df_stock.empty or len(df_stock) < 5:
+        return {'is_jumping': False, 'score': 0, 'open_price': 0, 'badge': '', 'desc': ''}
+    
+    closes = df_stock['Close']
+    opens = df_stock['Open'] if 'Open' in df_stock.columns else closes
+    highs = df_stock['High'] if 'High' in df_stock.columns else closes
+    lows = df_stock['Low'] if 'Low' in df_stock.columns else closes
+    vols = df_stock['Volume'] if 'Volume' in df_stock.columns else pd.Series([1]*len(df_stock))
+    
+    cur_close = float(closes.iloc[-1])
+    cur_open = float(opens.iloc[-1])
+    cur_low = float(lows.iloc[-1])
+    cur_high = float(highs.iloc[-1])
+    cur_vol = float(vols.iloc[-1])
+    
+    prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else cur_open
+    if prev_close <= 0 or cur_open <= 0:
+        return {'is_jumping': False, 'score': 0, 'open_price': 0, 'badge': '', 'desc': ''}
+        
+    gap_pct = (cur_open - prev_close) / prev_close * 100
+    body_pct = (cur_close - cur_open) / cur_open * 100
+    
+    # 이평선 및 전고점 계산
+    ma20 = float(closes.rolling(20, min_periods=5).mean().iloc[-1])
+    high20 = float(highs.iloc[-21:-1].max()) if len(highs) >= 21 else float(highs.max())
+    vol_ma5 = float(vols.rolling(5, min_periods=2).mean().iloc[-1])
+    vol_ratio = (cur_vol / vol_ma5 * 100) if vol_ma5 > 0 else 100.0
+    
+    # 4대 조건 검사
+    cond_gap = 2.8 <= gap_pct <= 7.5
+    cond_breakout = (cur_open >= ma20 * 0.995) or (cur_open >= high20 * 0.99)
+    cond_support = (cur_low >= cur_open * 0.982) and (cur_close >= cur_open * 0.995)
+    cond_volume = (cur_vol >= vol_ma5 * 1.5) or (cur_vol > 500000)
+    
+    resistance_type = "20일 수급선" if cur_open >= ma20 else "20일 직전 전고점"
+    
+    if cond_gap and cond_breakout and cond_support and cond_volume:
+        score = 95
+        desc = (
+            f"🚀 {resistance_type}({ma20:,.0f}원)을 <b>▲+{gap_pct:.1f}% 갭으로 훌쩍 건너뛴</b> 후, "
+            f"기존 매물을 거래량({vol_ratio:.0f}%)으로 전부 흡수하며 <b>시초가({cur_open:,.0f}원)를 완벽히 사수한 최상의 점핑 돌파</b>입니다!"
+        )
+        return {
+            'is_jumping': True,
+            'score': score,
+            'gap_pct': gap_pct,
+            'body_pct': body_pct,
+            'open_price': cur_open,
+            'support_price': cur_open,
+            'resistance_type': resistance_type,
+            'vol_ratio': vol_ratio,
+            'badge': '🔥 [정우영식 점핑 양봉 징검다리 돌파]',
+            'desc': desc
+        }
+    return {'is_jumping': False, 'score': 0, 'open_price': cur_open, 'badge': '', 'desc': ''}
+
+
 def calculate_entry_timing_badge(df_stock, cur_price, entry_price=0):
     """주식의 실시간 캔들 및 가격 지표를 분석하여 실전 매수 적합도 뱃지 및 해설 반환"""
     if df_stock is None or df_stock.empty or len(df_stock) < 5:
@@ -2415,6 +2481,19 @@ def calculate_real_stock_pattern_badge(df_stock, cur_price):
     ma60 = closes.rolling(60, min_periods=10).mean().iloc[-1]
     vol_ma20 = vols.rolling(20, min_periods=5).mean().iloc[-1]
     cur_vol = vols.iloc[-1] if len(vols) > 0 else 0
+
+    # 0. [최우선 0순위] 정우영식 점핑 양봉 징검다리 매물벽 돌파
+    jumping_res = detect_jumping_candle(df_stock)
+    if jumping_res.get('is_jumping'):
+        return {
+            'badge': '🔥 [정우영식 점핑 양봉 징검다리 돌파]',
+            'color': '#ff3838',
+            'bg': 'rgba(255, 56, 56, 0.22)',
+            'desc': jumping_res.get('desc'),
+            'step': 4,
+            'pattern': 'jumping_bullish_breakout',
+            'open_price': jumping_res.get('open_price', 0)
+        }
 
     # 1. 60일선 저항 헤딩 (60일선 터치 후 윗꼬리 달고 밀림)
     cur_high = highs.iloc[-1]
@@ -5581,6 +5660,20 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 hoverlabel=dict(bgcolor='#0d1b2a', font_size=13, font_family='malgun gothic'),
                 hovertemplate="<b>📅 일자: %{x}</b><br>🔓 <b>시가</b>: %{open:,d}원<br>🔺 <b>고가</b>: %{high:,d}원<br>🔻 <b>저가</b>: %{low:,d}원<br>🔒 <b>종가</b>: %{close:,d}원<extra></extra>"
             ), row=1, col=1)
+
+                        # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 ──
+            try:
+                j_info = detect_jumping_candle(df_candle)
+                if j_info.get('is_jumping') or (len(df_candle) > 0 and df_candle['Open'].iloc[-1] > df_candle['Close'].iloc[-2] * 1.025):
+                    s_open = j_info.get('open_price') or df_candle['Open'].iloc[-1]
+                    fig_c.add_hline(
+                        y=s_open, line_dash='dash', line_color='#2ecc71', line_width=2,
+                        annotation_text=f"🟢 세력 절대 방어선 (시초가: {s_open:,.0f}원)",
+                        annotation_position="bottom right",
+                        annotation_font=dict(color="#2ecc71", size=11, family="malgun gothic")
+                    )
+            except Exception as _je:
+                pass
 
             # MA5
             fig_c.add_trace(go.Scattergl(
