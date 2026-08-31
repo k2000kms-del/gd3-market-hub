@@ -1918,7 +1918,20 @@ def fetch_live_stock_listing():
     """코스피/코스닥 전체 시세 조회.
     1순위: FDR (로컬 환경)
     2순위: GitHub CSV (Streamlit Cloud — KRX 차단 환경)
+    반환 전 ETF/스팩/파생상품 완전 제거 후 반환.
     """
+    def _strip_etf(df):
+        """ETF/스팩/파생상품 종목을 반환 전 제거 (EXCLUDE_KEYWORDS 기반 벡터 필터)"""
+        if df.empty or 'Name' not in df.columns:
+            return df
+        name_lower = df['Name'].fillna('').astype(str).str.lower()
+        _etf_pat = '|'.join(re.escape(kw) for kw in EXCLUDE_KEYWORDS)
+        is_fund = name_lower.str.contains(_etf_pat, regex=True, na=False)
+        if 'Sector' in df.columns:
+            sector_lower = df['Sector'].fillna('').astype(str).str.lower()
+            is_fund = is_fund | sector_lower.str.contains(r'etf|수익증권', regex=True, na=False)
+        return df[~is_fund].reset_index(drop=True)
+
     # 1순위: FDR 시도 (로컬에서는 정상 동작)
     try:
         df_ks = fdr.StockListing('KOSPI')
@@ -1930,7 +1943,7 @@ def fetch_live_stock_listing():
                     df_live[col] = 0
             df_live = df_live[['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
             df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
-            return df_live
+            return _strip_etf(df_live)
     except Exception:
         pass
 
@@ -1943,7 +1956,7 @@ def fetch_live_stock_listing():
                 df_live[col] = 0
         df_live = df_live[['Code', 'Name', 'Close', 'ChagesRatio', 'Volume', 'Amount']].copy()
         df_live['Code'] = df_live['Code'].astype(str).str.zfill(6)
-        return df_live
+        return _strip_etf(df_live)
     except Exception:
         pass
 
@@ -2943,6 +2956,41 @@ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_
                     print(f"DEBUG: 로컬 CSV에서 당일 수급 데이터 {len(loaded_df)}행 복원 완료")
         except Exception as csv_restore_err:
             print(f"DEBUG: 로컬 CSV 수급 복원 실패: {csv_restore_err}")
+
+    # ── [초기 시딩] Supabase·CSV 복원 모두 실패 시 네이버 수급 API로 즉시 스냅샷 1회 시딩 ──
+    # 이렇게 하면 앱 시작 직후에도 최소 1개 데이터 포인트가 확보되어 일직선 방지
+    _now_kst_seed = datetime.now(_KST)
+    _hm_seed = _now_kst_seed.hour * 100 + _now_kst_seed.minute
+    _is_weekday_seed = _now_kst_seed.weekday() < 5
+    if loaded_df.empty and _is_weekday_seed and 900 <= _hm_seed <= 1535:
+        try:
+            nv_seed = fetch_naver_realtime_supply()
+            if nv_seed:
+                seed_time = _now_kst_seed.strftime('%H:%M')
+                seed_rows = []
+                for mkt_name in ['코스피', '코스닥']:
+                    if mkt_name in nv_seed:
+                        m_sup = nv_seed[mkt_name]
+                        def _clean_seed(v):
+                            if isinstance(v, str):
+                                v = v.replace(',', '').replace('+', '').strip()
+                            try:
+                                return float(v)
+                            except (ValueError, TypeError):
+                                return 0.0
+                        seed_rows.append({
+                            'Time': seed_time,
+                            'Market': mkt_name,
+                            'Foreign_Net': _clean_seed(m_sup.get('외국인', 0)),
+                            'Individual_Net': _clean_seed(m_sup.get('개인', 0)),
+                            'Institutional_Net': _clean_seed(m_sup.get('기관', 0))
+                        })
+                if seed_rows:
+                    loaded_df = pd.DataFrame(seed_rows)
+                    print(f"DEBUG: 네이버 수급 API 초기 시딩 완료 ({len(seed_rows)}행)")
+        except Exception as seed_err:
+            print(f"DEBUG: 네이버 수급 초기 시딩 실패: {seed_err}")
+
     st.session_state.df_intraday_accum = loaded_df
 
 
@@ -3272,6 +3320,41 @@ try:
     start_background_portfolio_scanner()
 except Exception as _bg_err:
     print(f"DEBUG: 백그라운드 스캐너 기동 실패: {_bg_err}")
+
+# ── [텔레그램 지연 브리핑] Streamlit Cloud 슬립으로 모닝/마감 브리핑을 놓쳤을 때 자동 보상 발송 ──
+try:
+    _now_kst_tg = datetime.now(_KST)
+    _hm_tg = _now_kst_tg.hour * 100 + _now_kst_tg.minute
+    _is_weekday_tg = _now_kst_tg.weekday() < 5
+    _today_tg = _now_kst_tg.strftime('%Y-%m-%d')
+    # 장중(09:00 이후)인데 모닝 브리핑이 미발송된 경우 → 지연 발송
+    if _is_weekday_tg and _hm_tg >= 900 and not _morning_briefing_sent and _briefing_sent_date == _today_tg:
+        if tg_token and tg_chat_id:
+            try:
+                from telegram_notifier import notify_morning_briefing
+                ks_c, ks_m, _ = get_kospi_ma20()
+                regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"
+                c_rat = 20.0 if ks_c >= ks_m else 70.0
+                s_rat = 80.0 if ks_c >= ks_m else 30.0
+                b_data = get_bollinger_market_energy() or {}
+                b_ma5 = b_data.get('ma5', 0)
+                b_st = b_data.get('energy_status', '보통')
+                top_names = []
+                df_q_raw_tg = _sync_and_load_csv_raw('df_quant_final.csv')
+                if not df_q_raw_tg.empty and 'Name' in df_q_raw_tg.columns:
+                    top_names = df_q_raw_tg.head(4)['Name'].tolist()
+                notify_morning_briefing(
+                    token=tg_token, chat_id=tg_chat_id,
+                    market_regime=regime, cash_ratio=c_rat, stock_ratio=s_rat,
+                    bollinger_ma5=b_ma5, bollinger_status=b_st,
+                    top_quant_names=top_names
+                )
+                _morning_briefing_sent = True
+                print(f"DEBUG: 지연 모닝 브리핑 발송 완료 ({_now_kst_tg.strftime('%H:%M')})")
+            except Exception as delayed_m_err:
+                print(f"DEBUG: 지연 모닝 브리핑 실패: {delayed_m_err}")
+except Exception as _tg_delayed_err:
+    print(f"DEBUG: 텔레그램 지연 브리핑 체크 실패: {_tg_delayed_err}")
 
 # ── URL 쿼리 파라미터에서 refresh_gemini 감지 및 강제 갱신 처리 ──
 try:
