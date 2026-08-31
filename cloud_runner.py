@@ -214,6 +214,9 @@ if now_weekday < 5 and 1530 <= now_hm <= 1830:
                             cur_p = float(m_row.iloc[0].get('Close', ep))
                     tot_eval += cur_p * qty
 
+            tot_pnl = tot_eval - tot_entry
+            tot_pct = ((tot_eval - tot_entry) / tot_entry * 100) if tot_entry > 0 else 0.0
+
             # 시장 수급 및 선물/환율 동향 정밀 추출
             sum_path = os.path.join(base_dir, 'data', 'df_market_summary.csv')
             in_path = os.path.join(base_dir, 'data', 'df_supply_intraday.csv')
