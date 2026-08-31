@@ -211,8 +211,12 @@ if now_weekday < 5 and 750 <= now_hm <= 930:
                 spin_market_text=spin_morning_text
             )
             print(f"  ✅ 초고도화 직관적 장전 브리핑 발송 결과: {res}")
-            briefing_state['last_morning_date'] = today_str
-            _save_state()
+            if res:
+                briefing_state['last_morning_date'] = today_str
+                _save_state()
+                print(f"  💾 모닝 브리핑 성공 상태 저장 완료 ({today_str})")
+            else:
+                print(f"  ⚠️ 모닝 브리핑 발송 실패(res=False) — 다음 5분 크론에서 재시도 대기")
         except Exception as e:
             print(f"  ❌ 장전 브리핑 오류: {e}")
 
@@ -377,8 +381,12 @@ if now_weekday < 5 and 1530 <= now_hm <= 1830:
             )
             r2 = tn.notify_quant_top_pick(token=token, chat_id=chat_id)
             print(f"  ✅ 프리미엄 장마감 브리핑 및 퀀트 추천 발송 완료 (r1={r1}, r2={r2})")
-            briefing_state['last_closing_date'] = today_str
-            _save_state()
+            if r1 or r2:
+                briefing_state['last_closing_date'] = today_str
+                _save_state()
+                print(f"  💾 마감 브리핑 성공 상태 저장 완료 ({today_str})")
+            else:
+                print(f"  ⚠️ 마감 브리핑 발송 실패 — 다음 크론에서 재시도 대기")
         except Exception as e:
             print(f"  ❌ 장마감 브리핑 오류: {e}")
     else:
