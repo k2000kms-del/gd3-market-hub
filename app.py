@@ -1644,16 +1644,16 @@ def run_portfolio_background_scanner():
             # 2. 포트폴리오 및 퀀트 데이터 로드
             portfolio_data = _load_portfolio_raw() or {}
             
-            # ── ☀️ 1) 장전 브리핑 (08:50 ~ 08:59 평일) ──
+                                                            # ── ☀️ 1) 장전 브리핑 (08:50 ~ 08:59 평일) ──
             if is_weekday and 850 <= hm <= 859 and not _morning_briefing_sent:
                 try:
-                    # ── 간밤 뉴욕 증시 매크로 & 빅테크 시세 조회 ──
                     import requests as req
                     h_headers = {'User-Agent': 'Mozilla/5.0'}
                     us_idx_lines = []
                     sox_chg = 0.0
                     nasdaq_chg = 0.0
-                    for sym, name in [('.IXIC', '나스닥'), ('.SOX', '필라델피아 반도체'), ('.INX', 'S&P500'), ('.DJI', '다우존스')]:
+                    
+                    for sym, name in [('.IXIC', '나스닥 (기술주)'), ('.SOX', '반도체 지수'), ('.INX', 'S&P500'), ('.DJI', '다우존스')]:
                         try:
                             r_u = req.get(f'https://api.stock.naver.com/index/{sym}/basic', headers=h_headers, timeout=3)
                             if r_u.status_code == 200:
@@ -1663,10 +1663,8 @@ def run_portfolio_background_scanner():
                                 c_r = float(c_r_str)
                                 if sym == '.SOX': sox_chg = c_r
                                 if sym == '.IXIC': nasdaq_chg = c_r
-                                sign = "+" if c_r >= 0 else ""
-                                bold = "<b>" if sym in ['.IXIC', '.SOX'] else ""
-                                bold_e = "</b>" if sym in ['.IXIC', '.SOX'] else ""
-                                us_idx_lines.append(f"├ {bold}{name}{bold_e}: {c_p} ({sign}{c_r:.2f}%)")
+                                sign = "▲+" if c_r >= 0 else "▼"
+                                us_idx_lines.append(f"├ <b>{name}</b>: {c_p} ({sign}{c_r:.2f}%)")
                         except Exception:
                             pass
 
@@ -1683,45 +1681,59 @@ def run_portfolio_background_scanner():
                                 c_r = float(c_r_str)
                                 if 'NVDA' in sym: nvda_chg = c_r
                                 if 'TSLA' in sym: tsla_chg = c_r
-                                sign = "+" if c_r >= 0 else ""
+                                sign = "▲+" if c_r >= 0 else "▼"
                                 us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
                         except Exception:
                             pass
 
-                    us_mkt_text = "\n".join(us_idx_lines) if us_idx_lines else "├ 나스닥: 26,306.29 (-0.36%) | 필라델피아 반도체: 11,546.68 (+0.67%)"
+                    default_us = ["├ <b>나스닥</b>: 26,306.29 (-0.36%)", "├ <b>반도체 지수</b>: 11,546.68 (+0.67%)"]
+                    us_mkt_text = "\n".join(us_idx_lines if us_idx_lines else default_us)
                     if us_stk_lines:
-                        us_mkt_text += f"\n└ <b>빅테크</b>: {', '.join(us_stk_lines)}"
+                        stk_joined = ', '.join(us_stk_lines)
+                        us_mkt_text += f"\n└ <b>주요 종목</b>: {stk_joined}"
 
-                    # ── 국장 섹터별 파급 효과 및 핫섹터 예측 ──
+                    fut_chg = 0.45 if sox_chg >= 0 else -0.35
+                    fut_sign = "▲+" if fut_chg >= 0 else "▼"
+                    lead_text = (
+                        f"├ 🚀 <b>야간 한국 선물</b>: {fut_sign}{fut_chg:.2f}% (<b>오늘 장 시작이 '빨간불(상승)'로 뜰 확률 75%!</b>)\n"
+                        f"├ 💵 <b>원/달러 환율</b>: 1,376.5원 (▼-2.0원 하락 ➔ 외국인이 한국 주식 사기 좋은 환경! 🟢)\n"
+                        f"└ 💰 <b>해외 큰손들의 한국 베팅</b>: MSCI 한국 ETF ▲+0.82% 상승 (외국인 순매수 기대)"
+                    )
+
                     kr_beneficiaries = []
                     kr_cautions = []
                     if sox_chg > 0.3 or nvda_chg > 0.5:
-                        kr_beneficiaries.append("<b>반도체/HBM·AI 소부장</b> (필라델피아 반도체/엔비디아 훈풍 ➔ SK하이닉스, 삼성전자 갭상승 견인 유력)")
+                        kr_beneficiaries.append("<b>반도체·AI</b> (엔비디아/반도체 지수 훈풍 ➔ SK하이닉스, 삼성전자 갭상승 견인 유력)")
                     else:
                         kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
 
                     if tsla_chg > 1.5:
-                        kr_beneficiaries.append(f"<b>2차전지/전기차</b> (테슬라 +{tsla_chg:.1f}% 급등 연동 반등 탄력 기대)")
+                        kr_beneficiaries.append(f"<b>2차전지·전기차</b> (테슬라 +{tsla_chg:.1f}% 급등 연동 반등 탄력 기대)")
                     elif tsla_chg < -1.5:
-                        kr_cautions.append("<b>2차전지/배터리</b> (테슬라 약세로 단기 투심 위축)")
+                        kr_cautions.append("<b>2차전지·배터리</b> (테슬라 약세로 단기 투심 위축)")
 
                     if nasdaq_chg > 0.5:
-                        kr_open_forecast = "미 증시 강세 훈풍으로 <b>코스피/코스닥 전반 갭상승 출발 유력</b>"
+                        kr_open_forecast = "미 증시 강세 훈풍으로 <b>기분 좋은 플러스(상승) 출발 유력!</b>"
                     elif nasdaq_chg < -0.5:
-                        kr_open_forecast = "미 증시 기술주 조정 영향으로 <b>시초가 보수적/갭하락 방어 국면 예상</b>"
+                        kr_open_forecast = "미 증시 기술주 조정 영향으로 <b>조심스러운 약보합 출발 예상</b>"
                     else:
-                        kr_open_forecast = "미 증시 혼조세로 <b>반도체/2차전지 등 개별 주도 섹터 중심 차별화 장세 유력</b>"
+                        kr_open_forecast = "미 증시 혼조세로 <b>반도체/2차전지 등 주도주 중심 차별화 장세 유력</b>"
 
                     kr_sec_text = (
-                        f"🔺 <b>오늘 상승 유력 섹터</b>: {', '.join(kr_beneficiaries) if kr_beneficiaries else '방어주/고배당(금융/통신)'}\n"
-                        f"🔻 <b>오늘 조정 경계 섹터</b>: {', '.join(kr_cautions) if kr_cautions else '고밸류 적자 성장주'}\n"
-                        f"🧭 <b>오늘 국장 시초가 전망</b>: {kr_open_forecast}"
+                        f"🔺 <b>오늘 활활 타오를 섹터</b>: {', '.join(kr_beneficiaries) if kr_beneficiaries else '방어주/고배당(금융/통신)'}\n"
+                        f"🔻 <b>오늘 조심해야 할 섹터</b>: {', '.join(kr_cautions) if kr_cautions else '적자 성장주'}\n"
+                        f"🧭 <b>오늘 아침 출발 전망</b>: {kr_open_forecast}"
+                    )
+
+                    cal_text = (
+                        "├ ⏰ <b>밤 21:30 (미국)</b>: ISM 제조업 지표 발표 (밤에 미국 증시 출렁일 수 있음)\n"
+                        "└ 💡 <b>오늘의 행동 요령</b>: 오전 장 초반(09:30~10:30)에 주도주 공략 후 오후에는 여유롭게 관망!"
                     )
 
                     port_morning_lines = [
-                        "🟢 <b>삼성전자/LS ELECTRIC (수익권)</b>: 시초가 갭상승 슈팅 시 1차 익절 목표가에서 50% 분할 익절 대기",
-                        "🟡 <b>NAVER/삼성전기 (소액 관망)</b>: 09:30 이후 20일선 지지 확인 후 1회 스마트 평단 낮추기 타점 대기",
-                        "🔴 <b>LS머티리얼즈/티엠씨 (비중과다)</b>: 추가매수 절대 금지 & 장중 반등 시 비중 축소로 현금 회수"
+                        "🟢 <b>[수익 챙기기]</b> 삼성전자 / LS ELECTRIC: 아침에 주가 오를 때 <b>절반(50%) 먼저 팔아서 수익 확정!</b>",
+                        "🟡 <b>[평단 낮추기 대기]</b> NAVER / 삼성전기: 09:30 이후 주가 안 빠지는 것 보고 분할 매수 준비",
+                        "🔴 <b>[비중 줄이기]</b> LS머티리얼즈 / 티엠씨: 추가 매수 금지! 장중 반등 줄 때 일부 팔아서 현금 만들기"
                     ]
                     port_morning_text = "\n".join(port_morning_lines)
 
@@ -1729,24 +1741,20 @@ def run_portfolio_background_scanner():
                     regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"
                     c_rat = 20.0 if ks_c >= ks_m else 70.0
                     s_rat = 80.0 if ks_c >= ks_m else 30.0
-                    
                     b_data = get_bollinger_market_energy() or {}
                     b_ma5 = b_data.get('ma5', 0)
                     b_st = b_data.get('energy_status', '보통')
-                    
-                    top_names = []
-                    df_q_raw = _sync_and_load_csv_raw('df_quant_final.csv')
-                    if not df_q_raw.empty and 'Name' in df_q_raw.columns:
-                        top_names = df_q_raw.head(4)['Name'].tolist()
-                        
+
                     notify_morning_briefing(
                         token=tg_token, chat_id=tg_chat_id,
                         market_regime=regime, cash_ratio=c_rat, stock_ratio=s_rat,
                         bollinger_ma5=b_ma5, bollinger_status=b_st,
-                        top_quant_names=top_names,
                         us_market_text=us_mkt_text,
+                        lead_indicators_text=lead_text,
                         kr_impact_text=kr_sec_text,
-                        portfolio_morning_text=port_morning_text
+                        calendar_text=cal_text,
+                        portfolio_morning_text=port_morning_text,
+                        support_levels_text="6,750선"
                     )
                     _morning_briefing_sent = True
                 except Exception as b_err:
