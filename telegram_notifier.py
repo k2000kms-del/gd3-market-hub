@@ -374,9 +374,10 @@ def notify_morning_briefing(
     calendar_text: str = "",
     portfolio_morning_text: str = "",
     support_levels_text: str = "",
+    spin_market_text: str = "",
     gap_trap_warning: bool = True,
 ) -> bool:
-    """장 시작 전(08:50) 초보자도 한눈에 이해하는 미국 증시 총평, 시초가 선행 지표, 국장 핫섹터, 오늘 일정 및 실전 작전 브리핑."""
+    """장 시작 전(08:50) 초보자도 한눈에 이해하는 미국 증시 총평, 시초가 선행 지표, 트레이딩스핀 시황, 국장 핫섹터, 오늘 일정 및 실전 작전 브리핑."""
     
     # 1. 간밤 미 증시 매크로 기본값
     us_sec = us_market_text or (
@@ -392,6 +393,15 @@ def notify_morning_briefing(
         "├ 💵 <b>원/달러 환율</b>: 1,376.5원 (▼-2.0원 하락 ➔ 외국인이 한국 주식 사기 좋은 환경! 🟢)\n"
         "└ 💰 <b>해외 큰손들의 한국 베팅</b>: MSCI 한국 ETF ▲+0.82% 상승 (외국인 순매수 기대)"
     )
+
+    # 2-1. 트레이딩스핀(trading_spin) 장전 핵심 시황 노트 (있을 때만 삽입)
+    spin_sec = ""
+    if spin_market_text:
+        spin_sec = (
+            f"\n━━━━━━━━━━━━━━━━━━\n"
+            f"📢 <b>💡 트레이딩스핀 장전 핵심 시황 요약</b>\n"
+            f"{spin_market_text}\n"
+        )
 
     # 3. 오늘 국장 섹터별 파급 효과 및 핫섹터 예측
     kr_sec = kr_impact_text or (
@@ -430,7 +440,8 @@ def notify_morning_briefing(
         f"{us_sec}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🧭 <b>2. 오늘 아침 국장 출발 신호등 (선행 지표)</b>\n"
-        f"{lead_sec}\n"
+        f"{lead_sec}"
+        f"{spin_sec}"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"⚡ <b>3. 오늘 어디가 오르고 어디가 내릴까?</b>\n"
         f"{kr_sec}\n"
@@ -448,6 +459,7 @@ def notify_morning_briefing(
         f"<i>오늘도 원칙 매매로 든든한 수익 거두십시오! 화이팅입니다! 🚀</i>"
     )
     return _send(token, chat_id, text)
+
 
 
 def notify_closing_briefing(

@@ -168,6 +168,36 @@ if now_weekday < 5 and 800 <= now_hm <= 930:
             c_rat, s_rat = 20.0, 80.0
             b_ma5, b_st = 3.5, "안정"
 
+            # ── [트레이딩스핀] 아침 최신 시황 자료 자동 크롤링 & 요약 ──
+            spin_morning_text = ""
+            try:
+                import requests as s_req
+                from bs4 import BeautifulSoup as s_BS
+                s_url = 'https://t.me/s/trading_spin'
+                s_r = s_req.get(s_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                if s_r.status_code == 200:
+                    s_soup = s_BS(s_r.text, 'html.parser')
+                    s_msgs = s_soup.find_all('div', class_='tgme_widget_message')
+                    spin_snippets = []
+                    for sm in reversed(s_msgs[-6:]):
+                        s_txt_el = sm.find('div', class_='tgme_widget_message_text')
+                        if s_txt_el:
+                            stxt = s_txt_el.get_text('\n').strip()
+                            if len(stxt) >= 15:
+                                first_line = stxt.split('\n')[0].strip()
+                                # 핵심 키워드가 포함된 라인 우선 추출
+                                if any(k in stxt for k in ['반도체', '엔비디아', '증시', '마이크론', '테슬라', '금리', '국채', '환율', '코스피', '외국인']):
+                                    clean_snip = ' '.join(stxt.split('\n')[:3])
+                                    if len(clean_snip) > 120:
+                                        clean_snip = clean_snip[:120] + '...'
+                                    spin_snippets.append(f"• {clean_snip}")
+                                    if len(spin_snippets) >= 2:
+                                        break
+                    if spin_snippets:
+                        spin_morning_text = "\n".join(spin_snippets)
+            except Exception as _se:
+                print(f"DEBUG: trading_spin morning fetch error: {_se}")
+
             res = tn.notify_morning_briefing(
                 token=token, chat_id=chat_id,
                 market_regime="상승/횡보 국면", cash_ratio=c_rat, stock_ratio=s_rat,
@@ -177,7 +207,8 @@ if now_weekday < 5 and 800 <= now_hm <= 930:
                 kr_impact_text=kr_sec_text,
                 calendar_text=cal_text,
                 portfolio_morning_text=port_morning_text,
-                support_levels_text="6,750선"
+                support_levels_text="6,750선",
+                spin_market_text=spin_morning_text
             )
             print(f"  ✅ 초고도화 직관적 장전 브리핑 발송 결과: {res}")
             briefing_state['last_morning_date'] = today_str
