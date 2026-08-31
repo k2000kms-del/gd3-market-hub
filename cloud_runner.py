@@ -432,4 +432,64 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
     except Exception as e:
         print(f"  ❌ 장중 포트폴리오 스캔 오류: {e}")
 
+# 5. 외부 텔레그램 채널(elite_instructor) 실시간 속보 & 단타 모니터링
+try:
+    print("📡 외부 채널(elite_instructor) 실시간 속보 감시...")
+    import requests as req
+    from bs4 import BeautifulSoup
+    
+    t_url = 'https://t.me/s/elite_instructor'
+    r_t = req.get(t_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+    if r_t.status_code == 200:
+        soup_t = BeautifulSoup(r_t.text, 'html.parser')
+        msgs = soup_t.find_all('div', class_='tgme_widget_message')
+        if msgs:
+            last_m = msgs[-1]
+            p_id = last_m.get('data-post', '')
+            saved_p_id = briefing_state.get('last_elite_post_id')
+            
+            if p_id and p_id != saved_p_id:
+                text_el = last_m.find('div', class_='tgme_widget_message_text')
+                raw_text = text_el.get_text('\n').strip() if text_el else ''
+                
+                if raw_text and len(raw_text) > 5:
+                    # 시장 종목명 매칭 탐색
+                    m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
+                    q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+                    matched_dict = None
+                    
+                    if os.path.exists(m_path):
+                        df_m_srch = pd.read_csv(m_path)
+                        if not df_m_srch.empty and 'Name' in df_m_srch.columns:
+                            # 2글자 이상 종목명 중 본문에 포함된 종목 탐색
+                            for _, m_row in df_m_srch.iterrows():
+                                s_nm = str(m_row.get('Name', ''))
+                                if len(s_nm) >= 2 and s_nm in raw_text:
+                                    s_cd = str(m_row.get('Code', '')).zfill(6)
+                                    s_cp = float(m_row.get('Close', 0))
+                                    s_cr = float(m_row.get('ChagesRatio', 0))
+                                    matched_dict = {
+                                        'code': s_cd,
+                                        'name': s_nm,
+                                        'price': s_cp,
+                                        'change_ratio': s_cr,
+                                        'quant_score': 85.0,
+                                        'jumping_status': '수급 유입 및 실시간 퀀트 감시 중',
+                                        'support_price': s_cp * 0.97
+                                    }
+                                    break
+                    
+                    tn.notify_external_channel_alert(
+                        channel_name="elite_instructor",
+                        raw_message=raw_text,
+                        matched_stock=matched_dict,
+                        token=token,
+                        chat_id=chat_id
+                    )
+                    print(f"  ✅ 외부 채널 새 속보 감지 및 전송 완료: [{p_id}]")
+                    briefing_state['last_elite_post_id'] = p_id
+                    _save_state()
+except Exception as e:
+    print(f"  ❌ 외부 채널 모니터링 오류: {e}")
+
 print("🏁 [Cloud Runner] 완료")

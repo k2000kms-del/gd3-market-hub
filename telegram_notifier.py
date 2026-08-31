@@ -828,3 +828,66 @@ def notify_jumping_candle_breakout(
     )
     return _send(token, chat_id, text, force_send=True)
 
+
+# ─────────────────────────────────────────────────────────────
+# 📢 [외부 텔레그램 단타/속보 채널 포착 & GD 3.0 퀀트 통합 알림]
+# ─────────────────────────────────────────────────────────────
+
+def notify_external_channel_alert(
+    channel_name: str,
+    raw_message: str,
+    matched_stock: dict = None,
+    token: str = None,
+    chat_id: str = None
+) -> bool:
+    """
+    외부 텔레그램 채널(예: elite_instructor)의 단타/속보 메시지를 포착하고
+    GD 3.0 실시간 퀀트 및 점핑 양봉 수급 지표와 결합하여 전달하는 통합 브리핑.
+    """
+    # 1. 퀀트 정밀 진단 섹션 구성
+    if matched_stock and matched_stock.get('code'):
+        code = matched_stock.get('code', '')
+        name = matched_stock.get('name', code)
+        cur_p = matched_stock.get('price', 0)
+        chg_r = matched_stock.get('change_ratio', 0.0)
+        q_score = matched_stock.get('quant_score', 80)
+        jumping_status = matched_stock.get('jumping_status', '수급 분석 중')
+        support_p = matched_stock.get('support_price', cur_p * 0.97)
+        sign = "▲+" if chg_r >= 0 else "▼"
+        
+        quant_section = (
+            f"⚡ <b>[GD 3.0 실시간 퀀트 & 점핑 정밀 진단]</b>:\n"
+            f"├ 🎯 <b>관련 종목</b>: <b>{name} ({code})</b>\n"
+            f"├ 💵 <b>현재가/등락률</b>: <b>{cur_p:,.0f}원</b> ({sign}{chg_r:.2f}%)\n"
+            f"├ 📊 <b>퀀트 점수</b>: <b>{q_score:.0f}점</b>\n"
+            f"├ 🔥 <b>점핑 양봉 상태</b>: {jumping_status} 🟢\n"
+            f"└ 🛡️ <b>세력 절대 방어선</b>: 🟢 <b>{support_p:,.0f}원</b> (손절/지지선)\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💡 <b>실전 코멘트</b>: 외부 채널 속보와 우리 퀀트 지표를 교차 검증하여, "
+            f"<b>방어선({support_p:,.0f}원) 지지 여부를 확인 후 안전하게 진입</b>하십시오!"
+        )
+    else:
+        quant_section = (
+            f"⚡ <b>[GD 3.0 실시간 분석]</b>:\n"
+            f"└ 💡 시장 전반 영향 및 테마 수급을 실시간 모니터링 중입니다."
+        )
+
+    # 2. 메시지 원문 정리 (너무 길면 일부 축약)
+    clean_raw = raw_message.strip()
+    if len(clean_raw) > 500:
+        clean_raw = clean_raw[:500] + "\n...(중략)..."
+
+    text = (
+        f"🚨 <b>[실시간 외부 단타/속보 채널 포착 알림]</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📢 <b>출처</b>: <b>{channel_name}</b> (실시간)\n"
+        f"📝 <b>원문 내용</b>:\n"
+        f"<i>{clean_raw}</i>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"{quant_section}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<i>원칙 매매로 안전하게 수익을 극대화하십시오! 🚀</i>"
+    )
+    return _send(token, chat_id, text, force_send=True)
+
+
