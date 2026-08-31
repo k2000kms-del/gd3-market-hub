@@ -206,11 +206,62 @@ if now_weekday < 5 and 1530 <= now_hm <= 1830:
                     top_lead = df_hd_tmp.head(4)['Name'].tolist()
                     sec_text = f"├ <b>수급 집중 주도주</b>: {', '.join(top_lead)}\n└ 💡 주도주 중심 자금 쏠림 현상 심화 (개별 테마주 선별 대응 필요)"
 
-            # 내일 대응 전략
+            # ── [초고도화] 5. 내일 시초가 흐름 예측 & 대표님 보유 종목 연동 핀포인트 실전 작전 ──
+            # (1) 내일 시초가 흐름 예측 (장세 기반)
+            if late_diff < -500:
+                open_forecast = "🔻 <b>[내일 시초가]</b>: <b>갭하락 출발 유력 (-0.4%~-0.8%)</b> (오늘 마감 투매 여파)"
+                open_guide = "   ⏱️ <b>09:00~09:20 [패닉 투매 금지]</b>: 시초가 15분간 관망, 전일 저점 지지 및 09:20 이후 외인 선물 순매수 전환 확인 시에만 대응"
+            elif late_diff > 500:
+                open_forecast = "🔺 <b>[내일 시초가]</b>: <b>갭상승 출발 유력 (+0.5%~+1.0%)</b> (외인 숏커버링 유입)"
+                open_guide = "   ⏱️ <b>09:00~09:15 [추격매수 금지]</b>: 갭상승 후 차익 매물 윗꼬리 주의. 시초가 추격매수 절대 금지, 보유 수익주 분할 익절"
+            else:
+                open_forecast = "⚖️ <b>[내일 시초가]</b>: <b>보합권 출발 유력 (±0.3%)</b> (야간 나스닥 연동)"
+                open_guide = "   ⏱️ <b>09:00~09:15 [방향성 확인]</b>: 08:45 코스피200 선물 개장 베이시스(선물-현물) 상방 전환 확인 후 주도주 압축 공략"
+
+            # (2) 대표님 보유 종목별 핀포인트 맞춤 액션 추출
+            profit_stocks = []
+            small_dip_stocks = []
+            heavy_stocks = []
+
+            if os.path.exists(port_path) and df_m_tmp is not None and not df_m_tmp.empty:
+                for pk, pv in port_data.items():
+                    s_name = str(pv.get('name', pk))
+                    s_ep = float(pv.get('entry_price', 0))
+                    s_qty = float(pv.get('qty', 0))
+                    m_row = df_m_tmp[df_m_tmp['Code'].astype(str).str.zfill(6) == str(pk).zfill(6)]
+                    s_cp = float(m_row.iloc[0].get('Close', s_ep)) if not m_row.empty else s_ep
+                    s_val = s_ep * s_qty
+                    s_pnl = ((s_cp - s_ep) / s_ep * 100) if s_ep > 0 else 0.0
+                    s_weight = (s_val / tot_entry * 100) if tot_entry > 0 else 0.0
+
+                    if s_pnl >= 5.0:
+                        profit_stocks.append(f"{s_name}(+{s_pnl:.1f}%)")
+                    elif s_weight < 12.0 and s_pnl <= -5.0:
+                        small_dip_stocks.append(f"{s_name}({s_pnl:.1f}%)")
+                    elif s_weight >= 12.0 or s_pnl <= -35.0:
+                        heavy_stocks.append(f"{s_name}({s_pnl:.1f}%, 비중{s_weight:.0f}%)")
+
+            port_action_lines = []
+            if profit_stocks:
+                port_action_lines.append(f"🟢 <b>[수익 극대화]</b> {', '.join(profit_stocks)}: 시초가 슈팅 시 1차 익절 목표가에서 <b>50% 분할 익절</b>로 확정수익 확보")
+            if small_dip_stocks:
+                port_action_lines.append(f"🟡 <b>[스마트 평단 인하]</b> {', '.join(small_dip_stocks)}: 내일 갭하락 후 09:30 20일선 지지 확인 시 <b>1회 분할 추가매수</b>로 탈출 평단 단축")
+            if heavy_stocks:
+                port_action_lines.append(f"🔴 <b>[비중과다 리스크 관리]</b> {', '.join(heavy_stocks)}: 추가 매수 절대 금지! 장중 반등(+3~5%) 출회 시 <b>비중 20~30% 축소</b>로 현금 확보")
+
+            port_action_text = "\n".join(port_action_lines) if port_action_lines else "보유 종목 안정권 유지 중 (원칙 매매 준수)"
+
             strat_text = (
-                "📈 <b>[갭상승 출발 시]</b>: 09:00~09:15 갭 함정 주의! 시초가 추격매수 금지, 보유 수익 종목 50% 분할 익절 후 눌림목 지지 확인\n"
-                "📉 <b>[갭하락 출발 시]</b>: 시초가 패닉 투매 절대 금지! 20일선 지지력 확인 후 09:30 이후 외인 수급 전환 시 분할 매수\n"
-                "⚖️ <b>[보합/혼조 출발 시]</b>: 지수 방향성보다 외국인/기관 순매수 유입 퀀트 TOP3 주도주 위주로 압축 매매"
+                f"{open_forecast}\n"
+                f"{open_guide}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 <b>[대표님 보유 종목별 내일 핀포인트 액션]</b>\n"
+                f"{port_action_text}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"⏰ <b>[내일 핵심 매매 타임테이블]</b>\n"
+                f"├ <b>08:45</b>: 코스피200 선물 개장 수급 (외인 상방/하방 베팅 확인)\n"
+                f"├ <b>09:00~09:15</b>: 시초가 갭 방향 확인 (절대 매매 자제 구간)\n"
+                f"└ <b>09:30~10:00</b>: 당일 수급 집중 퀀트 TOP3 압축 공략 & 계좌 비중 조절"
             )
 
             r1 = tn.notify_closing_briefing(
