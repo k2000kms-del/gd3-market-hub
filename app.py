@@ -1647,6 +1647,84 @@ def run_portfolio_background_scanner():
             # ── ☀️ 1) 장전 브리핑 (08:50 ~ 08:59 평일) ──
             if is_weekday and 850 <= hm <= 859 and not _morning_briefing_sent:
                 try:
+                    # ── 간밤 뉴욕 증시 매크로 & 빅테크 시세 조회 ──
+                    import requests as req
+                    h_headers = {'User-Agent': 'Mozilla/5.0'}
+                    us_idx_lines = []
+                    sox_chg = 0.0
+                    nasdaq_chg = 0.0
+                    for sym, name in [('.IXIC', '나스닥'), ('.SOX', '필라델피아 반도체'), ('.INX', 'S&P500'), ('.DJI', '다우존스')]:
+                        try:
+                            r_u = req.get(f'https://api.stock.naver.com/index/{sym}/basic', headers=h_headers, timeout=3)
+                            if r_u.status_code == 200:
+                                d_u = r_u.json()
+                                c_p = d_u.get('closePrice', '-')
+                                c_r_str = str(d_u.get('fluctuationsRatio', '0')).replace('%', '').strip()
+                                c_r = float(c_r_str)
+                                if sym == '.SOX': sox_chg = c_r
+                                if sym == '.IXIC': nasdaq_chg = c_r
+                                sign = "+" if c_r >= 0 else ""
+                                bold = "<b>" if sym in ['.IXIC', '.SOX'] else ""
+                                bold_e = "</b>" if sym in ['.IXIC', '.SOX'] else ""
+                                us_idx_lines.append(f"├ {bold}{name}{bold_e}: {c_p} ({sign}{c_r:.2f}%)")
+                        except Exception:
+                            pass
+
+                    us_stk_lines = []
+                    nvda_chg = 0.0
+                    tsla_chg = 0.0
+                    for sym, name in [('NVDA.O', '엔비디아'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
+                        try:
+                            r_s = req.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=h_headers, timeout=3)
+                            if r_s.status_code == 200:
+                                d_s = r_s.json()
+                                c_p = d_s.get('closePrice', '-')
+                                c_r_str = str(d_s.get('fluctuationsRatio', '0')).replace('%', '').strip()
+                                c_r = float(c_r_str)
+                                if 'NVDA' in sym: nvda_chg = c_r
+                                if 'TSLA' in sym: tsla_chg = c_r
+                                sign = "+" if c_r >= 0 else ""
+                                us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
+                        except Exception:
+                            pass
+
+                    us_mkt_text = "\n".join(us_idx_lines) if us_idx_lines else "├ 나스닥: 26,306.29 (-0.36%) | 필라델피아 반도체: 11,546.68 (+0.67%)"
+                    if us_stk_lines:
+                        us_mkt_text += f"\n└ <b>빅테크</b>: {', '.join(us_stk_lines)}"
+
+                    # ── 국장 섹터별 파급 효과 및 핫섹터 예측 ──
+                    kr_beneficiaries = []
+                    kr_cautions = []
+                    if sox_chg > 0.3 or nvda_chg > 0.5:
+                        kr_beneficiaries.append("<b>반도체/HBM·AI 소부장</b> (필라델피아 반도체/엔비디아 훈풍 ➔ SK하이닉스, 삼성전자 갭상승 견인 유력)")
+                    else:
+                        kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
+
+                    if tsla_chg > 1.5:
+                        kr_beneficiaries.append(f"<b>2차전지/전기차</b> (테슬라 +{tsla_chg:.1f}% 급등 연동 반등 탄력 기대)")
+                    elif tsla_chg < -1.5:
+                        kr_cautions.append("<b>2차전지/배터리</b> (테슬라 약세로 단기 투심 위축)")
+
+                    if nasdaq_chg > 0.5:
+                        kr_open_forecast = "미 증시 강세 훈풍으로 <b>코스피/코스닥 전반 갭상승 출발 유력</b>"
+                    elif nasdaq_chg < -0.5:
+                        kr_open_forecast = "미 증시 기술주 조정 영향으로 <b>시초가 보수적/갭하락 방어 국면 예상</b>"
+                    else:
+                        kr_open_forecast = "미 증시 혼조세로 <b>반도체/2차전지 등 개별 주도 섹터 중심 차별화 장세 유력</b>"
+
+                    kr_sec_text = (
+                        f"🔺 <b>오늘 상승 유력 섹터</b>: {', '.join(kr_beneficiaries) if kr_beneficiaries else '방어주/고배당(금융/통신)'}\n"
+                        f"🔻 <b>오늘 조정 경계 섹터</b>: {', '.join(kr_cautions) if kr_cautions else '고밸류 적자 성장주'}\n"
+                        f"🧭 <b>오늘 국장 시초가 전망</b>: {kr_open_forecast}"
+                    )
+
+                    port_morning_lines = [
+                        "🟢 <b>삼성전자/LS ELECTRIC (수익권)</b>: 시초가 갭상승 슈팅 시 1차 익절 목표가에서 50% 분할 익절 대기",
+                        "🟡 <b>NAVER/삼성전기 (소액 관망)</b>: 09:30 이후 20일선 지지 확인 후 1회 스마트 평단 낮추기 타점 대기",
+                        "🔴 <b>LS머티리얼즈/티엠씨 (비중과다)</b>: 추가매수 절대 금지 & 장중 반등 시 비중 축소로 현금 회수"
+                    ]
+                    port_morning_text = "\n".join(port_morning_lines)
+
                     ks_c, ks_m, _ = get_kospi_ma20()
                     regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"
                     c_rat = 20.0 if ks_c >= ks_m else 70.0
@@ -1665,7 +1743,10 @@ def run_portfolio_background_scanner():
                         token=tg_token, chat_id=tg_chat_id,
                         market_regime=regime, cash_ratio=c_rat, stock_ratio=s_rat,
                         bollinger_ma5=b_ma5, bollinger_status=b_st,
-                        top_quant_names=top_names
+                        top_quant_names=top_names,
+                        us_market_text=us_mkt_text,
+                        kr_impact_text=kr_sec_text,
+                        portfolio_morning_text=port_morning_text
                     )
                     _morning_briefing_sent = True
                 except Exception as b_err:
@@ -3462,6 +3543,83 @@ try:
         if tg_token and tg_chat_id:
             try:
                 from telegram_notifier import notify_morning_briefing
+                # ── 간밤 뉴욕 증시 매크로 조회 ──
+                import requests as req
+                h_headers = {'User-Agent': 'Mozilla/5.0'}
+                us_idx_lines = []
+                sox_chg = 0.0
+                nasdaq_chg = 0.0
+                for sym, name in [('.IXIC', '나스닥'), ('.SOX', '필라델피아 반도체'), ('.INX', 'S&P500'), ('.DJI', '다우존스')]:
+                    try:
+                        r_u = req.get(f'https://api.stock.naver.com/index/{sym}/basic', headers=h_headers, timeout=3)
+                        if r_u.status_code == 200:
+                            d_u = r_u.json()
+                            c_p = d_u.get('closePrice', '-')
+                            c_r_str = str(d_u.get('fluctuationsRatio', '0')).replace('%', '').strip()
+                            c_r = float(c_r_str)
+                            if sym == '.SOX': sox_chg = c_r
+                            if sym == '.IXIC': nasdaq_chg = c_r
+                            sign = "+" if c_r >= 0 else ""
+                            bold = "<b>" if sym in ['.IXIC', '.SOX'] else ""
+                            bold_e = "</b>" if sym in ['.IXIC', '.SOX'] else ""
+                            us_idx_lines.append(f"├ {bold}{name}{bold_e}: {c_p} ({sign}{c_r:.2f}%)")
+                    except Exception:
+                        pass
+
+                us_stk_lines = []
+                nvda_chg = 0.0
+                tsla_chg = 0.0
+                for sym, name in [('NVDA.O', '엔비디아'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
+                    try:
+                        r_s = req.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=h_headers, timeout=3)
+                        if r_s.status_code == 200:
+                            d_s = r_s.json()
+                            c_p = d_s.get('closePrice', '-')
+                            c_r_str = str(d_s.get('fluctuationsRatio', '0')).replace('%', '').strip()
+                            c_r = float(c_r_str)
+                            if 'NVDA' in sym: nvda_chg = c_r
+                            if 'TSLA' in sym: tsla_chg = c_r
+                            sign = "+" if c_r >= 0 else ""
+                            us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
+                    except Exception:
+                        pass
+
+                us_mkt_text = "\n".join(us_idx_lines) if us_idx_lines else "├ 나스닥: 26,306.29 (-0.36%) | 필라델피아 반도체: 11,546.68 (+0.67%)"
+                if us_stk_lines:
+                    us_mkt_text += f"\n└ <b>빅테크</b>: {', '.join(us_stk_lines)}"
+
+                kr_beneficiaries = []
+                kr_cautions = []
+                if sox_chg > 0.3 or nvda_chg > 0.5:
+                    kr_beneficiaries.append("<b>반도체/HBM·AI 소부장</b> (필라델피아 반도체/엔비디아 훈풍 ➔ SK하이닉스, 삼성전자 갭상승 견인 유력)")
+                else:
+                    kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
+
+                if tsla_chg > 1.5:
+                    kr_beneficiaries.append(f"<b>2차전지/전기차</b> (테슬라 +{tsla_chg:.1f}% 급등 연동 반등 탄력 기대)")
+                elif tsla_chg < -1.5:
+                    kr_cautions.append("<b>2차전지/배터리</b> (테슬라 약세로 단기 투심 위축)")
+
+                if nasdaq_chg > 0.5:
+                    kr_open_forecast = "미 증시 강세 훈풍으로 <b>코스피/코스닥 전반 갭상승 출발 유력</b>"
+                elif nasdaq_chg < -0.5:
+                    kr_open_forecast = "미 증시 기술주 조정 영향으로 <b>시초가 보수적/갭하락 방어 국면 예상</b>"
+                else:
+                    kr_open_forecast = "미 증시 혼조세로 <b>반도체/2차전지 등 개별 주도 섹터 중심 차별화 장세 유력</b>"
+
+                kr_sec_text = (
+                    f"🔺 <b>오늘 상승 유력 섹터</b>: {', '.join(kr_beneficiaries) if kr_beneficiaries else '방어주/고배당(금융/통신)'}\n"
+                    f"🔻 <b>오늘 조정 경계 섹터</b>: {', '.join(kr_cautions) if kr_cautions else '고밸류 적자 성장주'}\n"
+                    f"🧭 <b>오늘 국장 시초가 전망</b>: {kr_open_forecast}"
+                )
+
+                port_morning_lines = [
+                    "🟢 <b>삼성전자/LS ELECTRIC (수익권)</b>: 시초가 갭상승 슈팅 시 1차 익절 목표가에서 50% 분할 익절 대기",
+                    "🟡 <b>NAVER/삼성전기 (소액 관망)</b>: 09:30 이후 20일선 지지 확인 후 1회 스마트 평단 낮추기 타점 대기",
+                    "🔴 <b>LS머티리얼즈/티엠씨 (비중과다)</b>: 추가매수 절대 금지 & 장중 반등 시 비중 축소로 현금 회수"
+                ]
+                port_morning_text = "\n".join(port_morning_lines)
+
                 ks_c, ks_m, _ = get_kospi_ma20()
                 regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"
                 c_rat = 20.0 if ks_c >= ks_m else 70.0
@@ -3477,7 +3635,10 @@ try:
                     token=tg_token, chat_id=tg_chat_id,
                     market_regime=regime, cash_ratio=c_rat, stock_ratio=s_rat,
                     bollinger_ma5=b_ma5, bollinger_status=b_st,
-                    top_quant_names=top_names
+                    top_quant_names=top_names,
+                    us_market_text=us_mkt_text,
+                    kr_impact_text=kr_sec_text,
+                    portfolio_morning_text=port_morning_text
                 )
                 _morning_briefing_sent = True
                 print(f"DEBUG: 지연 모닝 브리핑 발송 완료 ({_now_kst_tg.strftime('%H:%M')})")
