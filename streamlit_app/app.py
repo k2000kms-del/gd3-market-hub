@@ -2502,9 +2502,19 @@ def load_data(force_remote: bool = False):
 
 # ── 데이터 로드 ────────────────────────────────────────────────
 force_sync = st.session_state.pop('force_sync', False)
+if force_sync:
+    # 강제 동기화 요청 시 캐시를 명시적으로 지워 최신 데이터 강제 재다운로드
+    try:
+        load_data.clear()
+    except Exception:
+        pass
+    try:
+        load_portfolio.clear()
+    except Exception:
+        pass
 with st.spinner('📡 최신 데이터 동기화 중...'):
-    data, update_times = load_data(force_remote=force_sync)
-    load_portfolio(force_remote=force_sync)
+    data, update_times = load_data()
+    load_portfolio()
 
 df_hd       = data['df_high_density.csv']
 df_q        = data['df_quant_final.csv']
@@ -2999,8 +3009,12 @@ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_
 st.sidebar.title("🎛️ 대시보드 설정")
 if st.sidebar.button("🔄 최신 데이터 즉시 동기화", type="primary", use_container_width=True, help="클라우드 및 거래소 최신 데이터를 즉시 강제 다운로드합니다."):
     st.cache_data.clear()
+    # 세션 레벨 실시간 시세 캐시도 완전 초기화 (stale 데이터 반환 방지)
+    st.session_state.pop('df_live_all', None)
+    st.session_state.pop('df_live_all_ts', None)
+    st.session_state.pop('last_accum_time', None)
     st.session_state['force_sync'] = True
-    st.toast("⚡ 최신 데이터 강제 동기화 완료!", icon="🚀")
+    st.toast("⚡ 전체 캐시 초기화 및 최신 데이터 강제 동기화 중!", icon="🚀")
     st.rerun()
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
@@ -6161,6 +6175,10 @@ with col2:
     if st.button('🔄 데이터 새로고침', width='stretch'):
         load_data.clear()
         st.cache_data.clear()
+        # 세션 레벨 실시간 시세 캐시도 완전 초기화 (stale 데이터 반환 방지)
+        st.session_state.pop('df_live_all', None)
+        st.session_state.pop('df_live_all_ts', None)
+        st.session_state.pop('last_accum_time', None)
         st.session_state['force_sync'] = True
         st.rerun()
 
