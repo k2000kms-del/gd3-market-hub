@@ -1690,11 +1690,47 @@ def run_portfolio_background_scanner():
                     
                     tot_pnl = tot_eval - tot_entry
                     tot_pct = (tot_pnl / tot_entry * 100) if tot_entry > 0 else 0
+
+                    # 시장 수급 및 선물 동향 추출
+                    df_s_raw = _sync_and_load_csv_raw('df_market_summary.csv')
+                    mkt_lines = []
+                    fut_text = "외국인 장 후반 선물 관망세 유지"
+                    if not df_s_raw.empty:
+                        for _, row in df_s_raw.iterrows():
+                            name = str(row.iloc[0])
+                            idx_val = str(row.get('지수', ''))
+                            chg_val = str(row.get('등락률', ''))
+                            f_net = str(row.get('외국인(억)', '-'))
+                            p_net = str(row.get('개인(억)', '-'))
+                            i_net = str(row.get('기관(억)', '-'))
+                            if '코스피' in name or '코스닥' in name:
+                                mkt_lines.append(f"├ <b>{name}</b>: {idx_val} ({chg_val}) | 외인 {f_net}억, 기관 {i_net}억, 개인 {p_net}억")
+                            elif '선물' in name or '나스닥' in name or 'USD' in name:
+                                fut_text = f"├ <b>{name}</b>: {idx_val} ({chg_val})\n└ 💡 외국인 선물 수급과 환율 변동성이 내일 시초가에 직결됩니다."
+                    mkt_text = "\n".join(mkt_lines) if mkt_lines else "코스피/코스닥 정규장 마감 완료"
+
+                    # 주도 섹터 추출
+                    sec_text = "반도체/AI 및 2차전지/바이오 순환매 지속"
+                    df_hd_raw = _sync_and_load_csv_raw('df_high_density.csv')
+                    if not df_hd_raw.empty and 'Name' in df_hd_raw.columns:
+                        top_lead = df_hd_raw.head(4)['Name'].tolist()
+                        sec_text = f"├ <b>수급 집중 주도주</b>: {', '.join(top_lead)}\n└ 💡 주도주 중심 자금 쏠림 현상 심화 (개별 테마주 선별 대응 필요)"
+
+                    # 내일 대응 전략
+                    strat_text = (
+                        "📈 <b>[갭상승 출발 시]</b>: 09:00~09:15 갭 함정 주의! 시초가 추격매수 금지, 보유 수익 종목 50% 분할 익절 후 눌림목 지지 확인\n"
+                        "📉 <b>[갭하락 출발 시]</b>: 시초가 패닉 투매 절대 금지! 20일선 지지력 확인 후 09:30 이후 외인 수급 전환 시 분할 매수\n"
+                        "⚖️ <b>[보합/혼조 출발 시]</b>: 지수 방향성보다 외국인/기관 순매수 유입 퀀트 TOP3 주도주 위주로 압축 매매"
+                    )
                     
                     notify_closing_briefing(
                         token=tg_token, chat_id=tg_chat_id,
                         total_eval=tot_eval, total_pnl=tot_pnl, total_pct=tot_pct,
-                        port_count=len(portfolio_data)
+                        port_count=len(portfolio_data),
+                        market_summary_text=mkt_text,
+                        foreign_futures_text=fut_text,
+                        leading_sectors_text=sec_text,
+                        tomorrow_strategy_text=strat_text
                     )
                     _closing_briefing_sent = True
                 except Exception as c_err:

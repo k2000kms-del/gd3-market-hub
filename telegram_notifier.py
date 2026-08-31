@@ -410,18 +410,52 @@ def notify_closing_briefing(
     total_pnl: float,
     total_pct: float,
     port_count: int,
+    market_summary_text: str = "",
+    foreign_futures_text: str = "",
+    leading_sectors_text: str = "",
+    tomorrow_strategy_text: str = "",
 ) -> bool:
-    """장 마감(15:40) 포트폴리오 결산 브리핑."""
+    """장 마감(15:40) 시장 총평, 수급/선물 분석, 주도 섹터, 포트폴리오 결산 및 내일 실전 대응 가이드."""
     pnl_sign = "+" if total_pnl >= 0 else ""
     pnl_emoji = "🎉" if total_pnl >= 0 else "📉"
+    
+    # 1. 시장 및 3대 주체 수급 기본값 보정
+    mkt_sec = market_summary_text or "코스피/코스닥 정규장 마감"
+    
+    # 2. 외국인 선물 및 장 후반 수급 방향성
+    fut_sec = foreign_futures_text or "외국인 장 후반 선물 포지션 유지"
+    
+    # 3. 주도 섹터
+    sec_sec = leading_sectors_text or "주도 섹터 자금 순환 지속"
+    
+    # 4. 내일 시나리오별 실전 대응 가이드
+    strat_sec = tomorrow_strategy_text or (
+        "📈 <b>[갭상승 출발 시]</b>: 09:00~09:15 갭 함정 주의! 추격매수 금지, 수익 종목 50% 분할 익절\n"
+        "📉 <b>[갭하락 출발 시]</b>: 시초가 투매 동참 금지! 20일선 지지 확인 후 09:30 이후 분할 대응\n"
+        "⚖️ <b>[보합/혼조 출발 시]</b>: 외국인 선물 수급 방향성 확인 후 퀀트 TOP 주도주 압축 매매"
+    )
+
     text = (
-        f"🌙 <b>[GD 3.0 장마감 포트폴리오 결산]</b>\n"
+        f"🌙 <b>[GD 3.0 일일 마감 시장 결산 & 내일 실전 전략]</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"💼 <b>보유 종목 수</b>: <b>{port_count}개 종목</b>\n"
-        f"💰 <b>총 평가금액</b>: <b>{total_eval:,.0f}원</b>\n"
-        f"📊 <b>총 평가손익</b>: <b>{pnl_sign}{total_pnl:,.0f}원</b> ({pnl_sign}{total_pct:.2f}%) {pnl_emoji}\n"
+        f"📊 <b>1. 오늘 하루 시장 & 3대 수급 동향</b>\n"
+        f"{mkt_sec}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"<i>오늘 하루도 수고 많으셨습니다. 편안한 저녁 되세요!</i>"
+        f"🧭 <b>2. 외국인 선물 & 마감 수급 기류</b>\n"
+        f"{fut_sec}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🚀 <b>3. 오늘 자금 쏠림 주도 섹터</b>\n"
+        f"{sec_sec}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💼 <b>4. 대표님 계좌 포트폴리오 결산</b>\n"
+        f"├ 보유 종목 수: <b>{port_count}개 종목</b>\n"
+        f"├ 총 평가금액: <b>{total_eval:,.0f}원</b>\n"
+        f"└ 총 평가손익: <b>{pnl_sign}{total_pnl:,.0f}원</b> ({pnl_sign}{total_pct:.2f}%) {pnl_emoji}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔮 <b>5. 내일 시초가 시나리오별 실전 대응 가이드</b>\n"
+        f"{strat_sec}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<i>오늘 하루도 정말 수고 많으셨습니다. 편안한 저녁 되십시오! 🌙</i>"
     )
     return _send(token, chat_id, text)
 
