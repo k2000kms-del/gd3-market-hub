@@ -75,7 +75,40 @@ if now_weekday < 5 and 800 <= now_hm <= 930:
     if last_morning != today_str:
         print(f"☀️ 장전 브리핑 발송 시도 ({today_str})...")
         try:
-            res = tn.notify_morning_briefing(token=token, chat_id=chat_id)
+            # 퀀트 데이터 로드
+            q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+            top_names = []
+            if os.path.exists(q_path):
+                df_q_tmp = pd.read_csv(q_path)
+                if not df_q_tmp.empty and 'Name' in df_q_tmp.columns:
+                    top_names = df_q_tmp.head(4)['Name'].tolist()
+
+            # 시장 요약 로드
+            sum_path = os.path.join(base_dir, 'data', 'df_market_summary.csv')
+            regime = "상승/횡보 국면"
+            c_rat, s_rat = 20.0, 80.0
+            b_ma5, b_st = 3.5, "안정"
+            if os.path.exists(sum_path):
+                df_s_tmp = pd.read_csv(sum_path)
+                if not df_s_tmp.empty:
+                    # 코스피 등락률 기반 국면 판단
+                    ks_row = df_s_tmp[df_s_tmp.iloc[:, 0].astype(str).str.contains('코스피')]
+                    if not ks_row.empty:
+                        chg_str = str(ks_row.iloc[0].get('등락률', '0')).replace('%', '').replace('+', '').strip()
+                        try:
+                            chg_val = float(chg_str)
+                            if chg_val < -0.5:
+                                regime = "약세/보수 국면"
+                                c_rat, s_rat = 70.0, 30.0
+                        except Exception:
+                            pass
+
+            res = tn.notify_morning_briefing(
+                token=token, chat_id=chat_id,
+                market_regime=regime, cash_ratio=c_rat, stock_ratio=s_rat,
+                bollinger_ma5=b_ma5, bollinger_status=b_st,
+                top_quant_names=top_names
+            )
             print(f"  ✅ 장전 브리핑 발송 결과: {res}")
             briefing_state['last_morning_date'] = today_str
             _save_state()
@@ -90,7 +123,37 @@ if now_weekday < 5 and 1530 <= now_hm <= 1830:
     if last_closing != today_str:
         print(f"🌙 장마감 브리핑 및 퀀트 TOP3 추천 발송 시도 ({today_str})...")
         try:
-            r1 = tn.notify_closing_briefing(token=token, chat_id=chat_id)
+            # 포트폴리오 및 시세 로드하여 총 평가금액/손익 계산
+            port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
+            m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
+            tot_eval = 0.0
+            tot_entry = 0.0
+            port_count = 0
+            if os.path.exists(port_path):
+                with open(port_path, 'r', encoding='utf-8') as f:
+                    port_data = json.load(f)
+                port_count = len(port_data)
+                df_m_tmp = pd.read_csv(m_path) if os.path.exists(m_path) else pd.DataFrame()
+                
+                for pk, pv in port_data.items():
+                    ep = float(pv.get('entry_price', 0))
+                    qty = float(pv.get('qty', 0))
+                    tot_entry += ep * qty
+                    cur_p = ep
+                    if not df_m_tmp.empty and 'Code' in df_m_tmp.columns:
+                        m_row = df_m_tmp[df_m_tmp['Code'].astype(str).str.zfill(6) == str(pk).zfill(6)]
+                        if not m_row.empty:
+                            cur_p = float(m_row.iloc[0].get('Close', ep))
+                    tot_eval += cur_p * qty
+
+            tot_pnl = tot_eval - tot_entry
+            tot_pct = (tot_pnl / tot_entry * 100) if tot_entry > 0 else 0.0
+
+            r1 = tn.notify_closing_briefing(
+                token=token, chat_id=chat_id,
+                total_eval=tot_eval, total_pnl=tot_pnl, total_pct=tot_pct,
+                port_count=port_count
+            )
             r2 = tn.notify_quant_top_pick(token=token, chat_id=chat_id)
             print(f"  ✅ 장마감 브리핑 및 퀀트 추천 발송 완료 (r1={r1}, r2={r2})")
             briefing_state['last_closing_date'] = today_str
