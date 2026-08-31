@@ -69,9 +69,9 @@ def _save_state():
     except Exception as err:
         print(f"DEBUG: 상태 파일 저장 실패: {err}")
 
-# 2. 장전 브리핑 (08:00 ~ 09:30 KST 사이 최초 1회 무조건 발송)
+# 2. ☀️ 아침 출근 모닝 브리핑 (07:50 ~ 09:30 KST 사이 최초 1회 무조건 발송)
 last_morning = briefing_state.get('last_morning_date')
-if now_weekday < 5 and 800 <= now_hm <= 930:
+if now_weekday < 5 and 750 <= now_hm <= 930:
     if last_morning != today_str:
         print(f"☀️ 장전 브리핑 발송 시도 ({today_str})...")
         try:

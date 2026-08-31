@@ -1644,8 +1644,8 @@ def run_portfolio_background_scanner():
             # 2. 포트폴리오 및 퀀트 데이터 로드
             portfolio_data = _load_portfolio_raw() or {}
             
-                                                            # ── ☀️ 1) 장전 브리핑 (08:50 ~ 08:59 평일) ──
-            if is_weekday and 850 <= hm <= 859 and not _morning_briefing_sent:
+            # ── ☀️ 1) 아침 출근 모닝 브리핑 (07:50 ~ 08:59 평일) ──
+            if is_weekday and 750 <= hm <= 859 and not _morning_briefing_sent:
                 try:
                     import requests as req
                     h_headers = {'User-Agent': 'Mozilla/5.0'}
