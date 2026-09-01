@@ -38,6 +38,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run Market Data Collector
+        continue-on-error: true          # ← 데이터 수집 실패해도 텔레그램 알림은 반드시 실행
         env:
           KIS_APP_KEY:       ${{ secrets.KIS_APP_KEY }}
           KIS_APP_SECRET:    ${{ secrets.KIS_APP_SECRET }}
@@ -46,6 +47,7 @@ jobs:
         run: python data_collector.py
 
       - name: Run Cloud Telegram Notifier & Portfolio Monitor
+        if: always()                     # ← 데이터 수집 단계 결과와 무관하게 항상 실행
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}

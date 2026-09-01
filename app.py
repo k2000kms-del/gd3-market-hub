@@ -71,12 +71,12 @@ st.set_page_config(
 
 # ── ⚡ 스마트 실시간 스캘핑 모드 최적화 ──
 if st.session_state.get('auto_refresh_enabled', False):
-    st_autorefresh(interval=5000, key="data_refresh_5s")
+    st_autorefresh(interval=5000, key="data_refresh_5s")   # 스캘핑 ON: 5초
 else:
     _now_for_refresh = datetime.now(timezone(timedelta(hours=9)))
     _hm_for_refresh = _now_for_refresh.hour * 100 + _now_for_refresh.minute
     if 900 <= _hm_for_refresh <= 1530 and _now_for_refresh.weekday() < 5:
-        st_autorefresh(interval=60000, key="supply_accumulate_refresh")
+        st_autorefresh(interval=120000, key="supply_accumulate_refresh")  # 장중 기본: 2분마다 자동갱신
 
 # Plotly 차트 마우스 커서 강제 고정 및 태블릿/PC 좌우 뷰포트 여백 최적화
 st.markdown("""
@@ -2252,6 +2252,7 @@ def fetch_live_indices():
     return result
 
 
+@st.cache_data(ttl=120)  # 2분마다 갱신 (섹터 1~3위 실시간 반영)
 def get_sector_spin_html(df_m):
     """실시간 시장 자금 순환매(Sector Spin) 1~3위 요약 배너 HTML 생성"""
     SECTOR_MAP = {
