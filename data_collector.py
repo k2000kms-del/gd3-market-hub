@@ -203,11 +203,20 @@ def fetch_market_investor(token, market_div='J'):
 
 # ── 로컬 CSV 저장 ────────────────────────────────────────────────
 def save_df_to_local(df, filename):
-    """DataFrame을 레포지토리 data/ 폴더에 CSV로 저장"""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    filepath = os.path.join(DATA_DIR, filename)
-    df.to_csv(filepath, index=False, encoding='utf-8-sig')
-    print(f'  ✅ {filename} → data/ 저장 완료 ({len(df)}행)')
+    """DataFrame을 data/ 및 streamlit_app/data/ 폴더에 동시 저장 (클라우드/로컬 일치화)"""
+    base_proj_dir = os.path.dirname(os.path.abspath(__file__))
+    dirs_to_save = [
+        DATA_DIR,
+        os.path.join(base_proj_dir, 'streamlit_app', 'data')
+    ]
+    for d in dirs_to_save:
+        try:
+            os.makedirs(d, exist_ok=True)
+            filepath = os.path.join(d, filename)
+            df.to_csv(filepath, index=False, encoding='utf-8-sig')
+        except Exception as e:
+            print(f"  ⚠️ {filename} 저장 실패 in {d}: {e}")
+    print(f'  ✅ {filename} → data/ 및 streamlit_app/data/ 동시 저장 완료 ({len(df)}행)')
 
 
 # ── 데이터 수집 함수들 ───────────────────────────────────────────
