@@ -556,4 +556,97 @@ try:
 except Exception as e:
     print(f"  ❌ 외부 채널 모니터링 전체 오류: {e}")
 
+# ── 6. 텔레그램 대기 중인 사용자 원터치 버튼 & 대화형 명령어 즉시 응답 ──
+try:
+    if token and chat_id:
+        import requests as req
+        upd_url = f"https://api.telegram.org/bot{token}/getUpdates?timeout=2"
+        upd_res = req.get(upd_url, timeout=5)
+        if upd_res.status_code == 200:
+            upd_json = upd_res.json()
+            if upd_json.get('ok') and upd_json.get('result'):
+                last_upd_id = 0
+                for item in upd_json['result']:
+                    u_id = item.get('update_id', 0)
+                    last_upd_id = max(last_upd_id, u_id)
+                    u_msg = item.get('message', {})
+                    u_sender = str(u_msg.get('chat', {}).get('id', ''))
+                    u_text = u_msg.get('text', '')
+                    
+                    if u_text and u_sender:
+                        print(f"💬 [Cloud Runner] 텔레그램 사용자 버튼/명령어 감지: '{u_text}' from {u_sender}")
+                        
+                        def _cloud_context_fn(q_type, **kw):
+                            if q_type == 'quant_top':
+                                q_file = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+                                if os.path.exists(q_file):
+                                    df_q_sub = pd.read_csv(q_file)
+                                    if not df_q_sub.empty and 'Total_Score' in df_q_sub.columns:
+                                        # ETF 제외
+                                        kw_filter = ['KODEX', 'TIGER', 'ACE', 'KBSTAR', 'SOL', '스팩', '선물', '인버스', '레버리지']
+                                        pat = '|'.join(kw_filter)
+                                        df_q_sub = df_q_sub[~df_q_sub['Name'].astype(str).str.contains(pat, case=False, regex=True)]
+                                        top3 = df_q_sub.sort_values('Total_Score', ascending=False).head(3)
+                                        res_list = []
+                                        for _, r in top3.iterrows():
+                                            res_list.append({
+                                                'code': str(r.get('Code', '')).zfill(6),
+                                                'name': str(r.get('Name', '')),
+                                                'score': float(r.get('Total_Score', 0)),
+                                                'price': float(r.get('Close', 0)),
+                                                'chg': float(r.get('ChagesRatio', 0))
+                                            })
+                                        return res_list
+                                return []
+                            elif q_type == 'portfolio':
+                                p_file = os.path.join(base_dir, 'data', 'my_portfolio.json')
+                                m_file = os.path.join(base_dir, 'data', 'df_full_market.csv')
+                                if os.path.exists(p_file):
+                                    with open(p_file, 'r', encoding='utf-8') as pf:
+                                        p_data = json.load(pf)
+                                    df_m_map = pd.read_csv(m_file) if os.path.exists(m_file) else pd.DataFrame()
+                                    t_ent, t_ev = 0.0, 0.0
+                                    p_items = []
+                                    for c_k, v_info in p_data.items():
+                                        ep = float(v_info.get('entry_price', 0))
+                                        qty = float(v_info.get('qty', 0))
+                                        cur_p = ep
+                                        if not df_m_map.empty and 'Code' in df_m_map.columns:
+                                            m_row = df_m_map[df_m_map['Code'].astype(str).str.zfill(6) == str(c_k).zfill(6)]
+                                            if not m_row.empty:
+                                                cur_p = float(m_row.iloc[0]['Close'])
+                                        pnl_p = ((cur_p - ep) / ep * 100) if ep > 0 else 0
+                                        t_ent += ep * qty
+                                        t_ev += cur_p * qty
+                                        p_items.append({'name': v_info.get('name', c_k), 'cur_price': cur_p, 'pnl_pct': pnl_p})
+                                    t_pnl = t_ev - t_ent
+                                    t_pct = (t_pnl / t_ent * 100) if t_ent > 0 else 0
+                                    return {'items': p_items, 'tot_eval': t_ev, 'tot_pnl': t_pnl, 'tot_pct': t_pct}
+                                return {'items': [], 'tot_eval': 0, 'tot_pnl': 0, 'tot_pct': 0}
+                            elif q_type == 'market':
+                                ks_val = 0.0
+                                try:
+                                    r_ks = req.get('https://api.stock.naver.com/index/KOSPI/basic', headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
+                                    if r_ks.status_code == 200:
+                                        ks_val = float(str(r_ks.json().get('closePrice', '0')).replace(',', ''))
+                                except Exception:
+                                    pass
+                                return {'kospi_close': ks_val, 'kospi_chg': 0.0, 'b_ma5': 15.0, 'b_status': '정상', 'stock_ratio': 70, 'cash_ratio': 30}
+                            return {}
+
+                        tn.process_incoming_command(
+                            token=token,
+                            chat_id=u_sender,
+                            cmd_text=u_text,
+                            context_fn=_cloud_context_fn
+                        )
+                        print(f"  ✅ 텔레그램 버튼/명령어 '{u_text}' 응답 발송 완료")
+                
+                # 처리된 메시지 오프셋 갱신 (중복 처리 방지)
+                if last_upd_id > 0:
+                    req.get(f"https://api.telegram.org/bot{token}/getUpdates?offset={last_upd_id + 1}&timeout=1", timeout=3)
+
+except Exception as cmd_err:
+    print(f"DEBUG: Cloud Runner 텔레그램 명령어 처리 오류: {cmd_err}")
+
 print("🏁 [Cloud Runner] 완료")
