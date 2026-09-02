@@ -698,6 +698,7 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
             sl_price = cur_p * (1 - sl_rate)
 
             # 실전 매수 적합도 및 수급 가속도 산출
+            rank_badge = f"{rank}위"
             timing_badge = "🟢 [5분봉 건강한 눌림목 타점]" if chg < 5.5 else "🟡 [돌파 급등 — 분할 접근 권고]"
             accel_text = "🔥 +140% (세력 매수 유입 가속)" if chg > 0 else "⚖️ +100% (수급 안정 소화)"
 

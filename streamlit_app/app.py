@@ -1547,11 +1547,29 @@ def run_telegram_listener_daemon():
             tg_token = ""
             tg_chat_id = ""
             try:
-                if hasattr(st, "secrets"):
-                    tg_token = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", ""))
-                    tg_chat_id = str(st.secrets.get("TELEGRAM_CHAT_ID", os.environ.get("TELEGRAM_CHAT_ID", "")))
+                if hasattr(st, "secrets") and "TELEGRAM_BOT_TOKEN" in st.secrets:
+                    tg_token = st.secrets["TELEGRAM_BOT_TOKEN"]
+                    tg_chat_id = str(st.secrets.get("TELEGRAM_CHAT_ID", ""))
             except Exception:
                 pass
+
+            if not tg_token:
+                tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+                tg_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+            if not tg_token:
+                try:
+                    import toml
+                    b_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    for s_p in [os.path.join(b_dir, '.streamlit', 'secrets.toml'), os.path.join(b_dir, 'streamlit_app', '.streamlit', 'secrets.toml')]:
+                        if os.path.exists(s_p):
+                            s_data = toml.load(s_p)
+                            tg_token = s_data.get('TELEGRAM_BOT_TOKEN', '')
+                            tg_chat_id = str(s_data.get('TELEGRAM_CHAT_ID', ''))
+                            if tg_token:
+                                break
+                except Exception:
+                    pass
 
             if not tg_token:
                 time.sleep(10)
