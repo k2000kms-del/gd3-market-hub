@@ -69,11 +69,12 @@ def _save_state():
     except Exception as err:
         print(f"DEBUG: 상태 파일 저장 실패: {err}")
 
-# 2. ☀️ 아침 출근 모닝 브리핑 (07:50 ~ 09:30 KST 사이 최초 1회 무조건 발송)
+# 2. ☀️ 아침 출근 모닝 브리핑 (07:50 ~ 11:30 KST 사이 당일 최초 1회 무조건 발송)
 last_morning = briefing_state.get('last_morning_date')
-if now_weekday < 5 and 750 <= now_hm <= 930:
+if now_weekday < 5 and 750 <= now_hm <= 1130:
     if last_morning != today_str:
         print(f"☀️ 장전 브리핑 발송 시도 ({today_str})...")
+        briefing_state['sent_jumping_codes'] = []  # 당일 점핑 양봉 알림 목록 초기화
         try:
             import requests as req
             h_headers = {'User-Agent': 'Mozilla/5.0'}
@@ -220,9 +221,9 @@ if now_weekday < 5 and 750 <= now_hm <= 930:
         except Exception as e:
             print(f"  ❌ 장전 브리핑 오류: {e}")
 
-# 3. 장마감 브리핑 (15:30 ~ 18:30 KST 사이 최초 1회 무조건 발송)
+# 3. 장마감 브리핑 (15:20 ~ 23:59 KST 사이 당일 최초 1회 무조건 발송)
 last_closing = briefing_state.get('last_closing_date')
-if now_weekday < 5 and 1530 <= now_hm <= 1830:
+if now_weekday < 5 and 1520 <= now_hm <= 2359:
     if last_closing != today_str:
         print(f"🌙 장마감 브리핑 및 퀀트 TOP3 추천 발송 시도 ({today_str})...")
         try:
