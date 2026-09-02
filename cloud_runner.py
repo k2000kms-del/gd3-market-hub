@@ -586,7 +586,7 @@ try:
                                         kw_filter = ['KODEX', 'TIGER', 'ACE', 'KBSTAR', 'SOL', '스팩', '선물', '인버스', '레버리지']
                                         pat = '|'.join(kw_filter)
                                         df_q_sub = df_q_sub[~df_q_sub['Name'].astype(str).str.contains(pat, case=False, regex=True)]
-                                        top3 = df_q_sub.sort_values('Total_Score', ascending=False).head(3)
+                                        top3 = df_q_sub.sort_values(['Total_Score', 'Amount'], ascending=[False, False]).head(3)
                                         res_list = []
                                         for _, r in top3.iterrows():
                                             res_list.append({

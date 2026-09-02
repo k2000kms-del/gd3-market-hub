@@ -1491,7 +1491,7 @@ def run_telegram_listener_daemon():
                     df_q = df_q.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
                     df_q = df_q.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
 
-                top = df_q.sort_values('Total_Score_Adj', ascending=False).head(3)
+                top = df_q.sort_values(['Total_Score_Adj', 'Amount'], ascending=[False, False]).head(3)
                 results = []
                 for _, r in top.iterrows():
                     results.append({
@@ -2325,7 +2325,7 @@ def get_sector_spin_html(df_m):
     <div style="background: linear-gradient(135deg, #1e222d 0%, #161a23 100%); border: 1px solid #2a2e39; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-family: 'malgun gothic', sans-serif;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
         <span style="font-size: 13px; font-weight: bold; color: #f1f3f5;">⚡ 실시간 시장 자금 순환매(Sector Spin) 지도</span>
-        <span style="font-size: 11px; color: #888888;">09:00~15:30 10분 실시간 집계</span>
+        <span style="font-size: 11px; color: #00e676; font-weight: bold;">⚡ 09:00~15:30 2분 실시간 집계</span>
       </div>
       <div style="display: flex; gap: 8px; flex-wrap: wrap;">
         {cards_html}
@@ -4171,7 +4171,7 @@ with col_mid:
             hover_label = '거래대금: <b>%{customdata[5]:,.0f}억원</b>'
             text_labels = df2['Amount_100M'].apply(lambda x: f" {x:,.0f}")
         else:
-            df2 = df2.sort_values('Total_Score_Adj', ascending=True).tail(10).copy()
+            df2 = df2.sort_values(['Total_Score_Adj', 'Amount'], ascending=[True, True]).tail(10).copy()
             df2['Amount_100M'] = df2['Amount'] / 1e8
             df2['Visual_Val'] = df2['Total_Score_Adj']
             x_val = df2['Visual_Val']

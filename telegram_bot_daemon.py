@@ -75,7 +75,7 @@ def _daemon_get_context(query_type, code=None, **kwargs):
                     df_q = df_q.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
                     df_q = df_q.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
 
-                top = df_q.sort_values('Total_Score_Adj', ascending=False).head(3)
+                top = df_q.sort_values(['Total_Score_Adj', 'Amount'], ascending=[False, False]).head(3)
                 res = []
                 for _, r in top.iterrows():
                     res.append({
