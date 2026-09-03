@@ -4548,8 +4548,13 @@ with col_left:
 
 # ── [Panel 5] 코스피/코스닥 지수 1분봉 & 실시간 수급 동시 추적 (방안 1 듀얼 서브플롯) ──
 with col_left:
-    # ── [줄바꿈 방지 CSS] 라디오 버튼 가로 1줄 강제 고정 및 패딩 최적화 ──
+    # ── [줄바꿈 방지 CSS] 타이틀 글꼴 일치 및 라디오 가로 1줄 강제 고정 ──
     st.markdown("""<style>
+    div[data-testid="column"] h5 {
+        margin: 0 !important;
+        padding-top: 3px !important;
+        white-space: nowrap !important;
+    }
     div[data-testid="column"] div[role="radiogroup"] {
         flex-wrap: nowrap !important;
         gap: 4px !important;
@@ -4564,10 +4569,10 @@ with col_left:
     }
     </style>""", unsafe_allow_html=True)
 
-    # ── [1줄 통합 컨트롤바] 타이틀(2.0) + 시장(2.7) + 뷰모드(5.3) ──
-    c_p5_t, c_p5_mkt, c_p5_view = st.columns([2.0, 2.7, 5.3])
+    # ── [1줄 통합 컨트롤바] 타이틀(2.2) + 시장(2.7) + 뷰모드(5.1) ──
+    c_p5_t, c_p5_mkt, c_p5_view = st.columns([2.2, 2.7, 5.1])
     with c_p5_t:
-        st.markdown("<h5 style='margin: 0; padding-top: 5px; font-size: 1.02rem; font-weight: 700; white-space: nowrap;'>📈 수급 현황</h5>", unsafe_allow_html=True)
+        st.markdown("##### 📈 수급 현황")
     with c_p5_mkt:
         if st.session_state.get('p5_market_tab') in ["코스피 수급", "코스닥 수급"]:
             st.session_state['p5_market_tab'] = '코스피' if '코스피' in st.session_state['p5_market_tab'] else '코스닥'
@@ -4726,11 +4731,19 @@ with col_left:
         fig_p5.update_layout(
             height=475,
             template='plotly_dark',
-            margin=dict(t=10, b=10, l=10, r=10),
+            margin=dict(t=5, b=10, l=10, r=10),
             xaxis_rangeslider_visible=False,
             xaxis2_rangeslider_visible=False,
             hovermode='x unified',
-            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1.0, font=dict(size=10)),
+            legend=dict(
+                orientation='h', 
+                x=1.0, 
+                y=0.445, 
+                xanchor='right', 
+                yanchor='middle', 
+                bgcolor='rgba(0,0,0,0)', 
+                font=dict(size=10.5)
+            ),
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
             xaxis2=dict(
                 type='date',
@@ -4759,7 +4772,7 @@ with col_left:
         fig_p5.update_layout(
             height=450,
             template='plotly_dark',
-            margin=dict(t=10, b=10, l=10, r=10),
+            margin=dict(t=5, b=10, l=10, r=10),
             xaxis_rangeslider_visible=False,
             hovermode='x unified',
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
@@ -4797,8 +4810,17 @@ with col_left:
         fig_p5.update_layout(
             height=450,
             template='plotly_dark',
-            margin=dict(t=10, b=10, l=10, r=10),
+            margin=dict(t=5, b=10, l=10, r=10),
             hovermode='x unified',
+            legend=dict(
+                orientation='h', 
+                x=0.98, 
+                y=0.98, 
+                xanchor='right', 
+                yanchor='top', 
+                bgcolor='rgba(0,0,0,0)',
+                font=dict(size=10.5)
+            ),
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
             xaxis=dict(
                 type='date',
