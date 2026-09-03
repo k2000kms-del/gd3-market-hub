@@ -3254,7 +3254,7 @@ if df_m is not None and not df_m.empty:
                                 _base_dir = os.path.dirname(os.path.abspath(__file__))
                                 _session_csv = os.path.join(_base_dir, 'data', 'df_supply_intraday_session.csv')
                                 os.makedirs(os.path.dirname(_session_csv), exist_ok=True)
-                                _save_df = st.session_state.df_intraday_accum.copy()
+                                _save_df = accum_df.copy()
                                 _save_df['Date'] = _now_kst.strftime('%Y%m%d')
                                 _save_df.to_csv(_session_csv, index=False, encoding='utf-8-sig')
                             except Exception as csv_save_err:
