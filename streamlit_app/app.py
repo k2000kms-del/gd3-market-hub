@@ -1506,17 +1506,10 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
             elif query_type == 'stock_chart':
                 target_code = code or kwargs.get('code', '')
                 if target_code:
-                    import FinanceDataReader as fdr
-                    from datetime import datetime as _dt, timedelta as _td
-                    start_date = (_dt.now() - _td(days=90)).strftime('%Y-%m-%d')
-                    try:
-                        df_c = fdr.DataReader(target_code, start=start_date)
-                        if not df_c.empty:
-                            df_c.reset_index(inplace=True)
-                            df_c.rename(columns={'Date': 'DateTime'}, inplace=True)
-                            return df_c
-                    except Exception as _fe:
-                        print(f"DEBUG: FDR error for {target_code}: {_fe}")
+                    from chart_image_generator import fetch_stock_chart_df
+                    df_c = fetch_stock_chart_df(target_code)
+                    if not df_c.empty:
+                        return df_c
 
             elif query_type == 'market':
                 ks_c, ks_m, _ = get_kospi_ma20()

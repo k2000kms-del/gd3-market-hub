@@ -678,7 +678,7 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
         if not top_stocks:
             return _send(token, chat_id, "⚠️ 현재 추천 종목 데이터를 집계 중입니다. 잠시 후 다시 시도해주세요.", force_send=True)
 
-        from chart_image_generator import generate_stock_chart_image
+        from chart_image_generator import generate_stock_chart_image, fetch_stock_chart_df
 
         sent_any_photo = False
         for rank, s in enumerate(top_stocks[:3], 1):
@@ -716,10 +716,18 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
                 f"<i>⚡ GD 3.0 실시간 캔들 차트 (MA5 / MA20 / VWAP)</i>"
             )
 
-            # 차트 이미지 생성 시도
+            # 차트 이미지 생성 시도 (context_fn 실패 시 fetch_stock_chart_df로 100% 자동 폴백)
             chart_bytes = None
             try:
-                chart_df = context_fn('stock_chart', code=code)
+                chart_df = None
+                if context_fn:
+                    try:
+                        chart_df = context_fn('stock_chart', code=code)
+                    except Exception:
+                        chart_df = None
+                if not isinstance(chart_df, pd.DataFrame) or chart_df.empty:
+                    chart_df = fetch_stock_chart_df(code)
+
                 if isinstance(chart_df, pd.DataFrame) and not chart_df.empty:
                     chart_bytes = generate_stock_chart_image(
                         code=code,

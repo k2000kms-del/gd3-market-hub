@@ -648,6 +648,10 @@ try:
                                 except Exception:
                                     pass
                                 return {'kospi_close': ks_val, 'kospi_chg': 0.0, 'b_ma5': 15.0, 'b_status': '정상', 'stock_ratio': 70, 'cash_ratio': 30}
+                            elif q_type == 'stock_chart':
+                                target_c = kw.get('code', '')
+                                from chart_image_generator import fetch_stock_chart_df
+                                return fetch_stock_chart_df(target_c)
                             return {}
 
                         tn.process_incoming_command(
