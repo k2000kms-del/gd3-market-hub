@@ -3212,7 +3212,11 @@ if df_m is not None and not df_m.empty:
                                     p_val = _clean_sup(m_sup.get('개인', 0))
                                     i_val = _clean_sup(m_sup.get('기관', 0))
 
-                                    accum_df = st.session_state.df_intraday_accum
+                                    accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
+                                    if accum_df.empty or 'Time' not in accum_df.columns:
+                                        accum_df = pd.DataFrame(columns=['Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+                                        st.session_state['df_intraday_accum'] = accum_df
+
                                     # 같은 시간·같은 시장 데이터 이미 있으면 스킵
                                     duplicate = not accum_df[
                                         (accum_df['Time'] == now_time) & (accum_df['Market'] == mkt_name)
