@@ -4548,10 +4548,26 @@ with col_left:
 
 # ── [Panel 5] 코스피/코스닥 지수 1분봉 & 실시간 수급 동시 추적 (방안 1 듀얼 서브플롯) ──
 with col_left:
-    # ── [1줄 통합 컨트롤바] 타이틀(수급 현황) + 시장 선택 + 뷰 모드 ──
-    c_p5_t, c_p5_mkt, c_p5_view = st.columns([2.8, 3.2, 4.0])
+    # ── [줄바꿈 방지 CSS] 라디오 버튼 가로 1줄 강제 고정 및 패딩 최적화 ──
+    st.markdown("""<style>
+    div[data-testid="column"] div[role="radiogroup"] {
+        flex-wrap: nowrap !important;
+        gap: 4px !important;
+    }
+    div[data-testid="column"] div[role="radiogroup"] label {
+        margin-right: 0px !important;
+        padding-right: 1px !important;
+    }
+    div[data-testid="column"] div[role="radiogroup"] label span p {
+        font-size: 11.5px !important;
+        white-space: nowrap !important;
+    }
+    </style>""", unsafe_allow_html=True)
+
+    # ── [1줄 통합 컨트롤바] 타이틀(2.0) + 시장(2.7) + 뷰모드(5.3) ──
+    c_p5_t, c_p5_mkt, c_p5_view = st.columns([2.0, 2.7, 5.3])
     with c_p5_t:
-        st.markdown("<h5 style='margin: 0; padding-top: 5px; font-size: 1.05rem; font-weight: 700; white-space: nowrap;'>📈 수급 현황</h5>", unsafe_allow_html=True)
+        st.markdown("<h5 style='margin: 0; padding-top: 5px; font-size: 1.02rem; font-weight: 700; white-space: nowrap;'>📈 수급 현황</h5>", unsafe_allow_html=True)
     with c_p5_mkt:
         if st.session_state.get('p5_market_tab') in ["코스피 수급", "코스닥 수급"]:
             st.session_state['p5_market_tab'] = '코스피' if '코스피' in st.session_state['p5_market_tab'] else '코스닥'
@@ -4564,10 +4580,10 @@ with col_left:
         )
     with c_p5_view:
         if "듀얼" in str(st.session_state.get('p5_view_mode', '')):
-            st.session_state['p5_view_mode'] = "⚡ 듀얼뷰"
+            st.session_state['p5_view_mode'] = "⚡ 듀얼"
         p5_view = st.radio(
             "뷰 모드", 
-            ["⚡ 듀얼뷰", "🕯️ 1분봉", "📊 수급선"], 
+            ["⚡ 듀얼", "🕯️ 1분봉", "📊 수급선"], 
             horizontal=True, 
             label_visibility="collapsed", 
             key="p5_view_mode"
