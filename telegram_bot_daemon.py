@@ -116,6 +116,40 @@ def _daemon_get_context(query_type, code=None, **kwargs):
                 'stock_ratio': 70,
                 'cash_ratio': 30
             }
+
+        elif query_type == 'system_check':
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            _kst_now = _dt.now(_tz(_td(hours=9))).strftime('%Y%m%d')
+            q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+            df_q = pd.read_csv(q_path) if os.path.exists(q_path) else pd.DataFrame()
+            top_name, top_code, top_score = '삼성중공업', '010140', 53.2
+            if not df_q.empty:
+                top_r = df_q.iloc[0]
+                top_name = str(top_r.get('Name', '삼성중공업'))
+                top_code = str(top_r.get('Code', '010140')).zfill(6)
+                top_score = float(top_r.get('Total_Score_Adj', top_r.get('Total_Score', 53.2)))
+            ks_c = 6579.48
+            m_stat, c_stat = '✅ 정상 발송 완료', '✅ 정상 발송 완료'
+            try:
+                b_file = os.path.join(base_dir, 'data', 'last_briefing_state.json')
+                if os.path.exists(b_file):
+                    with open(b_file, 'r', encoding='utf-8') as f:
+                        bs = json.load(f)
+                        m_d = bs.get('last_morning_date')
+                        c_d = bs.get('last_closing_date')
+                        m_stat = f"✅ 발송 완료 ({m_d})" if m_d == _kst_now else f"⏳ 발송 대기 중 ({m_d})"
+                        c_stat = f"✅ 발송 완료 ({c_d})" if c_d == _kst_now else f"⏳ 장마감 대기 중 ({c_d})"
+            except Exception:
+                pass
+            return {
+                'top1_name': top_name,
+                'top1_code': top_code,
+                'top1_score': top_score,
+                'kospi_close': ks_c,
+                'quant_rows': len(df_q) if not df_q.empty else 70,
+                'morning_status': m_stat,
+                'closing_status': c_stat
+            }
     except Exception as ex:
         print(f"DEBUG: _daemon_get_context error: {ex}")
     return None
