@@ -1,0 +1,2 @@
+﻿Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run """C:\Users\김실근\.gemini\antigravity\scratch\gd3_market_hub\.venv\Scripts\python.exe"" ""C:\Users\김실근\.gemini\antigravity\scratch\gd3_market_hub\telegram_bot_daemon.py""", 0, False
