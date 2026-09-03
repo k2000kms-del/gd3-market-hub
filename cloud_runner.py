@@ -380,7 +380,23 @@ if now_weekday < 5 and 1520 <= now_hm <= 2359:
                 leading_sectors_text=sec_text,
                 tomorrow_strategy_text=strat_text
             )
-            r2 = tn.notify_quant_top_pick(token=token, chat_id=chat_id)
+            r2 = False
+            q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+            if os.path.exists(q_path):
+                try:
+                    df_q_pick = pd.read_csv(q_path)
+                    if not df_q_pick.empty:
+                        top1 = df_q_pick.iloc[0]
+                        r2 = tn.notify_quant_top_pick(
+                            token=token, chat_id=chat_id,
+                            ticker=str(int(top1.get('Code', 0)) if pd.notna(top1.get('Code')) else '').zfill(6),
+                            name=str(top1.get('Name', '')),
+                            score=float(top1.get('Total_Score_Adj', top1.get('Total_Score', 0))),
+                            price=float(top1.get('Close', 0)),
+                            chg_rate=float(top1.get('ChagesRatio', 0))
+                        )
+                except Exception as _qe:
+                    print(f"DEBUG: 퀀트 추천 발송 에러: {_qe}")
             print(f"  ✅ 프리미엄 장마감 브리핑 및 퀀트 추천 발송 완료 (r1={r1}, r2={r2})")
             if r1 or r2:
                 briefing_state['last_closing_date'] = today_str
