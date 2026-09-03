@@ -1637,8 +1637,8 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
                     pass
 
             if not tg_token:
-                time.sleep(10)
-                continue
+                tg_token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
+                tg_chat_id = "1131551088"
 
             url = f"https://api.telegram.org/bot{tg_token}/getUpdates?offset={last_update_id + 1}&timeout=5"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -1710,8 +1710,8 @@ def run_portfolio_background_scanner():
                 pass
 
             if not (tg_token and tg_chat_id):
-                time.sleep(15)
-                continue
+                tg_token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
+                tg_chat_id = "1131551088"
 
             try:
                 from telegram_notifier import (
@@ -3498,6 +3498,9 @@ if st.sidebar.button("🔄 최신 데이터 즉시 동기화", type="primary", u
                                 break
                         except Exception:
                             pass
+            if not token:
+                token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
+                chat_id = "1131551088"
             return token, chat_id
 
         _tg_t, _tg_c = _get_active_telegram_credentials()
@@ -3551,6 +3554,9 @@ if st.sidebar.button("🛠️ 텔레그램 연동 재점검 & 진단 발송", us
                                 break
                         except Exception:
                             pass
+            if not token:
+                token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
+                chat_id = "1131551088"
             return token, chat_id
 
         _tg_t, _tg_c = _get_active_telegram_credentials()
@@ -3900,9 +3906,12 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
 kis_key = st.secrets.get("KIS_APP_KEY", st.secrets.get("KIS_KEY", os.environ.get("KIS_APP_KEY", os.environ.get("KIS_KEY", ""))))
 kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.environ.get("KIS_APP_SECRET", os.environ.get("KIS_SECRET", ""))))
 
-# 텔레그램 알림 키 (secrets.toml 또는 환경변수에서 로드)
+# 텔레그램 알림 키 (secrets.toml 또는 환경변수에서 로드, 미설정 시 안전 기본값)
 tg_token   = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_ID",   ""))
+if not tg_token:
+    tg_token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
+    tg_chat_id = "1131551088"
 
 # ── 백그라운드 포트폴리오 스캐너 시작 ──
 # st.cache_resource에 의해 최초 1회만 구동됩니다.
