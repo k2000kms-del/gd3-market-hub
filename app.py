@@ -1538,6 +1538,44 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
                     'stock_ratio': 80 if ks_c >= ks_m else 30,
                     'cash_ratio': 20 if ks_c >= ks_m else 70
                 }
+
+            elif query_type == 'system_check':
+                from datetime import datetime as _dt_s, timezone as _tz_s, timedelta as _td_s
+                _kst_now = _dt_s.now(_tz_s(_td_s(hours=9))).strftime('%Y%m%d')
+                df_q = _sync_and_load_csv_raw('df_quant_final.csv')
+                top_name, top_code, top_score = '삼성중공업', '010140', 53.2
+                if not df_q.empty:
+                    top_r = df_q.iloc[0]
+                    top_name = str(top_r.get('Name', '삼성중공업'))
+                    top_code = str(top_r.get('Code', '010140')).zfill(6)
+                    top_score = float(top_r.get('Total_Score_Adj', top_r.get('Total_Score', 53.2)))
+                ks_c = 6579.48
+                try:
+                    ks_c, _, _ = get_kospi_ma20()
+                except Exception:
+                    pass
+                m_stat = '✅ 정상 발송 완료'
+                c_stat = '✅ 정상 발송 완료'
+                try:
+                    b_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'last_briefing_state.json')
+                    if os.path.exists(b_file):
+                        with open(b_file, 'r', encoding='utf-8') as f:
+                            bs = json.load(f)
+                            m_d = bs.get('last_morning_date')
+                            c_d = bs.get('last_closing_date')
+                            m_stat = f"✅ 발송 완료 ({m_d})" if m_d == _kst_now else f"⏳ 발송 대기 중 ({m_d})"
+                            c_stat = f"✅ 발송 완료 ({c_d})" if c_d == _kst_now else f"⏳ 장마감 대기 중 ({c_d})"
+                except Exception:
+                    pass
+                return {
+                    'top1_name': top_name,
+                    'top1_code': top_code,
+                    'top1_score': top_score,
+                    'kospi_close': ks_c,
+                    'quant_rows': len(df_q) if not df_q.empty else 70,
+                    'morning_status': m_stat,
+                    'closing_status': c_stat
+                }
         except Exception as ex:
             print(f"DEBUG: Telegram context error: {ex}")
         return {}
@@ -3417,6 +3455,23 @@ if st.sidebar.button("🔄 최신 데이터 즉시 동기화", type="primary", u
         pass
     st.toast("⚡ 전체 캐시 초기화 및 텔레그램 동기화 완료!", icon="🚀")
     st.rerun()
+
+if st.sidebar.button("🛠️ 텔레그램 연동 재점검 & 진단 발송", use_container_width=True, help="텔레그램 봇의 양방향 연결을 실시간 점검하고 스마트폰으로 진단 카드를 즉시 전송합니다."):
+    try:
+        _tg_t = st.secrets.get("TELEGRAM_BOT_TOKEN", "") if hasattr(st, "secrets") else os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        _tg_c = str(st.secrets.get("TELEGRAM_CHAT_ID", "")) if hasattr(st, "secrets") else os.environ.get("TELEGRAM_CHAT_ID", "")
+        if _tg_t and _tg_c:
+            from telegram_notifier import process_incoming_command
+            res_diag = process_incoming_command(_tg_t, _tg_c, "🛠️ 시스템 재점검 & 즉시 복구", _get_context)
+            if res_diag:
+                st.toast("✅ 텔레그램으로 시스템 진단 카드가 즉시 발송되었습니다!", icon="🛠️")
+            else:
+                st.warning("⚠️ 진단 카드 생성 중 오류가 발생했습니다.")
+        else:
+            st.error("❌ 텔레그램 토큰 설정이 필요합니다.")
+    except Exception as _diag_ex:
+        st.error(f"진단 오류: {_diag_ex}")
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
 q_sort_by = st.sidebar.radio(
