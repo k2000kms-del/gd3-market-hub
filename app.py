@@ -2336,18 +2336,20 @@ def fetch_live_indices():
 
 
 def get_sector_spin_html(df_m):
-    """실시간 시장 자금 순환매(Sector Spin) 1~3위 요약 배너 HTML 생성 (노캐시 즉시 렌더링)"""
+    """실시간 시장 자금 순환매(Sector Spin) 1~3위 요약 배너 HTML 생성 (진짜 자금 유입액 가중 계산)"""
     SECTOR_MAP = {
-        '원전 / 전력 인프라': ['두산에너빌리티', '한국전력', '한전KPS', '한전기술', '일진파워', '우진', 'LS ELECTRIC', 'HD현대일렉트릭', '효성중공업', '제룡전기', '가온전선', '대한전선', '서전기전', '비에이치아이', '지투파워', '우리기술'],
-        '반도체 / AI 하드웨어': ['삼성전자', 'SK하이닉스', '한미반도체', '이수페타시스', '리노공업', '주성엔지니어링', '원익IPS', 'HPSP', '동진쎄미켐', '하나마이크론', '테크윙', '디아이', '가온칩스', '오픈엣지테크놀로지', '제주반도체'],
-        '방산 / 항공우주': ['한화에어로스페이스', '현대로템', 'LIG넥스원', '한국항공우주', '한화시스템', '풍산', 'SNT다이내믹스', '빅텍', '스페코', 'LIG디펜스앤에어로스페이스', '쎄트렉아이', '켄코아에어로스페이스', 'AP위성'],
+        '금융 / 밸류업': ['KB금융', '신한지주', '하나금융지주', '메리츠금융지주', '우리금융지주', '삼성생명', '삼성화재', 'DB손해보험', '한국금융지주'],
+        '철강 / 소재 (포스코)': ['POSCO홀딩스', '포스코인터내셔널', '포스코DX', '포스코퓨처엠', '현대제철', '동국제강', '고려아연', '세아베스틸지주'],
+        '조선 / 해양': ['삼성중공업', 'HD한국조선해양', 'HD현대중공업', '한화오션', 'HD현대미포', 'HJ중공업', '한국카본', '동성화인텍'],
+        '2차전지 / 배터리': ['LG에너지솔루션', '에코프로비엠', '에코프로', 'LG화학', '삼성SDI', '엘앤에프', '코스모신소재', '금양', '엔켐', '대주전자재료', '톱텍'],
+        '원전 / 전력 인프라': ['두산에너빌리티', '한국전력', '한전KPS', '한전기술', '일진파워', '우진', 'LS ELECTRIC', 'HD현대일렉트릭', '효성중공업', '제룡전기', '가온전선', '대한전선'],
+        '방산 / 항공우주': ['한화에어로스페이스', '현대로템', 'LIG넥스원', '한국항공우주', '한화시스템', '풍산', 'SNT다이내믹스', '빅텍', '스페코'],
+        '건설 / 플랜트': ['대우건설', 'GS건설', '현대건설', 'DL이앤씨', 'HDC현대산업개발', '희림', '삼부토건', '일성건설', '동부건설', 'KCC건설'],
         '항공 / 물류': ['대한항공', '한진칼', '아시아나항공', '제주항공', '진에어', '티웨이항공', 'HMM', '팬오션', '대한해운', 'CJ대한통운', '현대글로비스'],
-        '건설 / 플랜트': ['대우건설', 'GS건설', '현대건설', 'DL이앤씨', 'HDC현대산업개발', '희림', '삼부토건', '일성건설', '동부건설', '화성밸브', 'KCC건설'],
-        '바이오 / 제약': ['삼성바이오로직스', '셀트리온', '알테오젠', 'HLB', '리가켐바이오', '에이비엘바이오', '삼천당제약', '유한양행', '한미약품', 'SK바이오팜', '펩트론', '보로노이', '인제니아테라퓨틱스'],
-        '2차전지 / 배터리': ['LG에너지솔루션', 'POSCO홀딩스', '에코프로비엠', '에코프로', '포스코퓨처엠', 'LG화학', '삼성SDI', '엘앤에프', '코스모신소재', '금양', '엔켐', '대주전자재료', '톱텍'],
         '자동차 / 부품': ['현대차', '기아', '현대모비스', '현대위아', 'HL만도', '모트렉스', '에스엘', '화신', '성우하이텍'],
-        '로봇 / 스마트팩토리': ['레인보우로보틱스', '두산로보틱스', '로보티즈', 'SPG', '에스피지', '뉴로메카', '에스비비테크', '티로보틱스', '하이젠알앤엠'],
-        '금융 / 밸류업': ['KB금융', '신한지주', '하나금융지주', '메리츠금융지주', '우리금융지주', '삼성생명', '삼성화재', 'DB손해보험', '한국금융지주']
+        '반도체 / AI 하드웨어': ['삼성전자', 'SK하이닉스', '한미반도체', '이수페타시스', '리노공업', '주성엔지니어링', '원익IPS', 'HPSP', '동진쎄미켐', '하나마이크론'],
+        '바이오 / 제약': ['삼성바이오로직스', '셀트리온', '알테오젠', 'HLB', '리가켐바이오', '에이비엘바이오', '삼천당제약', '유한양행', '한미약품', 'SK바이오팜', '펩트론'],
+        '로봇 / 스마트팩토리': ['레인보우로보틱스', '두산로보틱스', '로보티즈', 'SPG', '에스피지', '뉴로메카', '에스비비테크', '티로보틱스', '하이젠알앤엠']
     }
 
     if df_m is None or df_m.empty or 'Name' not in df_m.columns or 'ChagesRatio' not in df_m.columns:
@@ -2361,12 +2363,21 @@ def get_sector_spin_html(df_m):
             tot_a = sub['Amount'].sum() / 1e8 if 'Amount' in sub.columns else 0
             top_s = sub.sort_values('Amount', ascending=False).head(2) if 'Amount' in sub.columns else sub.head(2)
             leaders_str = ', '.join([f"{r['Name']}({r['ChagesRatio']:+.1f}%)" for _, r in top_s.iterrows()])
-            stats.append({'sec': sec, 'avg_c': avg_c, 'tot_a': tot_a, 'leaders': leaders_str})
+            # [진짜 자금 유입액 가중 점수]: 상승 섹터에 한해 총 거래대금 x 등락률 결합
+            inflow_score = tot_a * max(0.0, avg_c)
+            stats.append({
+                'sec': sec, 
+                'avg_c': avg_c, 
+                'tot_a': tot_a, 
+                'inflow_score': inflow_score, 
+                'leaders': leaders_str
+            })
 
     if not stats:
         return ''
 
-    df_s = pd.DataFrame(stats).sort_values('avg_c', ascending=False).head(3)
+    # 자금 유입 스코어 기준 정렬 (자금이 안 들어온 소형 등락 섹터 배제)
+    df_s = pd.DataFrame(stats).sort_values('inflow_score', ascending=False).head(3)
     cards = []
     badges = [('🥇 1위 자금 집중', 'rgba(246, 70, 93, 0.12)', '#f6465d'),
               ('🥈 2위 자금 유입', 'rgba(255, 152, 0, 0.12)', '#ff9800'),
@@ -2376,9 +2387,13 @@ def get_sector_spin_html(df_m):
         b_title, bg, border_c = badges[i]
         c_sign = '+' if r['avg_c'] >= 0 else ''
         c_color = '#f6465d' if r['avg_c'] >= 0 else '#4e9ff5'
+        amt_str = f"{r['tot_a'] / 10000:.1f}조원" if r['tot_a'] >= 10000 else f"{r['tot_a']:,.0f}억원"
         cards.append(f"""
         <div style="flex: 1; min-width: 220px; background: {bg}; border: 1px solid {border_c}; border-radius: 8px; padding: 8px 12px;">
-          <div style="font-size: 11px; color: {border_c}; font-weight: bold;">{b_title}</div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 11px; color: {border_c}; font-weight: bold;">{b_title}</span>
+            <span style="font-size: 10.5px; color: #8fa0b5; font-weight: bold;">거래 {amt_str}</span>
+          </div>
           <div style="font-size: 14px; font-weight: bold; color: #ffffff; margin: 2px 0;">{r['sec']} <span style="color:{c_color};">{c_sign}{r['avg_c']:.2f}%</span></div>
           <div style="font-size: 11px; color: #b2b5be; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">주도주: {r['leaders']}</div>
         </div>
