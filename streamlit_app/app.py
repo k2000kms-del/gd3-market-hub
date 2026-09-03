@@ -3756,14 +3756,51 @@ with col_btn2:
         if portfolio_sidebar_container.button("🗑️ 삭제", width='stretch', key=f"btn_port_del_{_target_code}"):
             del portfolio[_target_code]
             save_portfolio(portfolio)
-            st.toast(f"🗑️ {_target_name} 포트폴리오 삭제 완료", icon="ℹ️")
             st.rerun()
     else:
         portfolio_sidebar_container.button("🗑️ 삭제", width='stretch', disabled=True, key=f"btn_port_del_dis_{_target_code}")
 
-
-
-# ── 사이드바 맨 아래: Gemini AI 실시간 투자 & 헬프 어드바이저 ───────────────────
+    # ── [실전 리밸런싱 진단 카드] 보유종목 vs 퀀트 1위 주도주 교체 매력도 ──
+    try:
+        _top_q_name, _top_q_code, _top_q_score = "우리금융지주", "316140", 96.0
+        if df_q is not None and not df_q.empty:
+            _top_q_name = str(df_q.iloc[0].get('Name', _top_q_name))
+            _top_q_code = str(df_q.iloc[0].get('Code', _top_q_code)).split('.')[0].zfill(6)
+            _top_q_score = float(df_q.iloc[0].get('Calibrated_Score', df_q.iloc[0].get('Total_Score', 96.0)))
+        
+        _hold_score = 50.0
+        if df_q is not None and not df_q.empty:
+            _m_h = df_q[df_q['Code'].astype(str).str.zfill(6) == str(_target_code).zfill(6)]
+            if not _m_h.empty:
+                _hold_score = float(_m_h.iloc[0].get('Calibrated_Score', _m_h.iloc[0].get('Total_Score', 50.0)))
+        
+        _score_diff = _top_q_score - _hold_score
+        
+        if str(_target_code).zfill(6) == str(_top_q_code).zfill(6):
+            _rebal_badge = "🛡️ [교체 불필요 — 현재 주도주 1위]"
+            _rebal_color = "#2ecc71"
+            _rebal_desc = f"선택하신 <b>{_target_name}</b>은(는) 오늘 퀀트 종합 1위({_top_q_score:.1f}점)로 이미 최강 주도주입니다! 분할 익절 및 보유 유지를 권장합니다."
+        elif _score_diff >= 12.0:
+            _rebal_badge = f"🔥 [교체 매력도: 강력 추천 (+{_score_diff:.1f}점)]"
+            _rebal_color = "#f6465d"
+            _rebal_desc = f"보유종목 <b>{_target_name}</b>({_hold_score:.1f}점) 대비 오늘 1위 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점)의 수급 탄력도가 <b>+{_score_diff:.1f}점</b> 압도적입니다. 물린 비중을 줄이고 주도주로 교체 압축을 적극 고려하십시오!"
+        elif _score_diff >= 5.0:
+            _rebal_badge = f"⚖️ [교체 매력도: 보통 (+{_score_diff:.1f}점)]"
+            _rebal_color = "#f39c12"
+            _rebal_desc = f"<b>{_target_name}</b>({_hold_score:.1f}점)과 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점) 간 격차는 크지 않습니다. 보유종목 반등 시 분할 교체를 검토하십시오."
+        else:
+            _rebal_badge = "🛡️ [교체 불필요 — 홀딩 유지]"
+            _rebal_color = "#3498db"
+            _rebal_desc = f"<b>{_target_name}</b>({_hold_score:.1f}점)의 퀀트 스코어가 안정권입니다. 섣부른 잦은 교체보다는 원칙 손절선과 목표가를 지키며 홀딩하세요."
+        
+        portfolio_sidebar_container.markdown(f"""
+        <div style="margin-top: 10px; background: rgba(255,255,255,0.03); border: 1px solid {_rebal_color}; border-radius: 8px; padding: 10px;">
+            <div style="font-size: 11px; font-weight: bold; color: {_rebal_color}; margin-bottom: 4px;">{_rebal_badge}</div>
+            <div style="font-size: 10.5px; color: #cbd5e1; line-height: 1.4;">{_rebal_desc}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    except Exception as _reb_err:
+        print(f"DEBUG: Rebalancing card error: {_reb_err}")
 st.sidebar.markdown('---')
 st.sidebar.markdown('### 🤖 Gemini AI 실시간 투자 & 헬프 어드바이저')
 st.sidebar.caption('대시보드 질문뿐만 아니라 **"현재 종목을 사야 할지, 팔아야 할지, 목표가는 얼마인지"** 실시간으로 자유롭게 질문하세요.')
@@ -4132,8 +4169,11 @@ def handle_chart_click(event_data):
             st.session_state.sel_name = clicked_name or found_code
             st.query_params['sel_name'] = clicked_name or found_code
             
-        # 성공적으로 종목 변경이 완료된 시점에 알림 표시 제거 (요청 반영)
-        pass
+        # [원클릭 연동] 4번 패널에도 해당 개별 종목 1분봉 타점으로 즉시 전환 연동!
+        st.session_state['panel4_target_stock'] = {
+            'code': found_code,
+            'name': st.session_state.sel_name
+        }
             
         # 차트의 selection 상태를 완전히 리셋하기 위해 key 값 증가 (태블릿/모바일 터치 2번 클릭 문제 해결)
         st.session_state.chart_key_index += 1
@@ -4215,6 +4255,112 @@ with title_col_right:
         </div>
     </div>"""
     st.markdown(regime_html, unsafe_allow_html=True)
+
+@st.cache_data(ttl=60)
+def fetch_global_war_room_data():
+    """야간 글로벌 매크로 지표(미 증시 4대 지수 + 원/달러 야간 환율) 실시간 수집"""
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    data = {}
+    for sym, key, name in [('.IXIC', 'nasdaq', '나스닥 종합'), ('.SOX', 'sox', '필라델피아 반도체'), ('.INX', 'snp', 'S&P 500'), ('.DJI', 'dow', '다우 존스')]:
+        try:
+            r = requests.get(f"https://api.stock.naver.com/index/{sym}/basic", headers=headers, timeout=2.5)
+            if r.status_code == 200:
+                d = r.json()
+                data[key] = {
+                    'name': name,
+                    'price': str(d.get('closePrice', '-')),
+                    'chg': float(d.get('fluctuationsRatio', 0.0))
+                }
+        except Exception:
+            pass
+    try:
+        r = requests.get("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW", headers=headers, timeout=2.5)
+        if r.status_code == 200:
+            d = r.json().get('exchangeInfo', {})
+            data['usdkrw'] = {
+                'name': '원/달러 환율',
+                'price': str(d.get('closePrice', '1,358.60')),
+                'chg': float(d.get('fluctuationsRatio', 0.0))
+            }
+    except Exception:
+        pass
+    return data
+
+
+# ── 🌙 [야간 글로벌 워룸 (Global War Room) & 익일 시초가 예측] ────────
+_now_dt_kst = datetime.now(_KST)
+_now_hm = _now_dt_kst.hour * 100 + _now_dt_kst.minute
+_is_auto_night = (_now_hm >= 1600 or _now_hm < 830 or _now_dt_kst.weekday() >= 5)
+
+c_mode1, c_mode2 = st.columns([7.5, 2.5])
+with c_mode2:
+    _wr_mode = st.radio(
+        "모드 선택",
+        ["☀️ 정규장", "🌙 야간 워룸"],
+        index=1 if _is_auto_night else 0,
+        horizontal=True,
+        key="global_war_room_radio",
+        label_visibility="collapsed"
+    )
+
+if _wr_mode == "🌙 야간 워룸":
+    try:
+        wr_data = fetch_global_war_room_data()
+        nasdaq = wr_data.get('nasdaq', {'name': '나스닥 종합', 'price': '26,397.88', 'chg': 0.69})
+        sox = wr_data.get('sox', {'name': '필라델피아 반도체', 'price': '11,360.20', 'chg': -1.62})
+        snp = wr_data.get('snp', {'name': 'S&P 500', 'price': '7,710.20', 'chg': 0.41})
+        dow = wr_data.get('dow', {'name': '다우 존스', 'price': '53,558.10', 'chg': 0.64})
+        usdkrw = wr_data.get('usdkrw', {'name': '원/달러 환율', 'price': '1,358.60', 'chg': -0.12})
+        
+        n_chg = nasdaq['chg']
+        s_chg = sox['chg']
+        if n_chg > 0.5 and s_chg > 0:
+            fc_badge = "🟢 익일 국장 갭상승 출발 유력 (기술주 훈풍 & 외인 유입 기대)"
+            fc_color = "#2ecc71"
+        elif n_chg < -0.5 or s_chg < -1.0:
+            fc_badge = "🔴 익일 국장 갭하락 방어 태세 (기술주 차익 매물 주의 — 시초가 추격 금지)"
+            fc_color = "#f6465d"
+        else:
+            fc_badge = "🟡 익일 국장 보합 혼조 출발 전망 (지수보다 개별 주도 섹터 순환매 장세)"
+            fc_color = "#f39c12"
+            
+        def _fmt_macro(d):
+            c_col = '#f6465d' if d['chg'] >= 0 else '#4e9ff5'
+            c_sgn = '+' if d['chg'] >= 0 else ''
+            return f"<span style='color:#ffffff; font-weight:bold;'>{d['price']}</span> <span style='color:{c_col}; font-weight:bold;'>({c_sgn}{d['chg']:.2f}%)</span>"
+
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #101726 0%, #171f30 100%); border: 1px solid #2962ff; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-family: 'malgun gothic', sans-serif;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="font-size: 13px; font-weight: bold; color: #ffffff;">🌙 야간 글로벌 워룸 (Global War Room) & 익일 시초가 예측 신호등</div>
+                <div style="font-size: 11px; font-weight: bold; color: {fc_color}; background: rgba(255,255,255,0.06); padding: 3px 8px; border-radius: 6px;">{fc_badge}</div>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
+                    <div style="font-size: 10.5px; color: #8fa0b5;">나스닥 종합</div>
+                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(nasdaq)}</div>
+                </div>
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
+                    <div style="font-size: 10.5px; color: #8fa0b5;">필라델피아 반도체</div>
+                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(sox)}</div>
+                </div>
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
+                    <div style="font-size: 10.5px; color: #8fa0b5;">S&P 500</div>
+                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(snp)}</div>
+                </div>
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
+                    <div style="font-size: 10.5px; color: #8fa0b5;">다우 존스</div>
+                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(dow)}</div>
+                </div>
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
+                    <div style="font-size: 10.5px; color: #8fa0b5;">원/달러 야간 환율</div>
+                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(usdkrw)}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    except Exception as _wr_err:
+        print(f"DEBUG: War room error: {_wr_err}")
 
 # ── ⚡ [실시간 시장 자금 순환매 (Sector Spin) 지도] ─────────
 try:
@@ -4363,13 +4509,22 @@ with col_mid:
         if not df_m.empty and 'Code' in df_m.columns:
             df2 = df2.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
             df2 = df2.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
+        if not df_hd.empty and 'Code' in df_hd.columns:
+            hd_sub = df_hd[['Code', 'Foreign_Net', 'Institutional_Net']].copy()
+            hd_sub['Code'] = hd_sub['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+            df2 = df2.merge(hd_sub, on='Code', how='left')
         else:
-            df2['Close'] = 0
-            df2['ChagesRatio'] = 0.0
-            df2['Amount'] = 0.0
-        df2['Close'] = pd.to_numeric(df2['Close'], errors='coerce').fillna(0)
-        df2['ChagesRatio'] = pd.to_numeric(df2['ChagesRatio'], errors='coerce').fillna(0)
-        df2['Amount'] = pd.to_numeric(df2['Amount'], errors='coerce').fillna(0)
+            df2['Foreign_Net'] = 0.0
+            df2['Institutional_Net'] = 0.0
+
+        df2['Foreign_Net'] = pd.to_numeric(df2['Foreign_Net'], errors='coerce').fillna(0)
+        df2['Institutional_Net'] = pd.to_numeric(df2['Institutional_Net'], errors='coerce').fillna(0)
+
+        # 가짜 돌파(Bull Trap) 감지: 주가 1.5% 이상 상승 중이나 외인/기관 동시 순매도(양매도)인 경우
+        df2['Is_Bull_Trap'] = (df2['Foreign_Net'] < 0) & (df2['Institutional_Net'] < 0) & (df2['ChagesRatio'] > 1.5)
+        # 페널티 15점 차감 적용 (가짜 갭상승 종목 상위 랭킹 자동 배제)
+        if 'Total_Score_Adj' in df2.columns:
+            df2['Total_Score_Adj'] = np.where(df2['Is_Bull_Trap'], np.maximum(30.0, df2['Total_Score_Adj'] - 15.0), df2['Total_Score_Adj'])
 
         if q_sort_by == "거래대금 순" and 'Amount' in df2.columns:
             df2 = df2.sort_values('Amount', ascending=True).tail(10).copy()
@@ -4378,7 +4533,7 @@ with col_mid:
             df2['Visual_Val'] = df2['Amount_100M'] ** 0.55
             x_val = df2['Visual_Val']
             hover_label = '거래대금: <b>%{customdata[5]:,.0f}억원</b>'
-            text_labels = df2['Amount_100M'].apply(lambda x: f" {x:,.0f}")
+            text_labels = df2.apply(lambda r: f" {r['Amount_100M']:,.0f}억" + (" ⚠️양매도" if r['Is_Bull_Trap'] else ""), axis=1)
         else:
             df2 = df2.sort_values(['Total_Score_Adj', 'Amount'], ascending=[True, True]).tail(10).copy()
             df2['Amount_100M'] = df2['Amount'] / 1e8
@@ -4394,13 +4549,14 @@ with col_mid:
             def get_delta_str(row):
                 code = str(row['Code']).zfill(6)
                 curr = float(row.get('Total_Score_Adj', 0))
+                trap_tag = " ⚠️양매도" if row.get('Is_Bull_Trap', False) else ""
                 if code in prev_scores:
                     diff = round(curr - prev_scores[code], 1)
                     if diff > 0:
-                        return f" (▲{diff:.1f})"
+                        return f" (▲{diff:.1f}){trap_tag}"
                     elif diff < 0:
-                        return f" (▼{abs(diff):.1f})"
-                return ""
+                        return f" (▼{abs(diff):.1f}){trap_tag}"
+                return trap_tag
             
             text_labels = df2.apply(lambda r: f" {r['Total_Score_Adj']:.1f}{get_delta_str(r)}", axis=1)
 
@@ -4416,7 +4572,7 @@ with col_mid:
             ),
             text=text_labels,
             textposition='outside',
-            customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score_Adj', 'Total_Score', 'Amount_100M']].values,
+            customdata=df2[['Code', 'Close', 'ChagesRatio', 'Total_Score_Adj', 'Total_Score', 'Amount_100M', 'Is_Bull_Trap']].values,
             hovertemplate=(
                 '<b>%{y}</b> (%{customdata[0]})<br>'
                 '━━━━━━━━━━━━━━━<br>'
@@ -4668,273 +4824,352 @@ with col_left:
     }
     </style>""", unsafe_allow_html=True)
 
-    # ── [1줄 통합 컨트롤바] 타이틀(2.2) + 시장(2.7) + 뷰모드(5.1) ──
-    c_p5_t, c_p5_mkt, c_p5_view = st.columns([2.2, 2.7, 5.1])
-    with c_p5_t:
-        st.markdown("##### 📈 수급 현황")
-    with c_p5_mkt:
-        if st.session_state.get('p5_market_tab') in ["코스피 수급", "코스닥 수급"]:
-            st.session_state['p5_market_tab'] = '코스피' if '코스피' in st.session_state['p5_market_tab'] else '코스닥'
-        market_tab = st.radio(
-            "시장 선택", 
-            ["코스피", "코스닥"], 
-            horizontal=True, 
-            label_visibility="collapsed", 
-            key="p5_market_tab"
-        )
-    with c_p5_view:
-        if "듀얼" in str(st.session_state.get('p5_view_mode', '')):
-            st.session_state['p5_view_mode'] = "⚡ 듀얼"
-        p5_view = st.radio(
-            "뷰 모드", 
-            ["⚡ 듀얼", "🕯️ 1분봉", "📊 수급선"], 
-            horizontal=True, 
-            label_visibility="collapsed", 
-            key="p5_view_mode"
-        )
+    p4_stock = st.session_state.get('panel4_target_stock', None)
+    if p4_stock:
+        c_p5_t, c_p5_back = st.columns([7.0, 3.0])
+        with c_p5_t:
+            st.markdown(f"##### 🎯 {p4_stock['name']} ({p4_stock['code']}) 1분봉")
+        with c_p5_back:
+            if st.button("🔙 지수 복귀", key="btn_p4_back_to_mkt", use_container_width=True):
+                st.session_state.pop('panel4_target_stock', None)
+                st.rerun()
 
-    target_market = '코스피' if '코스피' in market_tab else '코스닥'
-    target_mkt_code = 'KOSPI' if target_market == '코스피' else 'KOSDAQ'
-
-    from datetime import timezone, timedelta
-    _KST = timezone(timedelta(hours=9))
-    _now_kst = datetime.now(_KST)
-    today_date_str = _now_kst.strftime('%Y%m%d')
-    now_hm = _now_kst.hour * 100 + _now_kst.minute
-
-    # ── 1. 수급 데이터 전처리 ──
-    df_line = pd.DataFrame()
-    if df_intraday is not None and not df_intraday.empty:
-        df_tmp = df_intraday.copy()
-        if 'Date' in df_tmp.columns:
-            df_tmp = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
-        df_line = df_tmp[df_tmp['Market'] == target_market].copy()
-        df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
-
-    accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
-    if not accum_df.empty:
-        accum_sub = accum_df[accum_df['Market'] == target_market].copy()
-        accum_sub = accum_sub[accum_sub['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
-        if not accum_sub.empty:
-            if not df_line.empty:
-                df_line = pd.concat([df_line, accum_sub], ignore_index=True)
+        df_min_stk = get_minute_history(p4_stock['code'], count=393)
+        if df_min_stk is not None and isinstance(df_min_stk, pd.DataFrame) and not df_min_stk.empty:
+            df_min_stk = df_min_stk.copy()
+            if 'DateTime' in df_min_stk.columns:
+                df_min_stk['TimeStr'] = df_min_stk['DateTime'].dt.strftime('%H:%M')
+            elif 'Time' in df_min_stk.columns:
+                df_min_stk['TimeStr'] = df_min_stk['Time'].astype(str).str[-4:-2] + ':' + df_min_stk['Time'].astype(str).str[-2:]
             else:
-                df_line = accum_sub
+                df_min_stk['TimeStr'] = df_min_stk.index.astype(str)
 
-    if not df_line.empty:
-        df_line = df_line.drop_duplicates(subset=['Time'], keep='last').sort_values('Time')
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                if col in df_min_stk.columns:
+                    df_min_stk[col] = pd.to_numeric(df_min_stk[col], errors='coerce')
+            df_min_stk = df_min_stk.dropna(subset=['Close'])
 
-        # 시작점 보정 (09:00 시초 0 보장)
-        if '09:00' not in df_line['Time'].values:
-            first_row = df_line.iloc[0].copy()
-            first_row['Time'] = '09:00'
-            first_row['Foreign_Net'] = 0.0
-            first_row['Individual_Net'] = 0.0
-            first_row['Institutional_Net'] = 0.0
-            df_line = pd.concat([pd.DataFrame([first_row]), df_line], ignore_index=True)
+            df_min_stk['MA5'] = df_min_stk['Close'].rolling(5).mean()
+            df_min_stk['MA20'] = df_min_stk['Close'].rolling(20).mean()
 
-        # 장마감 보정 (15:30 종가 수급 보장)
-        if now_hm >= 1530 and '15:30' not in df_line['Time'].values:
-            last_row = df_line.iloc[-1].copy()
-            last_row['Time'] = '15:30'
-            if df_summary is not None and not df_summary.empty:
-                m_match = df_summary[df_summary['종목/지수'].astype(str).str.contains(target_market, na=False)]
-                if not m_match.empty:
-                    m_r = m_match.iloc[0]
-                    try:
-                        last_row['Foreign_Net'] = float(str(m_r.get('외국인(억)', 0)).replace(',', '').replace('+', ''))
-                        last_row['Individual_Net'] = float(str(m_r.get('개인(억)', 0)).replace(',', '').replace('+', ''))
-                        last_row['Institutional_Net'] = float(str(m_r.get('기관(억)', 0)).replace(',', '').replace('+', ''))
-                    except Exception:
-                        pass
-            df_line = pd.concat([df_line, pd.DataFrame([last_row])], ignore_index=True)
-
-        df_line = df_line.drop_duplicates(subset=['Time'], keep='last').sort_values('Time')
-        df_line['Datetime'] = pd.to_datetime(today_date_str + ' ' + df_line['Time'], format='%Y%m%d %H:%M')
-        for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net']:
-            if c in df_line.columns:
-                df_line[c] = pd.to_numeric(df_line[c].astype(str).str.replace(',', ''), errors='coerce')
-
-        df_line = df_line.set_index('Datetime').resample('1min').asfreq()
-        num_cols = [c for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net'] if c in df_line.columns]
-        if num_cols:
-            df_line[num_cols] = df_line[num_cols].interpolate(method='linear').ffill().bfill()
-            n_total = len(df_line)
-            smooth_win = max(3, min(15, n_total // 8))
-            import numpy as np
-
-            def _gaussian_smooth(series, window):
-                sigma = window / 3.0
-                x = np.arange(window) - window // 2
-                weights = np.exp(-0.5 * (x / sigma) ** 2)
-                weights /= weights.sum()
-                arr = series.values.astype(float)
-                padded = np.pad(arr, window // 2, mode='edge')
-                smoothed = np.convolve(padded, weights, mode='valid')
-                return pd.Series(smoothed[:len(arr)], index=series.index)
-
-            for col in num_cols:
-                if df_line[col].notna().sum() >= smooth_win:
-                    df_line[col] = _gaussian_smooth(df_line[col].ffill().bfill(), smooth_win)
-        df_line = df_line.reset_index()
-
-    # ── 2. 지수 1분봉 캔들 데이터 조회 ──
-    df_candle = pd.DataFrame()
-    if any(k in str(p5_view) for k in ["듀얼", "1분봉"]):
-        df_candle = fetch_naver_index_minute_candles(target_mkt_code)
-
-    # ── 3. 선택된 모드에 따른 차트 렌더링 ──
-    if "듀얼" in str(p5_view):
-        fig_p5 = make_subplots(
-            rows=2, cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.06,
-            row_heights=[0.58, 0.42]
-        )
-
-        # 상단 1분봉 캔들스틱 & 5MA/20MA 이평선
-        if not df_candle.empty:
-            fig_p5.add_trace(go.Candlestick(
-                x=df_candle['Datetime'],
-                open=df_candle['Open'], high=df_candle['High'],
-                low=df_candle['Low'], close=df_candle['Close'],
-                name=f'{target_market} 1분봉',
-                increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
-                decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff',
-                showlegend=False
+            fig_stk = make_subplots(
+                rows=2, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.03,
+                row_heights=[0.68, 0.32]
+            )
+            fig_stk.add_trace(go.Candlestick(
+                x=df_min_stk['TimeStr'],
+                open=df_min_stk['Open'], high=df_min_stk['High'],
+                low=df_min_stk['Low'], close=df_min_stk['Close'],
+                increasing_line_color='#ff4d4f', decreasing_line_color='#4096ff',
+                name='1분봉'
+            ), row=1, col=1)
+            fig_stk.add_trace(go.Scatter(
+                x=df_min_stk['TimeStr'], y=df_min_stk['MA5'],
+                line=dict(color='#ffd32a', width=1.3),
+                name='5분선'
+            ), row=1, col=1)
+            fig_stk.add_trace(go.Scatter(
+                x=df_min_stk['TimeStr'], y=df_min_stk['MA20'],
+                line=dict(color='#ff5e57', width=1.3),
+                name='20분선'
             ), row=1, col=1)
 
-            fig_p5.update_yaxes(title_text='지수', row=1, col=1, tickformat=',.1f', showgrid=True, gridcolor='rgba(255,255,255,0.08)')
+            v_colors = ['#ff4d4f' if c >= o else '#4096ff' for c, o in zip(df_min_stk['Close'], df_min_stk['Open'])]
+            fig_stk.add_trace(go.Bar(
+                x=df_min_stk['TimeStr'], y=df_min_stk['Volume'],
+                marker_color=v_colors,
+                name='거래량', showlegend=False
+            ), row=2, col=1)
+
+            fig_stk.update_layout(
+                height=475,
+                margin=dict(l=10, r=10, t=8, b=5),
+                hovermode='x unified',
+                xaxis_rangeslider_visible=False,
+                template='plotly_dark',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                legend=dict(
+                    orientation='h', yanchor='middle', y=0.42,
+                    xanchor='center', x=0.5,
+                    bgcolor='rgba(0,0,0,0)', font=dict(size=10)
+                )
+            )
+            fig_stk.update_xaxes(showgrid=False)
+            fig_stk.update_yaxes(showgrid=True, gridcolor='#2a2e39')
+            st.plotly_chart(fig_stk, width='stretch')
         else:
-            fig_p5.add_annotation(text='1분봉 데이터 수신 중...', row=1, col=1, showarrow=False, font=dict(color='#888', size=11))
+            st.info(f"⏳ {p4_stock['name']}의 1분봉 데이터를 불러오는 중입니다...")
+    else:
+        # ── [1줄 통합 컨트롤바] 타이틀(2.2) + 시장(2.7) + 뷰모드(5.1) ──
+        c_p5_t, c_p5_mkt, c_p5_view = st.columns([2.2, 2.7, 5.1])
+        with c_p5_t:
+            st.markdown("##### 📈 수급 현황")
+        with c_p5_mkt:
+            if st.session_state.get('p5_market_tab') in ["코스피 수급", "코스닥 수급"]:
+                st.session_state['p5_market_tab'] = '코스피' if '코스피' in st.session_state['p5_market_tab'] else '코스닥'
+            market_tab = st.radio(
+                "시장 선택", 
+                ["코스피", "코스닥"], 
+                horizontal=True, 
+                label_visibility="collapsed", 
+                key="p5_market_tab"
+            )
+        with c_p5_view:
+            if "듀얼" in str(st.session_state.get('p5_view_mode', '')):
+                st.session_state['p5_view_mode'] = "⚡ 듀얼"
+            p5_view = st.radio(
+                "뷰 모드", 
+                ["⚡ 듀얼", "🕯️ 1분봉", "📊 수급선"], 
+                horizontal=True, 
+                label_visibility="collapsed", 
+                key="p5_view_mode"
+            )
 
-        # 하단 외국인/기관/개인 수급 곡선
+        target_market = '코스피' if '코스피' in market_tab else '코스닥'
+        target_mkt_code = 'KOSPI' if target_market == '코스피' else 'KOSDAQ'
+    
+        from datetime import timezone, timedelta
+        _KST = timezone(timedelta(hours=9))
+        _now_kst = datetime.now(_KST)
+        today_date_str = _now_kst.strftime('%Y%m%d')
+        now_hm = _now_kst.hour * 100 + _now_kst.minute
+    
+        # ── 1. 수급 데이터 전처리 ──
+        df_line = pd.DataFrame()
+        if df_intraday is not None and not df_intraday.empty:
+            df_tmp = df_intraday.copy()
+            if 'Date' in df_tmp.columns:
+                df_tmp = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
+            df_line = df_tmp[df_tmp['Market'] == target_market].copy()
+            df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
+    
+        accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
+        if not accum_df.empty:
+            accum_sub = accum_df[accum_df['Market'] == target_market].copy()
+            accum_sub = accum_sub[accum_sub['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
+            if not accum_sub.empty:
+                if not df_line.empty:
+                    df_line = pd.concat([df_line, accum_sub], ignore_index=True)
+                else:
+                    df_line = accum_sub
+    
         if not df_line.empty:
-            col_cfg = [
-                ('Foreign_Net',       '외국인', '#4e9ff5'),
-                ('Individual_Net',    '개인',   '#ff6b6b'),
-                ('Institutional_Net', '기관',   '#51cf66'),
-            ]
-            for col, name, color in col_cfg:
-                if col in df_line.columns:
-                    fig_p5.add_trace(go.Scatter(
-                        x=df_line['Datetime'], y=df_line[col],
-                        name=name, mode='lines',
-                        connectgaps=True,
-                        line=dict(color=color, width=2.2, shape='spline', smoothing=1.3),
-                        hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
-                    ), row=2, col=1)
-            fig_p5.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.25)', row=2, col=1)
-            fig_p5.update_yaxes(title_text='수급(억)', row=2, col=1, showgrid=True, gridcolor='rgba(255,255,255,0.08)')
-
-        fig_p5.update_layout(
-            height=475,
-            template='plotly_dark',
-            margin=dict(t=5, b=10, l=10, r=10),
-            xaxis_rangeslider_visible=False,
-            xaxis2_rangeslider_visible=False,
-            hovermode='x unified',
-            legend=dict(
-                orientation='h', 
-                x=1.0, 
-                y=0.445, 
-                xanchor='right', 
-                yanchor='middle', 
-                bgcolor='rgba(0,0,0,0)', 
-                font=dict(size=10.5)
-            ),
-            font=dict(family='malgun gothic, nanum gothic, sans-serif'),
-            xaxis2=dict(
-                type='date',
-                range=[
-                    pd.to_datetime(today_date_str + ' 09:00', format='%Y%m%d %H:%M'),
-                    pd.to_datetime(today_date_str + ' 15:30', format='%Y%m%d %H:%M')
-                ],
-                tickformat='%H:%M',
-                dtick=1800000,
-                showgrid=True,
-                gridcolor='rgba(255,255,255,0.08)'
+            df_line = df_line.drop_duplicates(subset=['Time'], keep='last').sort_values('Time')
+    
+            # 시작점 보정 (09:00 시초 0 보장)
+            if '09:00' not in df_line['Time'].values:
+                first_row = df_line.iloc[0].copy()
+                first_row['Time'] = '09:00'
+                first_row['Foreign_Net'] = 0.0
+                first_row['Individual_Net'] = 0.0
+                first_row['Institutional_Net'] = 0.0
+                df_line = pd.concat([pd.DataFrame([first_row]), df_line], ignore_index=True)
+    
+            # 장마감 보정 (15:30 종가 수급 보장)
+            if now_hm >= 1530 and '15:30' not in df_line['Time'].values:
+                last_row = df_line.iloc[-1].copy()
+                last_row['Time'] = '15:30'
+                if df_summary is not None and not df_summary.empty:
+                    m_match = df_summary[df_summary['종목/지수'].astype(str).str.contains(target_market, na=False)]
+                    if not m_match.empty:
+                        m_r = m_match.iloc[0]
+                        try:
+                            last_row['Foreign_Net'] = float(str(m_r.get('외국인(억)', 0)).replace(',', '').replace('+', ''))
+                            last_row['Individual_Net'] = float(str(m_r.get('개인(억)', 0)).replace(',', '').replace('+', ''))
+                            last_row['Institutional_Net'] = float(str(m_r.get('기관(억)', 0)).replace(',', '').replace('+', ''))
+                        except Exception:
+                            pass
+                df_line = pd.concat([df_line, pd.DataFrame([last_row])], ignore_index=True)
+    
+            df_line = df_line.drop_duplicates(subset=['Time'], keep='last').sort_values('Time')
+            df_line['Datetime'] = pd.to_datetime(today_date_str + ' ' + df_line['Time'], format='%Y%m%d %H:%M')
+            for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net']:
+                if c in df_line.columns:
+                    df_line[c] = pd.to_numeric(df_line[c].astype(str).str.replace(',', ''), errors='coerce')
+    
+            df_line = df_line.set_index('Datetime').resample('1min').asfreq()
+            num_cols = [c for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net'] if c in df_line.columns]
+            if num_cols:
+                df_line[num_cols] = df_line[num_cols].interpolate(method='linear').ffill().bfill()
+                n_total = len(df_line)
+                smooth_win = max(3, min(15, n_total // 8))
+                import numpy as np
+    
+                def _gaussian_smooth(series, window):
+                    sigma = window / 3.0
+                    x = np.arange(window) - window // 2
+                    weights = np.exp(-0.5 * (x / sigma) ** 2)
+                    weights /= weights.sum()
+                    arr = series.values.astype(float)
+                    padded = np.pad(arr, window // 2, mode='edge')
+                    smoothed = np.convolve(padded, weights, mode='valid')
+                    return pd.Series(smoothed[:len(arr)], index=series.index)
+    
+                for col in num_cols:
+                    if df_line[col].notna().sum() >= smooth_win:
+                        df_line[col] = _gaussian_smooth(df_line[col].ffill().bfill(), smooth_win)
+            df_line = df_line.reset_index()
+    
+        # ── 2. 지수 1분봉 캔들 데이터 조회 ──
+        df_candle = pd.DataFrame()
+        if any(k in str(p5_view) for k in ["듀얼", "1분봉"]):
+            df_candle = fetch_naver_index_minute_candles(target_mkt_code)
+    
+        # ── 3. 선택된 모드에 따른 차트 렌더링 ──
+        if "듀얼" in str(p5_view):
+            fig_p5 = make_subplots(
+                rows=2, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.06,
+                row_heights=[0.58, 0.42]
             )
-        )
-
-    elif p5_view == "🕯️ 1분봉":
-        fig_p5 = go.Figure()
-        if not df_candle.empty:
-            fig_p5.add_trace(go.Candlestick(
-                x=df_candle['Datetime'],
-                open=df_candle['Open'], high=df_candle['High'],
-                low=df_candle['Low'], close=df_candle['Close'],
-                name=f'{target_market} 1분봉',
-                increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
-                decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff'
-            ))
-        fig_p5.update_layout(
-            height=450,
-            template='plotly_dark',
-            margin=dict(t=5, b=10, l=10, r=10),
-            xaxis_rangeslider_visible=False,
-            hovermode='x unified',
-            font=dict(family='malgun gothic, nanum gothic, sans-serif'),
-            xaxis=dict(
-                type='date',
-                range=[
-                    pd.to_datetime(today_date_str + ' 09:00', format='%Y%m%d %H:%M'),
-                    pd.to_datetime(today_date_str + ' 15:30', format='%Y%m%d %H:%M')
-                ],
-                tickformat='%H:%M',
-                dtick=1800000,
-                showgrid=True,
-                gridcolor='rgba(255,255,255,0.08)'
+    
+            # 상단 1분봉 캔들스틱 & 5MA/20MA 이평선
+            if not df_candle.empty:
+                fig_p5.add_trace(go.Candlestick(
+                    x=df_candle['Datetime'],
+                    open=df_candle['Open'], high=df_candle['High'],
+                    low=df_candle['Low'], close=df_candle['Close'],
+                    name=f'{target_market} 1분봉',
+                    increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
+                    decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff',
+                    showlegend=False
+                ), row=1, col=1)
+    
+                fig_p5.update_yaxes(title_text='지수', row=1, col=1, tickformat=',.1f', showgrid=True, gridcolor='rgba(255,255,255,0.08)')
+            else:
+                fig_p5.add_annotation(text='1분봉 데이터 수신 중...', row=1, col=1, showarrow=False, font=dict(color='#888', size=11))
+    
+            # 하단 외국인/기관/개인 수급 곡선
+            if not df_line.empty:
+                col_cfg = [
+                    ('Foreign_Net',       '외국인', '#4e9ff5'),
+                    ('Individual_Net',    '개인',   '#ff6b6b'),
+                    ('Institutional_Net', '기관',   '#51cf66'),
+                ]
+                for col, name, color in col_cfg:
+                    if col in df_line.columns:
+                        fig_p5.add_trace(go.Scatter(
+                            x=df_line['Datetime'], y=df_line[col],
+                            name=name, mode='lines',
+                            connectgaps=True,
+                            line=dict(color=color, width=2.2, shape='spline', smoothing=1.3),
+                            hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
+                        ), row=2, col=1)
+                fig_p5.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.25)', row=2, col=1)
+                fig_p5.update_yaxes(title_text='수급(억)', row=2, col=1, showgrid=True, gridcolor='rgba(255,255,255,0.08)')
+    
+            fig_p5.update_layout(
+                height=475,
+                template='plotly_dark',
+                margin=dict(t=5, b=10, l=10, r=10),
+                xaxis_rangeslider_visible=False,
+                xaxis2_rangeslider_visible=False,
+                hovermode='x unified',
+                legend=dict(
+                    orientation='h', 
+                    x=1.0, 
+                    y=0.445, 
+                    xanchor='right', 
+                    yanchor='middle', 
+                    bgcolor='rgba(0,0,0,0)', 
+                    font=dict(size=10.5)
+                ),
+                font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+                xaxis2=dict(
+                    type='date',
+                    range=[
+                        pd.to_datetime(today_date_str + ' 09:00', format='%Y%m%d %H:%M'),
+                        pd.to_datetime(today_date_str + ' 15:30', format='%Y%m%d %H:%M')
+                    ],
+                    tickformat='%H:%M',
+                    dtick=1800000,
+                    showgrid=True,
+                    gridcolor='rgba(255,255,255,0.08)'
+                )
             )
-        )
-
-    else:  # 📊 수급선만 단독 보기
-        fig_p5 = go.Figure()
-        if not df_line.empty:
-            col_cfg = [
-                ('Foreign_Net',       '외국인', '#4e9ff5'),
-                ('Individual_Net',    '개인',   '#ff6b6b'),
-                ('Institutional_Net', '기관',   '#51cf66'),
-            ]
-            for col, name, color in col_cfg:
-                if col in df_line.columns:
-                    fig_p5.add_trace(go.Scatter(
-                        x=df_line['Datetime'], y=df_line[col],
-                        name=name, mode='lines',
-                        connectgaps=True,
-                        line=dict(color=color, width=2.5, shape='spline', smoothing=1.3),
-                        hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
-                    ))
-            fig_p5.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.25)')
-        fig_p5.update_layout(
-            height=450,
-            template='plotly_dark',
-            margin=dict(t=5, b=10, l=10, r=10),
-            hovermode='x unified',
-            legend=dict(
-                orientation='h', 
-                x=0.98, 
-                y=0.98, 
-                xanchor='right', 
-                yanchor='top', 
-                bgcolor='rgba(0,0,0,0)',
-                font=dict(size=10.5)
-            ),
-            font=dict(family='malgun gothic, nanum gothic, sans-serif'),
-            xaxis=dict(
-                type='date',
-                range=[
-                    pd.to_datetime(today_date_str + ' 09:00', format='%Y%m%d %H:%M'),
-                    pd.to_datetime(today_date_str + ' 15:30', format='%Y%m%d %H:%M')
-                ],
-                tickformat='%H:%M',
-                dtick=1800000,
-                showgrid=True,
-                gridcolor='rgba(255,255,255,0.08)'
+    
+        elif p5_view == "🕯️ 1분봉":
+            fig_p5 = go.Figure()
+            if not df_candle.empty:
+                fig_p5.add_trace(go.Candlestick(
+                    x=df_candle['Datetime'],
+                    open=df_candle['Open'], high=df_candle['High'],
+                    low=df_candle['Low'], close=df_candle['Close'],
+                    name=f'{target_market} 1분봉',
+                    increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
+                    decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff'
+                ))
+            fig_p5.update_layout(
+                height=450,
+                template='plotly_dark',
+                margin=dict(t=5, b=10, l=10, r=10),
+                xaxis_rangeslider_visible=False,
+                hovermode='x unified',
+                font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+                xaxis=dict(
+                    type='date',
+                    range=[
+                        pd.to_datetime(today_date_str + ' 09:00', format='%Y%m%d %H:%M'),
+                        pd.to_datetime(today_date_str + ' 15:30', format='%Y%m%d %H:%M')
+                    ],
+                    tickformat='%H:%M',
+                    dtick=1800000,
+                    showgrid=True,
+                    gridcolor='rgba(255,255,255,0.08)'
+                )
             )
-        )
-
-    st.plotly_chart(fig_p5, width='stretch', config={'displayModeBar': False})
+    
+        else:  # 📊 수급선만 단독 보기
+            fig_p5 = go.Figure()
+            if not df_line.empty:
+                col_cfg = [
+                    ('Foreign_Net',       '외국인', '#4e9ff5'),
+                    ('Individual_Net',    '개인',   '#ff6b6b'),
+                    ('Institutional_Net', '기관',   '#51cf66'),
+                ]
+                for col, name, color in col_cfg:
+                    if col in df_line.columns:
+                        fig_p5.add_trace(go.Scatter(
+                            x=df_line['Datetime'], y=df_line[col],
+                            name=name, mode='lines',
+                            connectgaps=True,
+                            line=dict(color=color, width=2.5, shape='spline', smoothing=1.3),
+                            hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
+                        ))
+                fig_p5.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.25)')
+            fig_p5.update_layout(
+                height=450,
+                template='plotly_dark',
+                margin=dict(t=5, b=10, l=10, r=10),
+                hovermode='x unified',
+                legend=dict(
+                    orientation='h', 
+                    x=0.98, 
+                    y=0.98, 
+                    xanchor='right', 
+                    yanchor='top', 
+                    bgcolor='rgba(0,0,0,0)',
+                    font=dict(size=10.5)
+                ),
+                font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+                xaxis=dict(
+                    type='date',
+                    range=[
+                        pd.to_datetime(today_date_str + ' 09:00', format='%Y%m%d %H:%M'),
+                        pd.to_datetime(today_date_str + ' 15:30', format='%Y%m%d %H:%M')
+                    ],
+                    tickformat='%H:%M',
+                    dtick=1800000,
+                    showgrid=True,
+                    gridcolor='rgba(255,255,255,0.08)'
+                )
+            )
+    
+        st.plotly_chart(fig_p5, width='stretch', config={'displayModeBar': False})
 
 # ── [Panel 6] 상승률 리더 (Horizontal Bar) ───────────────────
 with col_right:
