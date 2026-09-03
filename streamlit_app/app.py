@@ -4548,26 +4548,32 @@ with col_left:
 
 # ── [Panel 5] 코스피/코스닥 지수 1분봉 & 실시간 수급 동시 추적 (방안 1 듀얼 서브플롯) ──
 with col_left:
-    c_p5_head, c_p5_opt = st.columns([4.2, 5.8])
-    with c_p5_head:
-        st.markdown("##### 📈 수급 현황")
-    with c_p5_opt:
+    # ── [1줄 통합 컨트롤바] 타이틀(수급 현황) + 시장 선택 + 뷰 모드 ──
+    c_p5_t, c_p5_mkt, c_p5_view = st.columns([2.8, 3.2, 4.0])
+    with c_p5_t:
+        st.markdown("<h5 style='margin: 0; padding-top: 5px; font-size: 1.05rem; font-weight: 700; white-space: nowrap;'>📈 수급 현황</h5>", unsafe_allow_html=True)
+    with c_p5_mkt:
+        if st.session_state.get('p5_market_tab') in ["코스피 수급", "코스닥 수급"]:
+            st.session_state['p5_market_tab'] = '코스피' if '코스피' in st.session_state['p5_market_tab'] else '코스닥'
+        market_tab = st.radio(
+            "시장 선택", 
+            ["코스피", "코스닥"], 
+            horizontal=True, 
+            label_visibility="collapsed", 
+            key="p5_market_tab"
+        )
+    with c_p5_view:
+        if "듀얼" in str(st.session_state.get('p5_view_mode', '')):
+            st.session_state['p5_view_mode'] = "⚡ 듀얼뷰"
         p5_view = st.radio(
             "뷰 모드", 
-            ["⚡ 듀얼뷰(1분봉+수급)", "🕯️ 1분봉", "📊 수급선"], 
+            ["⚡ 듀얼뷰", "🕯️ 1분봉", "📊 수급선"], 
             horizontal=True, 
             label_visibility="collapsed", 
             key="p5_view_mode"
         )
 
-    market_tab = st.radio(
-        "수급 구분", 
-        ["코스피 수급", "코스닥 수급"], 
-        horizontal=True, 
-        label_visibility="collapsed", 
-        key="p5_market_tab"
-    )
-    target_market = '코스피' if market_tab == "코스피 수급" else '코스닥'
+    target_market = '코스피' if '코스피' in market_tab else '코스닥'
     target_mkt_code = 'KOSPI' if target_market == '코스피' else 'KOSDAQ'
 
     from datetime import timezone, timedelta
@@ -4654,11 +4660,11 @@ with col_left:
 
     # ── 2. 지수 1분봉 캔들 데이터 조회 ──
     df_candle = pd.DataFrame()
-    if p5_view in ["⚡ 듀얼뷰(1분봉+수급)", "🕯️ 1분봉"]:
+    if any(k in str(p5_view) for k in ["듀얼", "1분봉"]):
         df_candle = fetch_naver_index_minute_candles(target_mkt_code)
 
     # ── 3. 선택된 모드에 따른 차트 렌더링 ──
-    if p5_view == "⚡ 듀얼뷰(1분봉+수급)":
+    if "듀얼" in str(p5_view):
         fig_p5 = make_subplots(
             rows=2, cols=1,
             shared_xaxes=True,
