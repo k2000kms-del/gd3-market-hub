@@ -5018,36 +5018,16 @@ with col_left:
                 low=df_candle['Low'], close=df_candle['Close'],
                 name=f'{target_market} 1분봉',
                 increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
-                decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff'
+                decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff',
+                showlegend=False
             ))
-            if 'MA5' in df_candle.columns:
-                fig_p5.add_trace(go.Scatter(
-                    x=df_candle['Datetime'], y=df_candle['MA5'],
-                    name='5분선', mode='lines',
-                    line=dict(color='#ffd43b', width=1.5)
-                ))
-            if 'MA20' in df_candle.columns:
-                fig_p5.add_trace(go.Scatter(
-                    x=df_candle['Datetime'], y=df_candle['MA20'],
-                    name='20분선', mode='lines',
-                    line=dict(color='#ff922b', width=1.5)
-                ))
         fig_p5.update_layout(
             height=450,
             template='plotly_dark',
             margin=dict(t=5, b=10, l=10, r=10),
             xaxis_rangeslider_visible=False,
             hovermode='x unified',
-            showlegend=True,
-            legend=dict(
-                orientation='h', 
-                x=0.98, 
-                y=0.98, 
-                xanchor='right', 
-                yanchor='top', 
-                bgcolor='rgba(0,0,0,0)',
-                font=dict(size=10.5)
-            ),
+            showlegend=False,
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
             xaxis=dict(
                 type='date',
