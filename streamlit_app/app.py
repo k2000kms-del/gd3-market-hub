@@ -3759,48 +3759,6 @@ with col_btn2:
             st.rerun()
     else:
         portfolio_sidebar_container.button("🗑️ 삭제", width='stretch', disabled=True, key=f"btn_port_del_dis_{_target_code}")
-
-# ── [실전 리밸런싱 진단 카드] 보유종목 vs 퀀트 1위 주도주 교체 매력도 ──
-try:
-    _top_q_name, _top_q_code, _top_q_score = "우리금융지주", "316140", 96.0
-    if df_q is not None and not df_q.empty:
-        _top_q_name = str(df_q.iloc[0].get('Name', _top_q_name))
-        _top_q_code = str(df_q.iloc[0].get('Code', _top_q_code)).split('.')[0].zfill(6)
-        _top_q_score = float(df_q.iloc[0].get('Calibrated_Score', df_q.iloc[0].get('Total_Score', 96.0)))
-    
-    _hold_score = 50.0
-    if df_q is not None and not df_q.empty:
-        _m_h = df_q[df_q['Code'].astype(str).str.zfill(6) == str(_target_code).zfill(6)]
-        if not _m_h.empty:
-            _hold_score = float(_m_h.iloc[0].get('Calibrated_Score', _m_h.iloc[0].get('Total_Score', 50.0)))
-    
-    _score_diff = _top_q_score - _hold_score
-    
-    if str(_target_code).zfill(6) == str(_top_q_code).zfill(6):
-        _rebal_badge = "🛡️ [교체 불필요 — 현재 주도주 1위]"
-        _rebal_color = "#2ecc71"
-        _rebal_desc = f"선택하신 <b>{_target_name}</b>은(는) 오늘 퀀트 종합 1위({_top_q_score:.1f}점)로 이미 최강 주도주입니다! 분할 익절 및 보유 유지를 권장합니다."
-    elif _score_diff >= 12.0:
-        _rebal_badge = f"🔥 [교체 매력도: 강력 추천 (+{_score_diff:.1f}점)]"
-        _rebal_color = "#f6465d"
-        _rebal_desc = f"보유종목 <b>{_target_name}</b>({_hold_score:.1f}점) 대비 오늘 1위 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점)의 수급 탄력도가 <b>+{_score_diff:.1f}점</b> 압도적입니다. 물린 비중을 줄이고 주도주로 교체 압축을 적극 고려하십시오!"
-    elif _score_diff >= 5.0:
-        _rebal_badge = f"⚖️ [교체 매력도: 보통 (+{_score_diff:.1f}점)]"
-        _rebal_color = "#f39c12"
-        _rebal_desc = f"<b>{_target_name}</b>({_hold_score:.1f}점)과 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점) 간 격차는 크지 않습니다. 보유종목 반등 시 분할 교체를 검토하십시오."
-    else:
-        _rebal_badge = "🛡️ [교체 불필요 — 홀딩 유지]"
-        _rebal_color = "#3498db"
-        _rebal_desc = f"<b>{_target_name}</b>({_hold_score:.1f}점)의 퀀트 스코어가 안정권입니다. 섣부른 잦은 교체보다는 원칙 손절선과 목표가를 지키며 홀딩하세요."
-    
-    portfolio_sidebar_container.markdown(f"""
-    <div style="margin-top: 10px; background: rgba(255,255,255,0.03); border: 1px solid {_rebal_color}; border-radius: 8px; padding: 10px;">
-        <div style="font-size: 11px; font-weight: bold; color: {_rebal_color}; margin-bottom: 4px;">{_rebal_badge}</div>
-        <div style="font-size: 10.5px; color: #cbd5e1; line-height: 1.4;">{_rebal_desc}</div>
-    </div>
-    """, unsafe_allow_html=True)
-except Exception as _reb_err:
-    print(f"DEBUG: Rebalancing card error: {_reb_err}")
 st.sidebar.markdown('---')
 st.sidebar.markdown('### 🤖 Gemini AI 실시간 투자 & 헬프 어드바이저')
 st.sidebar.caption('대시보드 질문뿐만 아니라 **"현재 종목을 사야 할지, 팔아야 할지, 목표가는 얼마인지"** 실시간으로 자유롭게 질문하세요.')
@@ -6038,74 +5996,6 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
 
                 # 포트폴리오 목록 및 바로가기
                 if portfolio:
-                    # 🔄 [실전 교체 매매(리밸런싱) 매력도 진단 카드]
-                    try:
-                        _top_q_name, _top_q_code, _top_q_score, _top_q_chg = "우리금융지주", "316140", 98.0, "+3.69%"
-                        if df_q is not None and not df_q.empty:
-                            _top_q_name = str(df_q.iloc[0].get('Name', _top_q_name))
-                            _top_q_code = str(df_q.iloc[0].get('Code', _top_q_code)).split('.')[0].zfill(6)
-                            _top_q_score = float(df_q.iloc[0].get('Calibrated_Score', df_q.iloc[0].get('Total_Score', 98.0)))
-                            if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
-                                _top_m = df_m[df_m['Code'].astype(str).str.zfill(6) == _top_q_code]
-                                if not _top_m.empty:
-                                    _cr = float(_top_m.iloc[0].get('ChagesRatio', 0.0))
-                                    _top_q_chg = f"{_cr:+.2f}%"
-
-                        # 비교 대상 종목: 현재 화면 분석 종목(code_disp)이 보유종목이면 해당 종목, 아니면 보유 종목 중 첫 번째
-                        _eval_code = str(code_disp).strip().zfill(6) if code_disp in portfolio else list(portfolio.keys())[0]
-                        _eval_name = portfolio[_eval_code]['name']
-                        _eval_entry = portfolio[_eval_code]['entry_price']
-
-                        _cur_score = 45.0
-                        if df_q is not None and not df_q.empty:
-                            _cur_m = df_q[df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6) == _eval_code]
-                            if not _cur_m.empty:
-                                _cur_score = float(_cur_m.iloc[0].get('Calibrated_Score', _cur_m.iloc[0].get('Total_Score', 45.0)))
-
-                        _score_diff = _top_q_score - _cur_score
-                        
-                        _eval_close = _eval_entry
-                        if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
-                            _m_close = df_m[df_m['Code'].astype(str).str.zfill(6) == _eval_code]
-                            if not _m_close.empty:
-                                _eval_close = float(_m_close.iloc[0].get('Close', _eval_entry))
-                        _ret = ((_eval_close - _eval_entry) / _eval_entry) * 100.0 if _eval_entry > 0 else 0.0
-
-                        if _eval_code == str(_top_q_code).zfill(6):
-                            _rebal_badge = "🛡️ [교체 불필요 — 현재 1위 주도주]"
-                            _rebal_color = "#2ecc71"
-                            _rebal_bg = "rgba(46, 204, 113, 0.12)"
-                            _rebal_desc = f"보유 종목 <b>{_eval_name}</b>은(는) 오늘 퀀트 종합 1위({_top_q_score:.1f}점)로 시장 최강 주도주입니다! 교체할 필요 없이 분할 익절 및 추세 홀딩을 권장합니다."
-                        elif _score_diff >= 15.0:
-                            _rebal_badge = f"🔥 [교체 매력도: 강력 추천 (+{_score_diff:.1f}점)]"
-                            _rebal_color = "#f6465d"
-                            _rebal_bg = "rgba(246, 70, 93, 0.12)"
-                            _rebal_desc = f"보유 종목 <b>{_eval_name}</b>({_cur_score:.1f}점, 손실률 {_ret:+.1f}%) 대비 오늘 시장 1위 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점, {_top_q_chg})의 자금 유입 탄력도가 <b>+{_score_diff:.1f}점</b> 압도적입니다.<br><span style='color:#ffd43b; font-weight:bold;'>💡 실전 처방:</span> 무리한 추가 물타기보다는, 반등 시 비중을 일부 축소하여 오늘 주도주로 교체 압축 시 원금 회복 속도가 훨씬 빠릅니다."
-                        elif _score_diff >= 6.0:
-                            _rebal_badge = f"⚖️ [교체 매력도: 보통 (+{_score_diff:.1f}점)]"
-                            _rebal_color = "#f39c12"
-                            _rebal_bg = "rgba(243, 156, 18, 0.12)"
-                            _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점)과 1위 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점) 간 격차는 크지 않습니다. 보유 지지선 반등 흐름과 거래량을 관찰하며 분할 교체를 검토하십시오."
-                        else:
-                            _rebal_badge = "🛡️ [교체 불필요 — 홀딩 유지]"
-                            _rebal_color = "#3498db"
-                            _rebal_bg = "rgba(52, 152, 219, 0.12)"
-                            _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점)의 퀀트 스코어가 안정권입니다. 잦은 교체 매매보다는 원칙 손절선과 목표가를 지키며 홀딩하세요."
-
-                        st.markdown(f"""
-                        <div style="background-color: {_rebal_bg}; padding: 10px 14px; border-radius: 8px; border: 1.5px solid {_rebal_color}; margin-top: 4px; margin-bottom: 10px; font-family: 'malgun gothic', sans-serif;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                                <span style="font-size: 12px; font-weight: bold; color: #ffffff;">🔄 주도주 교체 매매(리밸런싱) 매력도 진단</span>
-                                <span style="font-size: 11px; font-weight: bold; color: {_rebal_color}; background: rgba(0,0,0,0.35); padding: 2px 8px; border-radius: 4px; border: 1px solid {_rebal_color};">{_rebal_badge}</span>
-                            </div>
-                            <div style="font-size: 11px; color: #e0e8f0; line-height: 1.45;">
-                                {_rebal_desc}
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    except Exception as _rebal_err:
-                        print(f"DEBUG: Main rebal error: {_rebal_err}")
-
                     # 포트폴리오 테이블 렌더링 (모든 보유 종목에 대해 퀀트 등급 색상 자동 하이라이트 일괄 적용)
                     port_rows = []
                     for p_code, p_data in portfolio.items():
@@ -6303,9 +6193,66 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         st.markdown(re.sub(r'\s+', ' ', b_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
                 except Exception as _b_err:
                     pass
-                
 
-                
+                # ── 🔄 [실전 주도주 교체 매매(리밸런싱) 매력도 진단] (우측 시장 에너지 진단 바로 아래) ──
+                try:
+                    _top_q_name, _top_q_code, _top_q_score, _top_q_chg = "우리금융지주", "316140", 98.0, "+3.69%"
+                    if df_q is not None and not df_q.empty:
+                        _top_q_name = str(df_q.iloc[0].get('Name', _top_q_name))
+                        _top_q_code = str(df_q.iloc[0].get('Code', _top_q_code)).split('.')[0].zfill(6)
+                        _top_q_score = float(df_q.iloc[0].get('Calibrated_Score', df_q.iloc[0].get('Total_Score', 98.0)))
+                        if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
+                            _top_m = df_m[df_m['Code'].astype(str).str.zfill(6) == _top_q_code]
+                            if not _top_m.empty:
+                                _cr = float(_top_m.iloc[0].get('ChagesRatio', 0.0))
+                                _top_q_chg = f"{_cr:+.2f}%"
+
+                    _eval_code = str(code_disp).strip().zfill(6)
+                    _eval_name = name_disp
+                    _is_in_port = _eval_code in portfolio
+                    _eval_entry = portfolio[_eval_code]['entry_price'] if _is_in_port else last_close
+
+                    _cur_score = 45.0
+                    if df_q is not None and not df_q.empty:
+                        _cur_m = df_q[df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6) == _eval_code]
+                        if not _cur_m.empty:
+                            _cur_score = float(_cur_m.iloc[0].get('Calibrated_Score', _cur_m.iloc[0].get('Total_Score', 45.0)))
+
+                    _score_diff = _top_q_score - _cur_score
+                    _ret_str = ""
+                    if _is_in_port and _eval_entry > 0:
+                        _ret = ((last_close - _eval_entry) / _eval_entry) * 100.0
+                        _ret_str = f" (보유 손익: {_ret:+.1f}%)"
+
+                    if _eval_code == str(_top_q_code).zfill(6):
+                        _rebal_badge = "🛡️ 교체 불필요 (현재 1위 주도주)"
+                        _rebal_color = "#2ecc71"
+                        _rebal_desc = f"선택하신 <b>{_eval_name}</b>은(는) 오늘 퀀트 종합 1위({_top_q_score:.1f}점)로 시장 최강 주도주입니다! 교체할 필요 없이 분할 익절 및 홀딩을 유지하세요."
+                    elif _score_diff >= 15.0:
+                        _rebal_badge = f"🔥 교체 매력도: 높음 (+{_score_diff:.1f}점 격차)"
+                        _rebal_color = "#f6465d"
+                        _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점{_ret_str}) 대비 오늘 시장 1위 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점, {_top_q_chg})의 자금 유입 탄력도가 <b>+{_score_diff:.1f}점</b> 압도적입니다.<br><span style='color:#ffd43b; font-weight:bold;'>💡 실전 처방:</span> 무리한 추가 물타기보다, 기술적 반등 시 비중을 줄이고 1위 주도주로 교체 압축하는 것이 유리합니다."
+                    elif _score_diff >= 6.0:
+                        _rebal_badge = f"⚖️ 교체 매력도: 보통 (+{_score_diff:.1f}점)"
+                        _rebal_color = "#f39c12"
+                        _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점)과 1위 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점) 간 격차는 크지 않습니다. 지지선 반등 추세를 확인하며 분할 교체를 검토하십시오."
+                    else:
+                        _rebal_badge = "🛡️ 교체 불필요 (홀딩 유지)"
+                        _rebal_color = "#3498db"
+                        _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점)의 퀀트 스코어가 안정권입니다. 섣부른 잦은 교체보다는 원칙 손절선과 목표가를 지키며 홀딩하세요."
+
+                    r_html = f"""<div style="background: linear-gradient(135deg, rgba(30,34,45,0.95), rgba(15,18,25,0.98)); padding: 12px 14px; border-radius: 8px; border: 1px solid {_rebal_color}; margin-top: 10px; font-family: 'malgun gothic', sans-serif;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <span style="font-size:13px; font-weight:bold; color:#ffffff;">🔄 주도주 교체 매매(리밸런싱) 매력도</span>
+                            <span style="font-size:11px; font-weight:bold; color:{_rebal_color}; background:rgba(0,0,0,0.4); padding:2px 8px; border-radius:4px; border:1px solid {_rebal_color};">{_rebal_badge}</span>
+                        </div>
+                        <div style="font-size:11px; color:#cbd5e1; line-height:1.45;">
+                            {_rebal_desc}
+                        </div>
+                    </div>"""
+                    st.markdown(re.sub(r'\s+', ' ', r_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
+                except Exception as _rebal_err:
+                    print(f"DEBUG: Rebal card error: {_rebal_err}")
 
 
         # ── 차트 선택 (st.tabs의 오버헤드를 막기 위해 레이지 렌더링 적용) ─────────────────────────────
