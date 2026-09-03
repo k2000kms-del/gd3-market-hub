@@ -1406,19 +1406,31 @@ def collect_supply_intraday(token):
     today_str = now.strftime('%Y%m%d')
     h_m = now.hour * 100 + now.minute
 
-    # 장외 시간이면 기존 파일 유지 후 반환 (장 마감 후 GitHub Actions가 실행될 때)
-    if not ((900 <= h_m <= 1530)):
-        print(f'  ⚠️ 장외 시간({now_str}) - 수급 스냅샷 수집 생략')
-        existing_path = os.path.join(DATA_DIR, 'df_supply_intraday.csv')
-        if os.path.exists(existing_path):
-            try:
-                df_existing = pd.read_csv(existing_path, encoding='utf-8-sig')
-                if 'Date' in df_existing.columns:
-                    df_existing = df_existing[df_existing['Date'].astype(str) == today_str]
-                    return df_existing
-            except Exception:
-                pass
-        return pd.DataFrame(columns=['Date', 'Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+    # 장외 시간이면:
+    # 단, 장 마감(15:30) 이후인데 오늘자 15:30 최종 종가 수급 데이터가 아직 수집되지 않았다면,
+    # 1회에 한해 네이버에서 최종 마감 수급 스냅샷을 가져와 '15:30'으로 완결짓는다!
+    is_after_market = h_m > 1530
+    existing_path = os.path.join(DATA_DIR, 'df_supply_intraday.csv')
+    df_existing = pd.DataFrame(columns=['Date', 'Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+    
+    if os.path.exists(existing_path):
+        try:
+            _d_loaded = pd.read_csv(existing_path, encoding='utf-8-sig')
+            if 'Date' in _d_loaded.columns:
+                df_existing = _d_loaded[_d_loaded['Date'].astype(str) == today_str].copy()
+        except Exception:
+            pass
+
+    # 장 시작 전(09:00 이전)이거나, 이미 15:30 마감 데이터가 들어있는 장 마감 후라면 생략
+    has_closing_point = not df_existing.empty and (df_existing['Time'] == '15:30').any()
+    if h_m < 900 or (is_after_market and has_closing_point):
+        print(f'  ⚠️ 수급 스냅샷 수집 생략 (현재시각: {now_str}, 마감데이터보유: {has_closing_point})')
+        return df_existing
+
+    # 장 마감 후 최초 1회 실행인 경우 타임스탬프를 '15:30'으로 고정
+    if is_after_market and not has_closing_point:
+        print(f'  🌙 장마감(15:30) 최종 수급 스냅샷 누락 감지 → 최종 마감값으로 15:30 완결 기록')
+        now_str = '15:30'
 
     def _parse_naver_supply(val_str):
         """'+5,254' 형태의 네이버 수급 문자열을 억원 정수로 변환"""

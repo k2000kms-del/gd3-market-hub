@@ -4547,7 +4547,33 @@ with col_left:
     if not df_line.empty:
         df_line = df_line.drop_duplicates(subset=['Time'], keep='last')
         df_line = df_line.sort_values('Time')
-        
+
+        # ── [시작점 보정] 09:00 시초 데이터가 없으면 0으로 시작점 생성 ──
+        if '09:00' not in df_line['Time'].values:
+            first_row = df_line.iloc[0].copy()
+            first_row['Time'] = '09:00'
+            first_row['Foreign_Net'] = 0.0
+            first_row['Individual_Net'] = 0.0
+            first_row['Institutional_Net'] = 0.0
+            df_line = pd.concat([pd.DataFrame([first_row]), df_line], ignore_index=True)
+
+        # ── [장마감 보정] 15:30 이후인데 마감 데이터가 없으면 1번 패널(시장 요약)의 최종 종가 수급으로 15:30 완성 ──
+        if now_hm >= 1530 and '15:30' not in df_line['Time'].values:
+            last_row = df_line.iloc[-1].copy()
+            last_row['Time'] = '15:30'
+            if df_summary is not None and not df_summary.empty:
+                m_match = df_summary[df_summary['종목/지수'].astype(str).str.contains(target_market, na=False)]
+                if not m_match.empty:
+                    m_r = m_match.iloc[0]
+                    try:
+                        last_row['Foreign_Net'] = float(str(m_r.get('외국인(억)', 0)).replace(',', '').replace('+', ''))
+                        last_row['Individual_Net'] = float(str(m_r.get('개인(억)', 0)).replace(',', '').replace('+', ''))
+                        last_row['Institutional_Net'] = float(str(m_r.get('기관(억)', 0)).replace(',', '').replace('+', ''))
+                    except Exception:
+                        pass
+            df_line = pd.concat([df_line, pd.DataFrame([last_row])], ignore_index=True)
+
+        df_line = df_line.drop_duplicates(subset=['Time'], keep='last').sort_values('Time')
         df_line['Datetime'] = pd.to_datetime(today_date_str + ' ' + df_line['Time'], format='%Y%m%d %H:%M')
         
         # ── 수급 수치 숫자형 변환 ──
