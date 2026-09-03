@@ -11,6 +11,7 @@ telegram_notifier.py
 
 import requests
 from datetime import datetime
+import pandas as pd
 
 # 텔레그램 Bot API 기본 URL
 _TG_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
