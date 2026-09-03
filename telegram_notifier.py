@@ -720,7 +720,7 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
             chart_bytes = None
             try:
                 chart_df = context_fn('stock_chart', code=code)
-                if chart_df is not None and not chart_df.empty:
+                if isinstance(chart_df, pd.DataFrame) and not chart_df.empty:
                     chart_bytes = generate_stock_chart_image(
                         code=code,
                         name=name,

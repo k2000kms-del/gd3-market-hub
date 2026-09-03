@@ -1427,7 +1427,7 @@ _closing_briefing_sent = False
 _crash_warning_sent = False
 _quant_picks_sent_codes = set()
 
-def run_telegram_listener_daemon():
+def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str = ""):
     """
     대표님이 텔레그램 채팅창에 /포트, /추천, /시장, /도움말 등을 입력하면
     실시간으로 파싱하여 0.5초 내로 즉각 답변하는 양방향 비서 스레드.
@@ -1544,14 +1544,15 @@ def run_telegram_listener_daemon():
 
     while True:
         try:
-            tg_token = ""
-            tg_chat_id = ""
-            try:
-                if hasattr(st, "secrets") and "TELEGRAM_BOT_TOKEN" in st.secrets:
-                    tg_token = st.secrets["TELEGRAM_BOT_TOKEN"]
-                    tg_chat_id = str(st.secrets.get("TELEGRAM_CHAT_ID", ""))
-            except Exception:
-                pass
+            tg_token = default_token or ""
+            tg_chat_id = default_chat_id or ""
+            if not tg_token:
+                try:
+                    if hasattr(st, "secrets") and "TELEGRAM_BOT_TOKEN" in st.secrets:
+                        tg_token = st.secrets["TELEGRAM_BOT_TOKEN"]
+                        tg_chat_id = str(st.secrets.get("TELEGRAM_CHAT_ID", ""))
+                except Exception:
+                    pass
 
             if not tg_token:
                 tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -2124,14 +2125,14 @@ def run_portfolio_background_scanner():
         time.sleep(15)
 
 @st.cache_resource
-def start_background_portfolio_scanner():
+def start_background_portfolio_scanner(passed_token: str = "", passed_chat_id: str = ""):
     """
     최초 기동 시 포트폴리오 감시 데몬 및 텔레그램 양방향 리스너 스레드를 구동함.
     """
     t1 = threading.Thread(target=run_portfolio_background_scanner, daemon=True, name="PortfolioScannerDaemon")
     t1.start()
     
-    t2 = threading.Thread(target=run_telegram_listener_daemon, daemon=True, name="TelegramListenerDaemon")
+    t2 = threading.Thread(target=run_telegram_listener_daemon, args=(passed_token, passed_chat_id), daemon=True, name="TelegramListenerDaemon")
     t2.start()
     
     return [t1, t2]
@@ -3389,7 +3390,32 @@ if st.sidebar.button("🔄 최신 데이터 즉시 동기화", type="primary", u
     st.session_state.pop('df_live_all_ts', None)
     st.session_state.pop('last_accum_time', None)
     st.session_state['force_sync'] = True
-    st.toast("⚡ 전체 캐시 초기화 및 최신 데이터 강제 동기화 중!", icon="🚀")
+    # ── 텔레그램 대기 큐 즉시 동기화 & 버튼 응답 처리 ──
+    try:
+        _tg_t = st.secrets.get("TELEGRAM_BOT_TOKEN", "") if hasattr(st, "secrets") else os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        if _tg_t:
+            import urllib.request, json
+            from telegram_notifier import process_incoming_command
+            _u_url = f"https://api.telegram.org/bot{_tg_t}/getUpdates?timeout=1"
+            _u_req = urllib.request.Request(_u_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(_u_req, timeout=3) as _u_resp:
+                _u_data = json.loads(_u_resp.read().decode('utf-8'))
+                if _u_data.get('ok') and _u_data.get('result'):
+                    _max_id = 0
+                    for _u in _u_data['result']:
+                        _uid = _u.get('update_id', 0)
+                        _max_id = max(_max_id, _uid)
+                        _m = _u.get('message', {})
+                        _snd = str(_m.get('chat', {}).get('id', ''))
+                        _tx = _m.get('text', '')
+                        if _tx and _snd:
+                            process_incoming_command(_tg_t, _snd, _tx, _get_context)
+                    if _max_id > 0:
+                        _ack = f"https://api.telegram.org/bot{_tg_t}/getUpdates?offset={_max_id + 1}"
+                        urllib.request.urlopen(urllib.request.Request(_ack, headers={'User-Agent': 'Mozilla/5.0'}), timeout=2)
+    except Exception:
+        pass
+    st.toast("⚡ 전체 캐시 초기화 및 텔레그램 동기화 완료!", icon="🚀")
     st.rerun()
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
@@ -3706,7 +3732,7 @@ tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_
 # ── 백그라운드 포트폴리오 스캐너 시작 ──
 # st.cache_resource에 의해 최초 1회만 구동됩니다.
 try:
-    start_background_portfolio_scanner()
+    start_background_portfolio_scanner(tg_token, tg_chat_id)
 except Exception as _bg_err:
     print(f"DEBUG: 백그라운드 스캐너 기동 실패: {_bg_err}")
 
