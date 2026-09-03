@@ -4455,19 +4455,7 @@ with col_right:
 
 # ── [Panel 4] 시장 요약 테이블 ──────────────────────────────
 with col_left:
-    c_sum_t, c_sum_b1, c_sum_b2 = st.columns([4.6, 3.7, 3.7])
-    with c_sum_t:
-        st.markdown("##### 📉 시장 요약")
-    with c_sum_b1:
-        if st.button("📈 코스피 1분봉", key="btn_quick_kospi", use_container_width=True, help="4번 패널을 코스피 1분봉 및 수급 듀얼뷰로 전환합니다."):
-            st.session_state['p5_market_tab'] = "코스피 수급"
-            st.session_state['p5_view_mode'] = "⚡ 듀얼뷰(1분봉+수급)"
-            st.rerun()
-    with c_sum_b2:
-        if st.button("📈 코스닥 1분봉", key="btn_quick_kosdaq", use_container_width=True, help="4번 패널을 코스닥 1분봉 및 수급 듀얼뷰로 전환합니다."):
-            st.session_state['p5_market_tab'] = "코스닥 수급"
-            st.session_state['p5_view_mode'] = "⚡ 듀얼뷰(1분봉+수급)"
-            st.rerun()
+    st.markdown("##### 📉 시장 요약")
     fig_p4 = go.Figure()
     
     # ── 실시간 시장 수급 및 지수 오버레이 (0.05초 즉시 반영) ──
@@ -4562,7 +4550,7 @@ with col_left:
 with col_left:
     c_p5_head, c_p5_opt = st.columns([4.2, 5.8])
     with c_p5_head:
-        st.markdown("##### 📈 지수 1분봉 & 수급 추이")
+        st.markdown("##### 📈 수급 현황")
     with c_p5_opt:
         p5_view = st.radio(
             "뷰 모드", 
@@ -4690,18 +4678,6 @@ with col_left:
                 showlegend=False
             ), row=1, col=1)
 
-            fig_p5.add_trace(go.Scatter(
-                x=df_candle['Datetime'], y=df_candle['MA5'],
-                name='5분선', line=dict(color='#ffd32a', width=1.3),
-                hoverinfo='skip'
-            ), row=1, col=1)
-
-            fig_p5.add_trace(go.Scatter(
-                x=df_candle['Datetime'], y=df_candle['MA20'],
-                name='20분선', line=dict(color='#ff5e57', width=1.3),
-                hoverinfo='skip'
-            ), row=1, col=1)
-
             fig_p5.update_yaxes(title_text='지수', row=1, col=1, tickformat=',.1f', showgrid=True, gridcolor='rgba(255,255,255,0.08)')
         else:
             fig_p5.add_annotation(text='1분봉 데이터 수신 중...', row=1, col=1, showarrow=False, font=dict(color='#888', size=11))
@@ -4757,14 +4733,6 @@ with col_left:
                 name=f'{target_market} 1분봉',
                 increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
                 decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff'
-            ))
-            fig_p5.add_trace(go.Scatter(
-                x=df_candle['Datetime'], y=df_candle['MA5'],
-                name='5분선', line=dict(color='#ffd32a', width=1.5)
-            ))
-            fig_p5.add_trace(go.Scatter(
-                x=df_candle['Datetime'], y=df_candle['MA20'],
-                name='20분선', line=dict(color='#ff5e57', width=1.5)
             ))
         fig_p5.update_layout(
             height=450,
