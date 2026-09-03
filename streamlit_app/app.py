@@ -4808,20 +4808,40 @@ with col_left:
     from datetime import timezone, timedelta
     _KST = timezone(timedelta(hours=9))
     _now_kst = datetime.now(_KST)
-    today_date_str = _now_kst.strftime('%Y%m%d')
+    cal_today_str = _now_kst.strftime('%Y%m%d')
     now_hm = _now_kst.hour * 100 + _now_kst.minute
+
+    # 최신 수급 데이터에 저장된 가장 최근 일자 확인
+    latest_data_date = cal_today_str
+    _valid_dates = []
+    if df_intraday is not None and not df_intraday.empty and 'Date' in df_intraday.columns:
+        _valid_dates = sorted([str(d).strip() for d in df_intraday['Date'].dropna().unique()])
+        if _valid_dates:
+            latest_data_date = _valid_dates[-1]
+
+    # 정규장 중(평일 09:00~15:40)이고 오늘자 데이터가 수집되었으면 오늘 날짜, 그 외(야간, 장전, 주말)는 데이터 최신일자 사용
+    is_regular_trading_now = (
+        _now_kst.weekday() < 5 and (900 <= now_hm <= 1540) and (cal_today_str in _valid_dates)
+    )
+    today_date_str = cal_today_str if is_regular_trading_now else latest_data_date
 
     # ── 1. 수급 데이터 전처리 ──
     df_line = pd.DataFrame()
     if df_intraday is not None and not df_intraday.empty:
         df_tmp = df_intraday.copy()
         if 'Date' in df_tmp.columns:
-            df_tmp = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
+            df_target_date = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
+            if df_target_date.empty:
+                _max_d = str(df_tmp['Date'].dropna().max())
+                df_tmp = df_tmp[df_tmp['Date'].astype(str) == _max_d]
+                today_date_str = _max_d
+            else:
+                df_tmp = df_target_date
         df_line = df_tmp[df_tmp['Market'] == target_market].copy()
         df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
 
     accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
-    if not accum_df.empty:
+    if not accum_df.empty and is_regular_trading_now:
         accum_sub = accum_df[accum_df['Market'] == target_market].copy()
         accum_sub = accum_sub[accum_sub['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
         if not accum_sub.empty:
@@ -4829,6 +4849,13 @@ with col_left:
                 df_line = pd.concat([df_line, accum_sub], ignore_index=True)
             else:
                 df_line = accum_sub
+
+    # 폴백: 여전히 비어있다면 마켓 데이터 전체에서 필터
+    if df_line.empty and df_intraday is not None and not df_intraday.empty:
+        df_line = df_intraday[df_intraday['Market'] == target_market].copy()
+        if 'Date' in df_line.columns and not df_line.empty:
+            today_date_str = str(df_line['Date'].dropna().max())
+            df_line = df_line[df_line['Date'].astype(str) == today_date_str]
 
     if not df_line.empty:
         df_line = df_line.drop_duplicates(subset=['Time'], keep='last').sort_values('Time')
@@ -4843,7 +4870,7 @@ with col_left:
             df_line = pd.concat([pd.DataFrame([first_row]), df_line], ignore_index=True)
 
         # 장마감 보정 (15:30 종가 수급 보장)
-        if now_hm >= 1530 and '15:30' not in df_line['Time'].values:
+        if (now_hm >= 1530 or not is_regular_trading_now) and '15:30' not in df_line['Time'].values:
             last_row = df_line.iloc[-1].copy()
             last_row['Time'] = '15:30'
             if df_summary is not None and not df_summary.empty:
@@ -4891,6 +4918,12 @@ with col_left:
     df_candle = pd.DataFrame()
     if any(k in str(p5_view) for k in ["듀얼", "1분봉"]):
         df_candle = fetch_naver_index_minute_candles(target_mkt_code)
+        if not df_candle.empty and 'Datetime' in df_candle.columns:
+            # df_candle의 날짜를 today_date_str 날짜로 일치화하여 분봉과 수급선이 항상 동일 X축 상에 결합되도록 보장!
+            df_candle['Datetime'] = pd.to_datetime(
+                today_date_str + ' ' + df_candle['Time'], format='%Y%m%d %H:%M', errors='coerce'
+            )
+            df_candle = df_candle.dropna(subset=['Datetime']).sort_values('Datetime')
 
     # ── 3. 선택된 모드에 따른 차트 렌더링 ──
     if "듀얼" in str(p5_view):
@@ -4953,6 +4986,16 @@ with col_left:
                 font=dict(size=10.5)
             ),
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
+            xaxis=dict(
+                type='date',
+                range=[
+                    pd.to_datetime(today_date_str + ' 09:00', format='%Y%m%d %H:%M'),
+                    pd.to_datetime(today_date_str + ' 15:30', format='%Y%m%d %H:%M')
+                ],
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.08)',
+                showticklabels=False
+            ),
             xaxis2=dict(
                 type='date',
                 range=[
@@ -4977,12 +5020,34 @@ with col_left:
                 increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
                 decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff'
             ))
+            if 'MA5' in df_candle.columns:
+                fig_p5.add_trace(go.Scatter(
+                    x=df_candle['Datetime'], y=df_candle['MA5'],
+                    name='5분선', mode='lines',
+                    line=dict(color='#ffd43b', width=1.5)
+                ))
+            if 'MA20' in df_candle.columns:
+                fig_p5.add_trace(go.Scatter(
+                    x=df_candle['Datetime'], y=df_candle['MA20'],
+                    name='20분선', mode='lines',
+                    line=dict(color='#ff922b', width=1.5)
+                ))
         fig_p5.update_layout(
             height=450,
             template='plotly_dark',
             margin=dict(t=5, b=10, l=10, r=10),
             xaxis_rangeslider_visible=False,
             hovermode='x unified',
+            showlegend=True,
+            legend=dict(
+                orientation='h', 
+                x=0.98, 
+                y=0.98, 
+                xanchor='right', 
+                yanchor='top', 
+                bgcolor='rgba(0,0,0,0)',
+                font=dict(size=10.5)
+            ),
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
             xaxis=dict(
                 type='date',
@@ -5020,6 +5085,7 @@ with col_left:
             template='plotly_dark',
             margin=dict(t=5, b=10, l=10, r=10),
             hovermode='x unified',
+            showlegend=True,
             legend=dict(
                 orientation='h', 
                 x=0.98, 
