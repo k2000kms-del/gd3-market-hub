@@ -4779,8 +4779,9 @@ with col_left:
     }
     </style>""", unsafe_allow_html=True)
 
-    # ── [1줄 통합 컨트롤바] 타이틀(2.2) + 시장(2.7) + 뷰모드(5.1) ──
-    c_p5_t, c_p5_mkt, c_p5_view = st.columns([2.2, 2.7, 5.1])
+    # ── [2줄 반응형 컨트롤바: 태블릿/모바일/PC 완벽 정렬] ──
+    # 1행: 왼쪽 타이틀 '📈 수급 현황' (절대 줄바꿈 안 됨) + 오른쪽 시장 선택 '코스피 / 코스닥'
+    c_p5_t, c_p5_mkt = st.columns([1.1, 1.0])
     with c_p5_t:
         st.markdown("##### 📈 수급 현황")
     with c_p5_mkt:
@@ -4793,16 +4794,17 @@ with col_left:
             label_visibility="collapsed", 
             key="p5_market_tab"
         )
-    with c_p5_view:
-        if "듀얼" in str(st.session_state.get('p5_view_mode', '')):
-            st.session_state['p5_view_mode'] = "⚡ 듀얼"
-        p5_view = st.radio(
-            "뷰 모드", 
-            ["⚡ 듀얼", "🕯️ 1분봉", "📊 수급선"], 
-            horizontal=True, 
-            label_visibility="collapsed", 
-            key="p5_view_mode"
-        )
+
+    # 2행: 그 아랫줄에 뷰 모드 [⚡ 듀얼 | 🕯️ 1분봉 | 📊 수급선] 전면 가로 배치
+    if "듀얼" in str(st.session_state.get('p5_view_mode', '')):
+        st.session_state['p5_view_mode'] = "⚡ 듀얼"
+    p5_view = st.radio(
+        "뷰 모드", 
+        ["⚡ 듀얼", "🕯️ 1분봉", "📊 수급선"], 
+        horizontal=True, 
+        label_visibility="collapsed", 
+        key="p5_view_mode"
+    )
 
     target_market = '코스피' if '코스피' in market_tab else '코스닥'
     target_mkt_code = 'KOSPI' if target_market == '코스피' else 'KOSDAQ'
