@@ -517,53 +517,103 @@ try:
             if not msgs:
                 continue
 
-            last_m = msgs[-1]
-            p_id = last_m.get('data-post', '')
-            saved_p_id = briefing_state.get(state_key)
+            saved_p_id = briefing_state.get(state_key, '')
 
-            if not p_id or p_id == saved_p_id:
-                print(f"  ℹ️ {ch_name}: 새 글 없음 (최신: {p_id})")
+            # 신규 메시지 목록 추출 (저장된 ID 이후의 모든 메시지)
+            new_msgs = []
+            if not saved_p_id:
+                # 최초 실행 시에는 맨 마지막 글 1개만
+                new_msgs = [msgs[-1]]
+            else:
+                found_saved = False
+                for m in msgs:
+                    p_id_cur = m.get('data-post', '')
+                    if p_id_cur == saved_p_id:
+                        found_saved = True
+                        continue
+                    if found_saved:
+                        new_msgs.append(m)
+                # 만약 saved_p_id가 목록에 없으면(너무 오래됨) 최근 3개 메시지만 검사
+                if not found_saved:
+                    new_msgs = msgs[-3:]
+
+            if not new_msgs:
+                print(f"  ℹ️ {ch_name}: 새 글 없음 (최신: {saved_p_id})")
                 continue
 
-            text_el = last_m.find('div', class_='tgme_widget_message_text')
-            raw_text = text_el.get_text('\n').strip() if text_el else ''
+            print(f"  🔔 {ch_name}: 신규 메시지 {len(new_msgs)}개 감지 — 순차 정밀 분석 시작")
 
-            if not raw_text or len(raw_text) <= 5:
-                # 텍스트 없는 미디어 전용 글 → 상태만 업데이트하고 건너뜀
+            for m_item in new_msgs:
+                p_id = m_item.get('data-post', '')
+                text_el = m_item.find('div', class_='tgme_widget_message_text')
+                raw_text = text_el.get_text('\n').strip() if text_el else ''
+
+                if not raw_text or len(raw_text) <= 5:
+                    briefing_state[state_key] = p_id
+                    _save_state()
+                    continue
+
+                # 종목명 매칭 탐색 (해시태그 우선 & 긴 종목명 우선)
+                matched_dict = None
+                if not df_m_srch.empty and 'Name' in df_m_srch.columns:
+                    # 1차: 해시태그(#종목명) 검색 (예: #로보티즈)
+                    import re
+                    hashtags = re.findall(r'#([가-힣a-zA-Z0-9]+)', raw_text)
+                    for tag in hashtags:
+                        row_tag = df_m_srch[df_m_srch['Name'].astype(str) == tag]
+                        if not row_tag.empty:
+                            m_row = row_tag.iloc[0]
+                            s_cd = str(m_row.get('Code', '')).zfill(6)
+                            s_cp = float(m_row.get('Close', 0))
+                            s_cr = float(m_row.get('ChagesRatio', 0))
+                            matched_dict = {
+                                'code': s_cd,
+                                'name': tag,
+                                'price': s_cp,
+                                'change_ratio': s_cr,
+                                'quant_score': 85.0,
+                                'jumping_status': '엘리트강사 단타 브리핑 포착 🟢',
+                                'support_price': s_cp * 0.97
+                            }
+                            break
+
+                    # 2차: 일반 텍스트 내 종목명 매칭 (불용어 제외)
+                    if not matched_dict:
+                        stopwords = {'오늘', '지금', '시장', '코스피', '코스닥', '지수', '상승', '하락', '기술', '전망', '분석', '대응', '전략', '미국', '한국', '영상', '확인', '진행', '브리핑', '종목', '단타'}
+                        for _, m_row in df_m_srch.iterrows():
+                            s_nm = str(m_row.get('Name', ''))
+                            if len(s_nm) >= 2 and s_nm not in stopwords and s_nm in raw_text:
+                                s_cd = str(m_row.get('Code', '')).zfill(6)
+                                s_cp = float(m_row.get('Close', 0))
+                                s_cr = float(m_row.get('ChagesRatio', 0))
+                                matched_dict = {
+                                    'code': s_cd,
+                                    'name': s_nm,
+                                    'price': s_cp,
+                                    'change_ratio': s_cr,
+                                    'quant_score': 85.0,
+                                    'jumping_status': '외부 채널 단타/속보 포착',
+                                    'support_price': s_cp * 0.97
+                                }
+                                break
+
+                # 알림 발송: 종목이 매칭되었거나 중요한 단타/속보 글일 때
+                is_important = matched_dict is not None or any(k in raw_text for k in ['단타', 'top pick', '속보', '특징주', '점핑'])
+                if is_important or len(raw_text) > 30:
+                    tn.notify_external_channel_alert(
+                        channel_name=ch_name,
+                        raw_message=raw_text,
+                        matched_stock=matched_dict,
+                        token=token,
+                        chat_id=chat_id
+                    )
+                    s_desc = matched_dict['name'] if matched_dict else '일반속보'
+                    print(f"    ✅ {ch_name} 새 속보 전송 완료: [{p_id}] (종목: {s_desc})")
+                    import time
+                    time.sleep(0.5)
+
                 briefing_state[state_key] = p_id
                 _save_state()
-                continue
-
-            # 시장 종목명 매칭 탐색
-            matched_dict = None
-            if not df_m_srch.empty and 'Name' in df_m_srch.columns:
-                for _, m_row in df_m_srch.iterrows():
-                    s_nm = str(m_row.get('Name', ''))
-                    if len(s_nm) >= 2 and s_nm in raw_text:
-                        s_cd = str(m_row.get('Code', '')).zfill(6)
-                        s_cp = float(m_row.get('Close', 0))
-                        s_cr = float(m_row.get('ChagesRatio', 0))
-                        matched_dict = {
-                            'code': s_cd,
-                            'name': s_nm,
-                            'price': s_cp,
-                            'change_ratio': s_cr,
-                            'quant_score': 85.0,
-                            'jumping_status': '수급 유입 및 실시간 퀀트 감시 중',
-                            'support_price': s_cp * 0.97
-                        }
-                        break
-
-            tn.notify_external_channel_alert(
-                channel_name=ch_name,
-                raw_message=raw_text,
-                matched_stock=matched_dict,
-                token=token,
-                chat_id=chat_id
-            )
-            print(f"  ✅ {ch_name} 새 속보 감지 및 전송 완료: [{p_id}]")
-            briefing_state[state_key] = p_id
-            _save_state()
 
         except Exception as ch_e:
             print(f"  ⚠️ {ch_name} 모니터링 개별 오류: {ch_e}")

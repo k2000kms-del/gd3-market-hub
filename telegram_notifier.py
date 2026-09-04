@@ -58,6 +58,20 @@ DEFAULT_REPLY_KEYBOARD = {
 }
 
 
+def make_stock_action_keyboard(code: str, name: str = "") -> dict:
+    """종목별 네이버 증권 모바일 호가창 딥링크 및 AI 진단 원터치 인라인 키보드 반환"""
+    clean_code = str(code).split('.')[0].zfill(6)
+    naver_url = f"https://m.stock.naver.com/domestic/stock/{clean_code}/total"
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📱 호가창 (네이버증권)", "url": naver_url},
+                {"text": "🤖 AI 실시간 진단", "callback_data": f"ai_{clean_code}"}
+            ]
+        ]
+    }
+
+
 def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
     """Telegram Bot API 호출 공통 헬퍼 (원터치 키보드 버튼 기본 탑재)"""
     if not token or not chat_id:
@@ -166,9 +180,10 @@ def notify_dead_cross_warning(
         f"<i>⚡ GD 3.0 역배열 가디언</i>"
     )
     chart_bytes = _get_stock_chart_safe(ticker, name)
+    markup = make_stock_action_keyboard(ticker, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text)
-    return _send(token, chat_id, text)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup)
+    return _send(token, chat_id, text, reply_markup=markup)
 
 
 def notify_buy_signal(
@@ -213,9 +228,10 @@ def notify_buy_signal(
         f"<i>⚡ GD 3.0 Market Hub 실시간 퀀트 신호</i>"
     )
     chart_bytes = _get_stock_chart_safe(ticker, name, target_price=tgt, stop_loss=stp)
+    markup = make_stock_action_keyboard(ticker, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text)
-    return _send(token, chat_id, text)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup)
+    return _send(token, chat_id, text, reply_markup=markup)
 
 
 def notify_exit_signal(
@@ -254,9 +270,10 @@ def notify_exit_signal(
         f"<i>⚡ GD 3.0 Market Hub 실시간 신호</i>"
     )
     chart_bytes = _get_stock_chart_safe(ticker, name)
+    markup = make_stock_action_keyboard(ticker, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text)
-    return _send(token, chat_id, text)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup)
+    return _send(token, chat_id, text, reply_markup=markup)
 
 
 def notify_add_signal(
@@ -285,9 +302,10 @@ def notify_add_signal(
         f"<i>⚡ GD 3.0 Market Hub</i>"
     )
     chart_bytes = _get_stock_chart_safe(ticker, name)
+    markup = make_stock_action_keyboard(ticker, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text)
-    return _send(token, chat_id, text)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup)
+    return _send(token, chat_id, text, reply_markup=markup)
 
 
 def notify_fall_buy_signal(
@@ -316,9 +334,10 @@ def notify_fall_buy_signal(
         f"<i>⚡ GD 3.0 Market Hub</i>"
     )
     chart_bytes = _get_stock_chart_safe(ticker, name)
+    markup = make_stock_action_keyboard(ticker, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text)
-    return _send(token, chat_id, text)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup)
+    return _send(token, chat_id, text, reply_markup=markup)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -380,13 +399,14 @@ def notify_quant_top_pick(
         f"<i>🏆 GD 3.0 퀀트 모멘텀 알고리즘 (8개년 검증)</i>"
     )
     chart_bytes = _get_stock_chart_safe(ticker, name, score=score, target_price=tgt, stop_loss=stp)
+    markup = make_stock_action_keyboard(ticker, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text)
-    return _send(token, chat_id, text)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup)
+    return _send(token, chat_id, text, reply_markup=markup)
 
 
 # ─────────────────────────────────────────────────────────────
-# 3. 🚨 스마트 손절 경고 알림
+# 3. 🚨 스마트 손절 경고 및 🎯 목표가 달성 알림
 # ─────────────────────────────────────────────────────────────
 
 def notify_smart_stop_loss(
@@ -413,9 +433,39 @@ def notify_smart_stop_loss(
         f"<i>🛡️ GD 3.0 스마트 리스크 가디언</i>"
     )
     chart_bytes = _get_stock_chart_safe(ticker, name, stop_loss=stop_price)
+    markup = make_stock_action_keyboard(ticker, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text)
-    return _send(token, chat_id, text)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup)
+    return _send(token, chat_id, text, reply_markup=markup)
+
+
+def notify_target_reached(
+    token: str,
+    chat_id: str,
+    ticker: str,
+    name: str,
+    current_price: float,
+    target_price: float,
+    profit_pct: float,
+) -> bool:
+    """추천/신호 종목의 1차 목표가 달성 실전 성과 피드백 알림."""
+    text = (
+        f"🎯 <b>[목표가 달성 성공!]</b> {name} ({ticker})\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💰 현재가: <b>{current_price:,.0f}원</b> (돌파 수익률: <b>+{profit_pct:.1f}%</b> 🎉)\n"
+        f"🎯 1차 목표가: <b>{target_price:,.0f}원</b> 돌파 완료\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <b>실전 수익 실현 가이드</b>:\n"
+        f"원칙대로 <b>보유 수량의 50%를 분할 매도하여 수익을 확정</b>하시고,\n"
+        f"나머지 50%는 평단가를 손절선으로 잡고 추가 수익(트레일링)을 노리십시오!\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<i>🏆 GD 3.0 퀀트 알고리즘 실전 성과</i>"
+    )
+    chart_bytes = _get_stock_chart_safe(ticker, name, target_price=target_price)
+    markup = make_stock_action_keyboard(ticker, name)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup, force_send=True)
+    return _send(token, chat_id, text, reply_markup=markup, force_send=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -728,6 +778,113 @@ def notify_market_crash_warning(
     return _send(token, chat_id, text)
 
 
+def _find_stock_by_query(query: str) -> tuple:
+    """종목코드(6자리) 또는 종목명으로 시장 종목을 탐색하여 (code, name) 반환."""
+    q = query.strip()
+    if not q or len(q) < 2:
+        return None, None
+    try:
+        import os, pandas as pd
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
+        if not os.path.exists(m_path):
+            m_path = os.path.join(os.path.dirname(base_dir), 'data', 'df_full_market.csv')
+        if os.path.exists(m_path):
+            df_m = pd.read_csv(m_path)
+            if not df_m.empty and 'Code' in df_m.columns:
+                df_m['Code'] = df_m['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                # 1. 6자리 코드 일치
+                if q.isdigit() and len(q) <= 6:
+                    target_c = q.zfill(6)
+                    row = df_m[df_m['Code'] == target_c]
+                    if not row.empty:
+                        return target_c, str(row.iloc[0].get('Name', target_c))
+                # 2. 종목명 완전 일치
+                row = df_m[df_m['Name'].astype(str) == q]
+                if not row.empty:
+                    return str(row.iloc[0]['Code']).zfill(6), str(row.iloc[0]['Name'])
+                # 3. 종목명 부분 일치
+                row = df_m[df_m['Name'].astype(str).str.contains(q, case=False, na=False)]
+                if not row.empty:
+                    return str(row.iloc[0]['Code']).zfill(6), str(row.iloc[0]['Name'])
+    except Exception as e:
+        print(f"DEBUG: _find_stock_by_query error: {e}")
+    return None, None
+
+
+def _reply_stock_diagnosis(token: str, chat_id: str, code: str, context_fn=None, stock_name: str = "") -> bool:
+    """종목코드 기반 실시간 퀀트 진단 카드 및 캔들 차트 발송."""
+    try:
+        import os, pandas as pd
+        clean_code = str(code).split('.')[0].zfill(6)
+        name = stock_name
+        price = 0.0
+        chg = 0.0
+        score = 80.0
+        amount_str = ""
+
+        # 시장 데이터 로드
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
+        q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+
+        if os.path.exists(m_path):
+            df_m = pd.read_csv(m_path)
+            if not df_m.empty and 'Code' in df_m.columns:
+                df_m['Code'] = df_m['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                r = df_m[df_m['Code'] == clean_code]
+                if not r.empty:
+                    name = str(r.iloc[0].get('Name', name or clean_code))
+                    price = float(r.iloc[0].get('Close', 0))
+                    chg = float(r.iloc[0].get('ChagesRatio', 0))
+                    amt_raw = float(r.iloc[0].get('Amount', 0))
+                    if amt_raw > 0:
+                        amount_str = f"💰 <b>당일 거래대금</b>: <b>{amt_raw / 1e8:,.0f}억원</b>\n"
+
+        if os.path.exists(q_path):
+            df_q = pd.read_csv(q_path)
+            if not df_q.empty and 'Code' in df_q.columns:
+                df_q['Code'] = df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                rq = df_q[df_q['Code'] == clean_code]
+                if not rq.empty:
+                    if not name:
+                        name = str(rq.iloc[0].get('Name', clean_code))
+                    score = float(rq.iloc[0].get('Total_Score', score))
+
+        name = name or clean_code
+        chg_sign = "+" if chg >= 0 else ""
+        tp_price = price * 1.05 if price > 0 else 0
+        sl_price = price * 0.96 if price > 0 else 0
+
+        # 수급/모멘텀 평가 멘트
+        score_badge = "🔥 [초강력 퀀트 유망주]" if score >= 85 else ("🟢 [양호한 모멘텀 구간]" if score >= 75 else "🟡 [관망 및 지지선 확인]")
+
+        text = (
+            f"🔍 <b>[GD 3.0 실시간 종목 퀀트 진단]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 <b>종목명</b>: <b>{name} ({clean_code})</b>\n"
+            f"💵 <b>현재가</b>: <b>{price:,.0f}원</b> ({chg_sign}{chg:.2f}%)\n"
+            f"🎯 <b>퀀트 점수</b>: <b>{score:.1f}점</b> ({score_badge})\n"
+            f"{amount_str}"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 <b>1차 목표가</b>: <b>{tp_price:,.0f}원</b> (+5.0%)\n"
+            f"🛑 <b>추천 손절가</b>: <b>{sl_price:,.0f}원</b> (-4.0%)\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>💡 아래 버튼을 눌러 실시간 모바일 호가창을 즉시 확인하실 수 있습니다.</i>"
+        )
+
+        chart_bytes = _get_stock_chart_safe(clean_code, name, score=score, target_price=tp_price, stop_loss=sl_price)
+        markup = make_stock_action_keyboard(clean_code, name)
+
+        if chart_bytes:
+            return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup, force_send=True)
+        return _send(token, chat_id, text, reply_markup=markup, force_send=True)
+
+    except Exception as e:
+        print(f"DEBUG: _reply_stock_diagnosis error: {e}")
+        return _send(token, chat_id, f"⚠️ 종목 진단 조회 중 오류가 발생했습니다: {e}", force_send=True)
+
+
 # ─────────────────────────────────────────────────────────────
 # 6. 🤖 텔레그램 양방향 대화형 비서 (명령어 처리기)
 # ─────────────────────────────────────────────────────────────
@@ -865,10 +1022,11 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
             except Exception as _ce:
                 print(f"DEBUG: Quant chart gen error for {name}({code}): {_ce}")
 
+            markup = make_stock_action_keyboard(code, name)
             if chart_bytes:
-                _send_photo(token, chat_id, chart_bytes, caption=caption, force_send=True)
+                _send_photo(token, chat_id, chart_bytes, caption=caption, reply_markup=markup, force_send=True)
             else:
-                _send(token, chat_id, caption, force_send=True)
+                _send(token, chat_id, caption, reply_markup=markup, force_send=True)
             
             import time
             time.sleep(0.3)  # 텔레그램 API 순차 전송 딜레이
@@ -928,9 +1086,20 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
             f"• <b>[📊 시장 에너지 진단]</b> : KOSPI 국면 & 권장 비중\n"
             f"• <b>[❓ 명령어 도움말]</b> : 비서 메뉴얼\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"<i>💬 궁금하신 종목 질문(예: '삼성전자 목표가?')을 입력하셔도 AI가 답변합니다!</i>"
+            f"<i>💬 궁금하신 종목 질문(예: '삼성전자', '로보티즈')을 그냥 입력하셔도 실시간 진단 카드와 차트가 즉시 뜹니다!</i>"
         )
         return _send(token, chat_id, reply, force_send=True)
+
+    # 5. 종목 실시간 진단 콜백 ('ai_005930' 또는 'ai_diag_005930' 등)
+    elif clean_cmd.startswith('ai_'):
+        target_code = clean_cmd.replace('ai_', '').replace('diag_', '').strip().zfill(6)
+        return _reply_stock_diagnosis(token, chat_id, target_code, context_fn)
+
+    # 6. 자유 종목 검색 (종목명 또는 6자리 종목코드 입력 시)
+    else:
+        matched_code, matched_name = _find_stock_by_query(cmd_text)
+        if matched_code:
+            return _reply_stock_diagnosis(token, chat_id, matched_code, context_fn, matched_name)
 
     return False
 
@@ -972,9 +1141,10 @@ def notify_jumping_candle_breakout(
         f"<i>원칙 매매로 안전하게 수익을 극대화하십시오! 🚀</i>"
     )
     chart_bytes = _get_stock_chart_safe(code, name, stop_loss=open_price)
+    markup = make_stock_action_keyboard(code, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text, force_send=True)
-    return _send(token, chat_id, text, force_send=True)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup, force_send=True)
+    return _send(token, chat_id, text, reply_markup=markup, force_send=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1041,10 +1211,12 @@ def notify_external_channel_alert(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>원칙 매매로 안전하게 수익을 극대화하십시오! 🚀</i>"
     )
+    markup = make_stock_action_keyboard(code, name) if code else None
     if code:
         chart_bytes = _get_stock_chart_safe(code, name, score=q_score, stop_loss=support_p)
         if chart_bytes:
-            return _send_photo(token, chat_id, chart_bytes, caption=text, force_send=True)
-    return _send(token, chat_id, text, force_send=True)
+            return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup, force_send=True)
+    return _send(token, chat_id, text, reply_markup=markup, force_send=True)
+
 
 
