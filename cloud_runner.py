@@ -169,7 +169,7 @@ if now_weekday < 5 and 700 <= now_hm <= 1130:
             c_rat, s_rat = 20.0, 80.0
             b_ma5, b_st = 3.5, "안정"
 
-            # ── [트레이딩스핀] 아침 최신 시황 자료 자동 크롤링 & 요약 ──
+            # ── [트레이딩스핀 & 엘리트강사] 아침 최신 시황 자료 자동 크롤링 & 요약 ──
             spin_morning_text = ""
             try:
                 import requests as s_req
@@ -185,19 +185,44 @@ if now_weekday < 5 and 700 <= now_hm <= 1130:
                         if s_txt_el:
                             stxt = s_txt_el.get_text('\n').strip()
                             if len(stxt) >= 15:
-                                first_line = stxt.split('\n')[0].strip()
-                                # 핵심 키워드가 포함된 라인 우선 추출
-                                if any(k in stxt for k in ['반도체', '엔비디아', '증시', '마이크론', '테슬라', '금리', '국채', '환율', '코스피', '외국인']):
-                                    clean_snip = ' '.join(stxt.split('\n')[:3])
-                                    if len(clean_snip) > 120:
-                                        clean_snip = clean_snip[:120] + '...'
-                                    spin_snippets.append(f"• {clean_snip}")
-                                    if len(spin_snippets) >= 2:
-                                        break
+                                clean_snip = ' '.join(stxt.split('\n')[:3])
+                                if len(clean_snip) > 120:
+                                    clean_snip = clean_snip[:120] + '...'
+                                spin_snippets.append(f"• {clean_snip}")
+                                if len(spin_snippets) >= 2:
+                                    break
                     if spin_snippets:
                         spin_morning_text = "\n".join(spin_snippets)
             except Exception as _se:
                 print(f"DEBUG: trading_spin morning fetch error: {_se}")
+
+            elite_morning_text = ""
+            try:
+                e_url = 'https://t.me/s/elite_instructor'
+                e_r = s_req.get(e_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                if e_r.status_code == 200:
+                    e_soup = s_BS(e_r.text, 'html.parser')
+                    e_msgs = e_soup.find_all('div', class_='tgme_widget_message')
+                    e_snippets = []
+                    for em in reversed(e_msgs[-8:]):
+                        e_txt_el = em.find('div', class_='tgme_widget_message_text')
+                        if e_txt_el:
+                            etxt = e_txt_el.get_text('\n').strip()
+                            if any(k in etxt for k in ['주요뉴스', '좋은 아침', '모닝', '브리핑', '시황', '선물', '금리', '연준']):
+                                lines = [l.strip() for l in etxt.split('\n') if len(l.strip()) > 5 and not l.strip().startswith('http') and not l.strip().startswith('===')]
+                                for l in lines[:3]:
+                                    if len(l) > 80:
+                                        l = l[:80] + '...'
+                                    if not any(k in l for k in ['이모티콘', '영상', '채널', '구독']):
+                                        e_snippets.append(f"• {l}")
+                                        if len(e_snippets) >= 2:
+                                            break
+                                if len(e_snippets) >= 2:
+                                    break
+                    if e_snippets:
+                        elite_morning_text = "\n".join(e_snippets)
+            except Exception as _ee:
+                print(f"DEBUG: elite_instructor morning fetch error: {_ee}")
 
             res = tn.notify_morning_briefing(
                 token=token, chat_id=chat_id,
@@ -209,7 +234,8 @@ if now_weekday < 5 and 700 <= now_hm <= 1130:
                 calendar_text=cal_text,
                 portfolio_morning_text=port_morning_text,
                 support_levels_text="6,750선",
-                spin_market_text=spin_morning_text
+                spin_market_text=spin_morning_text,
+                elite_market_text=elite_morning_text
             )
             print(f"  ✅ 초고도화 직관적 장전 브리핑 발송 결과: {res}")
             if res:

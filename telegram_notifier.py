@@ -488,9 +488,10 @@ def notify_morning_briefing(
     portfolio_morning_text: str = "",
     support_levels_text: str = "",
     spin_market_text: str = "",
+    elite_market_text: str = "",
     gap_trap_warning: bool = True,
 ) -> bool:
-    """장 시작 전(08:50) 초보자도 한눈에 이해하는 미국 증시 총평, 시초가 선행 지표, 트레이딩스핀 시황, 국장 핫섹터, 오늘 일정 및 실전 작전 브리핑."""
+    """장 시작 전(08:50) 초보자도 한눈에 이해하는 미국 증시 총평, 시초가 선행 지표, 트레이딩스핀 & 엘리트강사 시황, 국장 핫섹터, 오늘 일정 및 실전 작전 브리핑."""
     
     # 1. 간밤 미 증시 매크로 기본값
     us_sec = us_market_text or (
@@ -507,14 +508,15 @@ def notify_morning_briefing(
         "└ 💰 <b>해외 큰손들의 한국 베팅</b>: MSCI 한국 ETF ▲+0.82% 상승 (외국인 순매수 기대)"
     )
 
-    # 2-1. 트레이딩스핀(trading_spin) 장전 핵심 시황 노트 (있을 때만 삽입)
-    spin_sec = ""
+    # 2-1. 트레이딩스핀 & 엘리트강사 장전 핵심 시황 노트 (있을 때만 삽입)
+    ext_blocks = []
     if spin_market_text:
-        spin_sec = (
-            f"\n━━━━━━━━━━━━━━━━━━\n"
-            f"📢 <b>💡 트레이딩스핀 장전 핵심 시황 요약</b>\n"
-            f"{spin_market_text}\n"
-        )
+        ext_blocks.append(f"📢 <b>💡 정우영의 트레이딩스핀 장전 핵심 시황</b>\n{spin_market_text}")
+    if elite_market_text:
+        ext_blocks.append(f"📢 <b>💡 엘리트강사 장전 핵심 뉴스 & 시황</b>\n{elite_market_text}")
+    external_sec = ""
+    if ext_blocks:
+        external_sec = f"\n━━━━━━━━━━━━━━━━━━\n" + "\n\n".join(ext_blocks)
 
     # 3. 오늘 국장 섹터별 파급 효과 및 핫섹터 예측
     kr_sec = kr_impact_text or (
@@ -554,7 +556,7 @@ def notify_morning_briefing(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🧭 <b>2. 오늘 아침 국장 출발 신호등 (선행 지표)</b>\n"
         f"{lead_sec}"
-        f"{spin_sec}"
+        f"{external_sec}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"⚡ <b>3. 오늘 어디가 오르고 어디가 내릴까?</b>\n"
         f"{kr_sec}\n"
