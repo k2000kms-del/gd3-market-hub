@@ -17,14 +17,14 @@ _TG_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
 
 
 def is_allowed_notification_hours() -> bool:
-    """KST 기준 현재 시각이 알림 전송 허용 시간(07:30 ~ 23:30)에 해당하는지 판별"""
+    """KST 기준 현재 시각이 알림 전송 허용 시간(07:00 ~ 23:30)에 해당하는지 판별"""
     try:
         import datetime as dt
         kst_tz = dt.timezone(dt.timedelta(hours=9))
         now = dt.datetime.now(kst_tz)
         
         current_time = now.time()
-        start_time = dt.time(7, 30, 0)
+        start_time = dt.time(7, 0, 0)
         end_time = dt.time(23, 30, 0)
         
         return start_time <= current_time <= end_time
@@ -573,7 +573,7 @@ def notify_morning_briefing(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>오늘도 원칙 매매로 든든한 수익 거두십시오! 화이팅입니다! 🚀</i>"
     )
-    return _send(token, chat_id, text)
+    return _send(token, chat_id, text, force_send=True)
 
 
 
@@ -631,7 +631,7 @@ def notify_closing_briefing(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>오늘 하루도 정말 수고 많으셨습니다. 편안한 저녁 되십시오! 🌙</i>"
     )
-    return _send(token, chat_id, text)
+    return _send(token, chat_id, text, force_send=True)
 
 
 def notify_daily_buy_signal(
