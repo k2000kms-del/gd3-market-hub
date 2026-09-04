@@ -4795,12 +4795,14 @@ with col_left:
             key="p5_market_tab"
         )
 
-    # 2행: 그 아랫줄에 뷰 모드 [⚡ 듀얼 | 🕯️ 1분봉 | 📊 수급선] 전면 가로 배치
+    # 2행: 그 아랫줄에 뷰 모드 [⚡ 듀얼 | 📈 지수선 | 📊 수급선] 전면 가로 배치
     if "듀얼" in str(st.session_state.get('p5_view_mode', '')):
         st.session_state['p5_view_mode'] = "⚡ 듀얼"
+    elif "1분봉" in str(st.session_state.get('p5_view_mode', '')):
+        st.session_state['p5_view_mode'] = "📈 지수선"
     p5_view = st.radio(
         "뷰 모드", 
-        ["⚡ 듀얼", "🕯️ 1분봉", "📊 수급선"], 
+        ["⚡ 듀얼", "📈 지수선", "📊 수급선"], 
         horizontal=True, 
         label_visibility="collapsed", 
         key="p5_view_mode"
@@ -4918,9 +4920,9 @@ with col_left:
                     df_line[col] = _gaussian_smooth(df_line[col].ffill().bfill(), smooth_win)
         df_line = df_line.reset_index()
 
-    # ── 2. 지수 1분봉 캔들 데이터 조회 ──
+    # ── 2. 지수 1분 데이터 조회 ──
     df_candle = pd.DataFrame()
-    if any(k in str(p5_view) for k in ["듀얼", "1분봉"]):
+    if any(k in str(p5_view) for k in ["듀얼", "1분봉", "지수"]):
         df_candle = fetch_naver_index_minute_candles(target_mkt_code)
         if not df_candle.empty and 'Datetime' in df_candle.columns:
             # df_candle의 날짜를 today_date_str 날짜로 일치화하여 분봉과 수급선이 항상 동일 X축 상에 결합되도록 보장!
@@ -4938,21 +4940,40 @@ with col_left:
             row_heights=[0.58, 0.42]
         )
 
-        # 상단 1분봉 캔들스틱 & 5MA/20MA 이평선
+        # 상단 지수 1분 실선(Line) & 시초가 기준선
         if not df_candle.empty:
-            fig_p5.add_trace(go.Candlestick(
+            first_open = float(df_candle['Open'].iloc[0]) if 'Open' in df_candle.columns else float(df_candle['Close'].iloc[0])
+            last_close = float(df_candle['Close'].iloc[-1])
+            idx_chg = last_close - first_open
+            idx_color = '#ff6b6b' if idx_chg >= 0 else '#4e9ff5'
+
+            # 직관적인 지수 1분 실선 곡선
+            fig_p5.add_trace(go.Scatter(
                 x=df_candle['Datetime'],
-                open=df_candle['Open'], high=df_candle['High'],
-                low=df_candle['Low'], close=df_candle['Close'],
-                name=f'{target_market} 1분봉',
-                increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
-                decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff',
+                y=df_candle['Close'],
+                name=f'{target_market} 지수',
+                mode='lines',
+                line=dict(color=idx_color, width=2.4, shape='spline', smoothing=1.0),
+                hovertemplate=f'<b>{target_market}</b>: %{{y:,.2f}}p<extra></extra>',
                 showlegend=False
             ), row=1, col=1)
 
+            # 당일 시초가 기준선 (점선)
+            fig_p5.add_hline(
+                y=first_open, line_dash='dot',
+                line_color='rgba(255,255,255,0.35)', line_width=1.2,
+                row=1, col=1
+            )
+            # 현재 지수 보조 점선
+            fig_p5.add_hline(
+                y=last_close, line_dash='dash',
+                line_color=idx_color, line_width=1.0, opacity=0.6,
+                row=1, col=1
+            )
+
             fig_p5.update_yaxes(title_text='지수', row=1, col=1, tickformat=',.1f', showgrid=True, gridcolor='rgba(255,255,255,0.08)', fixedrange=True)
         else:
-            fig_p5.add_annotation(text='1분봉 데이터 수신 중...', row=1, col=1, showarrow=False, font=dict(color='#888', size=11))
+            fig_p5.add_annotation(text='지수 데이터 수신 중...', row=1, col=1, showarrow=False, font=dict(color='#888', size=11))
 
         # 하단 외국인/기관/개인 수급 곡선
         if not df_line.empty:
@@ -5018,18 +5039,29 @@ with col_left:
             yaxis2=dict(fixedrange=True)
         )
 
-    elif p5_view == "🕯️ 1분봉":
+    elif any(k in str(p5_view) for k in ["지수", "1분봉"]):
         fig_p5 = go.Figure()
         if not df_candle.empty:
-            fig_p5.add_trace(go.Candlestick(
+            first_open = float(df_candle['Open'].iloc[0]) if 'Open' in df_candle.columns else float(df_candle['Close'].iloc[0])
+            last_close = float(df_candle['Close'].iloc[-1])
+            idx_chg = last_close - first_open
+            idx_color = '#ff6b6b' if idx_chg >= 0 else '#4e9ff5'
+
+            fig_p5.add_trace(go.Scatter(
                 x=df_candle['Datetime'],
-                open=df_candle['Open'], high=df_candle['High'],
-                low=df_candle['Low'], close=df_candle['Close'],
-                name=f'{target_market} 1분봉',
-                increasing_line_color='#ff4d4f', increasing_fillcolor='#ff4d4f',
-                decreasing_line_color='#4096ff', decreasing_fillcolor='#4096ff',
+                y=df_candle['Close'],
+                name=f'{target_market} 지수',
+                mode='lines',
+                line=dict(color=idx_color, width=2.6, shape='spline', smoothing=1.0),
+                hovertemplate=f'<b>{target_market}</b>: %{{y:,.2f}}p<extra></extra>',
                 showlegend=False
             ))
+            fig_p5.add_hline(
+                y=first_open, line_dash='dot', line_color='rgba(255,255,255,0.35)', line_width=1.2
+            )
+            fig_p5.add_hline(
+                y=last_close, line_dash='dash', line_color=idx_color, line_width=1.0, opacity=0.6
+            )
         fig_p5.update_layout(
             height=450,
             template='plotly_dark',
@@ -5053,7 +5085,7 @@ with col_left:
             ),
             yaxis=dict(fixedrange=True) # Y축 확대/축소 잠금
         )
-        fig_p5.update_yaxes(fixedrange=True)
+        fig_p5.update_yaxes(title_text='지수', tickformat=',.1f', showgrid=True, gridcolor='rgba(255,255,255,0.08)', fixedrange=True)
 
     else:  # 📊 수급선만 단독 보기
         fig_p5 = go.Figure()
