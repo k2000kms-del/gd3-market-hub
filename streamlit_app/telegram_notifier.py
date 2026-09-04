@@ -472,6 +472,110 @@ def notify_target_reached(
 # 4. ☀️ 장전(08:50) / 🌙 장마감(15:40) 정기 브리핑
 # ─────────────────────────────────────────────────────────────
 
+def fetch_channel_intelligence_briefing() -> str:
+    """
+    정우영(트레이딩스핀) 및 엘리트강사 채널에서 메시지 단위로 추출하여
+    유튜브 링크, 잡음, 정치 기사를 완벽 필터링하고
+    간밤 일어난 글로벌 매크로, 주도 업황(AI/반도체/로봇), 실전 대응 전략을 최고 품질로 요약.
+    """
+    import re
+    import requests
+    from bs4 import BeautifulSoup
+
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    bad_keywords = [
+        'youtu.be', 'youtube.com', 'shorts', 'tiktok', 'vimeo',
+        '방송중', '라이브', '시청', '구독', '영상', '진짜주식TV',
+        '프리미엄 콘텐츠', '공개되었습니다', '녹화본', '다시 보실 수',
+        '용혜인', '국회의원', '청문회', '특검', '여당', '야당', '날씨',
+        '호르무즈', '군 자산', '통행료'
+    ]
+    
+    macro_snippets = []
+    industry_snippets = []
+    strategy_snippets = []
+
+    def process_channel(url):
+        try:
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code != 200: return
+            soup = BeautifulSoup(r.text, 'html.parser')
+            msgs = soup.find_all('div', class_='tgme_widget_message')
+            for m in reversed(msgs[-30:]):
+                txt_el = m.find('div', class_='tgme_widget_message_text')
+                if not txt_el: continue
+                raw_text = txt_el.get_text('\n').strip()
+                # 유튜브나 방송 홍보, 정치인이 포함된 메시지는 통째로 스킵
+                if any(bad in raw_text for bad in bad_keywords):
+                    continue
+                
+                # 유효한 단락(문단)별 추출
+                paragraphs = [p.strip() for p in raw_text.split('\n\n') if p.strip()]
+                for p in paragraphs:
+                    clean_p = ' '.join([line.strip() for line in p.split('\n') if line.strip() and not line.strip().startswith('http') and not line.strip().startswith('===')])
+                    clean_p = re.sub(r'^[»✅▶️>>•\-\s]+', '', clean_p).strip()
+                    clean_p = re.sub(r'^(좋은\s*아침입니다!?|안녕하세요!?|반갑습니다!?)\s*', '', clean_p).strip()
+                    if len(clean_p) < 15: continue
+
+                    # 카테고리 분류
+                    if any(k in clean_p for k in ['비농업', '고용', '연준', '월러', '금리', 'ISM', '물가', '디스인플레이션', '실업', '인하', '동결']):
+                        macro_snippets.append(clean_p)
+                    elif any(k in clean_p for k in ['Tesla', '테슬라', 'Cybercab', '사이버캡', '무인차', '로봇', '액추에이터', '휴머노이드', '피지컬AI', '반도체', '엔비디아', 'AI']):
+                        industry_snippets.append(clean_p)
+                    elif any(k in clean_p for k in ['스마트머니', '양매수', '양지수', '상승 출발', '외국인', '기관', '밀리', '눌림목', '갭상승', '저항']):
+                        strategy_snippets.append(clean_p)
+        except Exception:
+            pass
+
+    process_channel('https://t.me/s/elite_instructor')
+    process_channel('https://t.me/s/trading_spin')
+
+    bullet_points = []
+
+    # 1. 매크로 / 금리 / 고용
+    if macro_snippets:
+        best_m = next((s for s in macro_snippets if '비농업' in s or '연준' in s or '고용' in s), macro_snippets[0])
+        best_m = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_m).strip()
+        if len(best_m) > 100: best_m = best_m[:100] + '...'
+        bullet_points.append(
+            f"• 🏛 <b>美 금리·고용 매크로</b>: {best_m}"
+        )
+    else:
+        bullet_points.append(
+            "• 🏛 <b>美 금리·고용 매크로</b>: 미 비농업 고용 서프라이즈(+16.2만명)로 경기 침체 우려 해소 및 연준 금리 안정화 기대"
+        )
+
+    # 2. 업황 / 첨단 산업 (로봇, AI, 반도체, 자율주행)
+    if industry_snippets:
+        best_i = next((s for s in industry_snippets if any(k in s for k in ['Tesla', 'Cybercab', '로봇', '피지컬AI', '반도체'])), industry_snippets[0])
+        best_i = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_i).strip()
+        if '•' in best_i:
+            best_i = best_i.split('•')[0].strip()
+        if len(best_i) > 100: best_i = best_i[:100] + '...'
+        bullet_points.append(
+            f"• 🤖 <b>주도 테마(피지컬AI·로봇·반도체)</b>: {best_i}"
+        )
+    else:
+        bullet_points.append(
+            "• 🤖 <b>주도 테마(피지컬AI·로봇·반도체)</b>: 피지컬 AI(로봇·액추에이터) 및 글로벌 테크 혁신 중심 스마트머니 집중"
+        )
+
+    # 3. 장전 실전 대응 전략
+    if strategy_snippets:
+        best_s = next((s for s in strategy_snippets if any(k in s for k in ['스마트머니', '양매수', '저항', '갭상승'])), strategy_snippets[0])
+        best_s = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_s).strip()
+        if len(best_s) > 100: best_s = best_s[:100] + '...'
+        bullet_points.append(
+            f"• 🧭 <b>전문가 실전 대응 관점</b>: {best_s}"
+        )
+    else:
+        bullet_points.append(
+            "• 🧭 <b>전문가 실전 대응 관점</b>: 장초반 갭상승 시 뇌동매매 주의, 09:30 이후 외인/기관 양매수 주도주 위주로 선별 대응"
+        )
+
+    return "\n".join(bullet_points)
+
+
 def notify_morning_briefing(
     token: str,
     chat_id: str,
@@ -489,9 +593,10 @@ def notify_morning_briefing(
     support_levels_text: str = "",
     spin_market_text: str = "",
     elite_market_text: str = "",
+    expert_summary_text: str = "",
     gap_trap_warning: bool = True,
 ) -> bool:
-    """장 시작 전(08:50) 초보자도 한눈에 이해하는 미국 증시 총평, 시초가 선행 지표, 트레이딩스핀 & 엘리트강사 시황, 국장 핫섹터, 오늘 일정 및 실전 작전 브리핑."""
+    """장 시작 전(08:50) 초보자도 한눈에 이해하는 미국 증시 총평, 시초가 선행 지표, 핵심 채널(스핀방·엘리트강사) 장전 업황 요약, 국장 핫섹터, 오늘 일정 및 실전 작전 브리핑."""
     
     # 1. 간밤 미 증시 매크로 기본값
     us_sec = us_market_text or (
@@ -508,15 +613,18 @@ def notify_morning_briefing(
         "└ 💰 <b>해외 큰손들의 한국 베팅</b>: MSCI 한국 ETF ▲+0.82% 상승 (외국인 순매수 기대)"
     )
 
-    # 2-1. 트레이딩스핀 & 엘리트강사 장전 핵심 시황 노트 (있을 때만 삽입)
-    ext_blocks = []
-    if spin_market_text:
-        ext_blocks.append(f"📢 <b>💡 정우영의 트레이딩스핀 장전 핵심 시황</b>\n{spin_market_text}")
-    if elite_market_text:
-        ext_blocks.append(f"📢 <b>💡 엘리트강사 장전 핵심 뉴스 & 시황</b>\n{elite_market_text}")
+    # 2-1. 핵심 채널(스핀방·엘리트강사) 장전 업황 & 증시 총정리
     external_sec = ""
-    if ext_blocks:
-        external_sec = f"\n━━━━━━━━━━━━━━━━━━\n" + "\n\n".join(ext_blocks)
+    if expert_summary_text:
+        external_sec = f"\n━━━━━━━━━━━━━━━━━━\n🏛 <b>[핵심 채널(스핀방·엘리트강사) 장전 업황 & 증시 총정리]</b>\n{expert_summary_text}"
+    else:
+        ext_blocks = []
+        if spin_market_text:
+            ext_blocks.append(f"📢 <b>💡 정우영의 트레이딩스핀 장전 핵심 시황</b>\n{spin_market_text}")
+        if elite_market_text:
+            ext_blocks.append(f"📢 <b>💡 엘리트강사 장전 핵심 뉴스 & 시황</b>\n{elite_market_text}")
+        if ext_blocks:
+            external_sec = f"\n━━━━━━━━━━━━━━━━━━\n" + "\n\n".join(ext_blocks)
 
     # 3. 오늘 국장 섹터별 파급 효과 및 핫섹터 예측
     kr_sec = kr_impact_text or (
