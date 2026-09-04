@@ -138,7 +138,11 @@ def generate_stock_chart_image(code: str, name: str, df: pd.DataFrame, score: fl
                 t_str = str(df_c.iloc[t]['Time'])[-5:] # HH:MM
                 labels.append(t_str)
             elif 'Date' in df_c.columns and pd.notna(df_c.iloc[t]['Date']):
-                labels.append(str(df_c.iloc[t]['Date'])[-5:]) # MM-DD
+                d_val = df_c.iloc[t]['Date']
+                if hasattr(d_val, 'strftime'):
+                    labels.append(d_val.strftime('%m-%d'))
+                else:
+                    labels.append(str(d_val)[:10][-5:])
             else:
                 labels.append(str(t))
 
@@ -188,8 +192,28 @@ def fetch_stock_chart_df(code: str) -> pd.DataFrame:
         start = (pd.Timestamp.now() - pd.Timedelta(days=120)).strftime('%Y-%m-%d')
         df = fdr.DataReader(str(code).zfill(6), start)
         if df is not None and not df.empty:
+            df = df.reset_index()
             return df
     except Exception as e:
         print(f"DEBUG: fetch_stock_chart_df error for {code}: {e}")
     return pd.DataFrame()
+
+
+def get_stock_chart_bytes(code: str, name: str, score: float = None, target_price: float = None, stop_loss: float = None) -> bytes:
+    """종목코드와 종목명을 받아 고해상도 캔들 차트 이미지 바이너리(bytes)를 즉시 반환."""
+    try:
+        df = fetch_stock_chart_df(code)
+        if df is not None and not df.empty:
+            return generate_stock_chart_image(
+                code=code,
+                name=name,
+                df=df,
+                score=score,
+                target_price=target_price,
+                stop_loss=stop_loss
+            )
+    except Exception as e:
+        print(f"DEBUG: get_stock_chart_bytes failed for {name}({code}): {e}")
+    return None
+
 

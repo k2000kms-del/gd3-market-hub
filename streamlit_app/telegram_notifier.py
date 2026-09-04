@@ -124,6 +124,16 @@ def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "",
         return _send(token, chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup, force_send=force_send)
 
 
+def _get_stock_chart_safe(code: str, name: str, score: float = None, target_price: float = None, stop_loss: float = None) -> bytes:
+    """종목코드와 종목명으로 고해상도 캔들 차트 이미지를 안전하게 로드/생성 (실패 시 None 반환)"""
+    try:
+        from chart_image_generator import get_stock_chart_bytes
+        return get_stock_chart_bytes(code=code, name=name, score=score, target_price=target_price, stop_loss=stop_loss)
+    except Exception as e:
+        print(f"DEBUG: 차트 이미지 로드 실패 ({name}/{code}): {e}")
+    return None
+
+
 # ─────────────────────────────────────────────────────────────
 # 1. 실시간 매매 신호 (목표가/손절가/비중 탑재)
 # ─────────────────────────────────────────────────────────────
@@ -155,6 +165,9 @@ def notify_dead_cross_warning(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>⚡ GD 3.0 역배열 가디언</i>"
     )
+    chart_bytes = _get_stock_chart_safe(ticker, name)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text)
     return _send(token, chat_id, text)
 
 
@@ -199,6 +212,9 @@ def notify_buy_signal(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>⚡ GD 3.0 Market Hub 실시간 퀀트 신호</i>"
     )
+    chart_bytes = _get_stock_chart_safe(ticker, name, target_price=tgt, stop_loss=stp)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text)
     return _send(token, chat_id, text)
 
 
@@ -237,6 +253,9 @@ def notify_exit_signal(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>⚡ GD 3.0 Market Hub 실시간 신호</i>"
     )
+    chart_bytes = _get_stock_chart_safe(ticker, name)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text)
     return _send(token, chat_id, text)
 
 
@@ -265,6 +284,9 @@ def notify_add_signal(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>⚡ GD 3.0 Market Hub</i>"
     )
+    chart_bytes = _get_stock_chart_safe(ticker, name)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text)
     return _send(token, chat_id, text)
 
 
@@ -293,6 +315,9 @@ def notify_fall_buy_signal(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>⚡ GD 3.0 Market Hub</i>"
     )
+    chart_bytes = _get_stock_chart_safe(ticker, name)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text)
     return _send(token, chat_id, text)
 
 
@@ -354,6 +379,9 @@ def notify_quant_top_pick(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>🏆 GD 3.0 퀀트 모멘텀 알고리즘 (8개년 검증)</i>"
     )
+    chart_bytes = _get_stock_chart_safe(ticker, name, score=score, target_price=tgt, stop_loss=stp)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text)
     return _send(token, chat_id, text)
 
 
@@ -384,6 +412,9 @@ def notify_smart_stop_loss(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>🛡️ GD 3.0 스마트 리스크 가디언</i>"
     )
+    chart_bytes = _get_stock_chart_safe(ticker, name, stop_loss=stop_price)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text)
     return _send(token, chat_id, text)
 
 
@@ -940,6 +971,9 @@ def notify_jumping_candle_breakout(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>원칙 매매로 안전하게 수익을 극대화하십시오! 🚀</i>"
     )
+    chart_bytes = _get_stock_chart_safe(code, name, stop_loss=open_price)
+    if chart_bytes:
+        return _send_photo(token, chat_id, chart_bytes, caption=text, force_send=True)
     return _send(token, chat_id, text, force_send=True)
 
 
@@ -958,6 +992,11 @@ def notify_external_channel_alert(
     외부 텔레그램 채널(예: elite_instructor)의 단타/속보 메시지를 포착하고
     GD 3.0 실시간 퀀트 및 점핑 양봉 수급 지표와 결합하여 전달하는 통합 브리핑.
     """
+    code = ""
+    name = ""
+    q_score = None
+    support_p = None
+
     # 1. 퀀트 정밀 진단 섹션 구성
     if matched_stock and matched_stock.get('code'):
         code = matched_stock.get('code', '')
@@ -1002,6 +1041,10 @@ def notify_external_channel_alert(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>원칙 매매로 안전하게 수익을 극대화하십시오! 🚀</i>"
     )
+    if code:
+        chart_bytes = _get_stock_chart_safe(code, name, score=q_score, stop_loss=support_p)
+        if chart_bytes:
+            return _send_photo(token, chat_id, chart_bytes, caption=text, force_send=True)
     return _send(token, chat_id, text, force_send=True)
 
 
