@@ -6,33 +6,64 @@ live_logger.py (v2 — 쿨다운 및 스마트 손절가 알림 보완판)
 """
 import csv
 import os
+import threading
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # 텔레그램 알림 모듈 임포트
 try:
-    from telegram_notifier import notify_buy_signal, notify_exit_signal, notify_add_signal, notify_fall_buy_signal, _send
+    from telegram_notifier import notify_buy_signal, notify_exit_signal, notify_add_signal, notify_fall_buy_signal, _send, is_regular_market_hours
     _TG_AVAILABLE = True
 except ImportError:
     _TG_AVAILABLE = False
+    def is_regular_market_hours(): return True
 
-LOG_PATH = "scalping_signal_log.csv"
-STOP_LOSS_ALERT_PATH = "stop_loss_alert_history.json"
+_KST = timezone(timedelta(hours=9))
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_DATA_DIR = os.path.join(_BASE_DIR, "data")
+if not os.path.exists(_DATA_DIR):
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+LOG_PATH = os.path.join(_DATA_DIR, "scalping_signal_log.csv")
+STOP_LOSS_ALERT_PATH = os.path.join(_DATA_DIR, "stop_loss_alert_history.json")
 DEFAULT_COOLDOWN_MINUTES = 30  # 동일 종목/동일 신호 쿨다운 시간 (30분)
+
+# 🔒 인메모리 스레드 안전 쿨다운 캐시 (도배 100% 방지)
+_SIGNAL_COOLDOWN_LOCK = threading.Lock()
+_SIGNAL_COOLDOWN_MEM: dict = {}
 
 
 def _ensure_log_file():
     if not os.path.exists(LOG_PATH):
-        with open(LOG_PATH, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "ticker", "event", "timestamp", "price",
-                "pnl_pct", "holding_minutes"
-            ])
+        try:
+            with open(LOG_PATH, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "ticker", "event", "timestamp", "price",
+                    "pnl_pct", "holding_minutes"
+                ])
+        except Exception as e:
+            print(f"DEBUG: _ensure_log_file failed: {e}")
 
 
-def is_in_cooldown(ticker: str, event: str, current_ts: datetime, cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES) -> bool:
+def is_in_cooldown(ticker: str, event: str, current_ts: datetime = None, cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES) -> bool:
     """동일 종목 & 동일 이벤트에 대해 지정한 쿨다운 시간(예: 30분) 이내에 이미 알림이 전송되었는지 확인"""
+    now_kst = datetime.now(_KST)
+    clean_ticker = str(ticker).strip().zfill(6)
+    mem_key = f"{clean_ticker}_{event}"
+
+    # 1. 초고속 인메모리 캐시 검사
+    with _SIGNAL_COOLDOWN_LOCK:
+        if mem_key in _SIGNAL_COOLDOWN_MEM:
+            last_mem_ts = _SIGNAL_COOLDOWN_MEM[mem_key]
+            diff_min = (now_kst - last_mem_ts).total_seconds() / 60.0
+            if 0 <= diff_min < cooldown_minutes:
+                return True
+
+    # 2. 파일 기반 검사 (보완용)
     if not os.path.exists(LOG_PATH):
         return False
 
@@ -42,7 +73,7 @@ def is_in_cooldown(ticker: str, event: str, current_ts: datetime, cooldown_minut
             return False
 
         # 해당 종목 & 해당 이벤트 필터링
-        sub_df = df[(df['ticker'].astype(str) == str(ticker)) & (df['event'] == event)].copy()
+        sub_df = df[(df['ticker'].astype(str).str.zfill(6) == clean_ticker) & (df['event'] == event)].copy()
         if sub_df.empty:
             return False
 
@@ -53,10 +84,13 @@ def is_in_cooldown(ticker: str, event: str, current_ts: datetime, cooldown_minut
             return False
 
         last_ts = sub_df['ts_dt'].max()
-        time_diff = (current_ts - last_ts).total_seconds() / 60.0
+        check_ts = current_ts if current_ts is not None else now_kst
+        if hasattr(check_ts, 'tzinfo') and check_ts.tzinfo is not None:
+            check_ts = check_ts.astimezone(_KST).replace(tzinfo=None)
+        time_diff = (check_ts - last_ts).total_seconds() / 60.0
 
         # 쿨다운 시간 이내라면 True (알림 건너뜀)
-        return time_diff < cooldown_minutes
+        return 0 <= time_diff < cooldown_minutes
     except Exception as e:
         print(f"DEBUG: is_in_cooldown check error: {e}")
         return False
@@ -121,17 +155,25 @@ def log_buy_signal(
     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:00')
 
     # 30분 쿨다운 적용 (중복 발송 방지)
-    if is_in_cooldown(ticker, "BUY_SIGNAL", timestamp, cooldown_minutes=cooldown_minutes):
+    clean_ticker = str(ticker).strip().zfill(6)
+    if is_in_cooldown(clean_ticker, "BUY_SIGNAL", timestamp, cooldown_minutes=cooldown_minutes):
         print(f"DEBUG: [{name or ticker}] 매수 알림 쿨다운 중 ({cooldown_minutes}분 미경과) — 알림 건너뜀")
         return
 
-    with open(LOG_PATH, "a", newline="", encoding="utf-8-sig") as f:
-        csv.writer(f).writerow([
-            str(ticker), "BUY_SIGNAL", ts_str, price,
-            "", ""
-        ])
+    # 인메모리 쿨다운 즉시 선점
+    with _SIGNAL_COOLDOWN_LOCK:
+        _SIGNAL_COOLDOWN_MEM[f"{clean_ticker}_BUY_SIGNAL"] = datetime.now(_KST)
 
-    if _TG_AVAILABLE and tg_token and tg_chat_id:
+    try:
+        with open(LOG_PATH, "a", newline="", encoding="utf-8-sig") as f:
+            csv.writer(f).writerow([
+                str(ticker), "BUY_SIGNAL", ts_str, price,
+                "", ""
+            ])
+    except Exception:
+        pass
+
+    if _TG_AVAILABLE and tg_token and tg_chat_id and is_regular_market_hours():
         try:
             notify_buy_signal(
                 token=tg_token,
@@ -162,17 +204,24 @@ def log_add_signal(
     _ensure_log_file()
     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:00')
 
-    if is_in_cooldown(ticker, "ADD_SIGNAL", timestamp, cooldown_minutes=cooldown_minutes):
+    clean_ticker = str(ticker).strip().zfill(6)
+    if is_in_cooldown(clean_ticker, "ADD_SIGNAL", timestamp, cooldown_minutes=cooldown_minutes):
         print(f"DEBUG: [{name or ticker}] 추가매수 알림 쿨다운 중 — 알림 건너뜀")
         return
 
-    with open(LOG_PATH, "a", newline="", encoding="utf-8-sig") as f:
-        csv.writer(f).writerow([
-            str(ticker), "ADD_SIGNAL", ts_str, price,
-            "", ""
-        ])
+    with _SIGNAL_COOLDOWN_LOCK:
+        _SIGNAL_COOLDOWN_MEM[f"{clean_ticker}_ADD_SIGNAL"] = datetime.now(_KST)
 
-    if _TG_AVAILABLE and tg_token and tg_chat_id:
+    try:
+        with open(LOG_PATH, "a", newline="", encoding="utf-8-sig") as f:
+            csv.writer(f).writerow([
+                str(ticker), "ADD_SIGNAL", ts_str, price,
+                "", ""
+            ])
+    except Exception:
+        pass
+
+    if _TG_AVAILABLE and tg_token and tg_chat_id and is_regular_market_hours():
         try:
             notify_add_signal(
                 token=tg_token,
@@ -203,17 +252,24 @@ def log_fall_buy_signal(
     _ensure_log_file()
     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:00')
 
-    if is_in_cooldown(ticker, "FALL_BUY_SIGNAL", timestamp, cooldown_minutes=cooldown_minutes):
+    clean_ticker = str(ticker).strip().zfill(6)
+    if is_in_cooldown(clean_ticker, "FALL_BUY_SIGNAL", timestamp, cooldown_minutes=cooldown_minutes):
         print(f"DEBUG: [{name or ticker}] 낙폭과대 매수 알림 쿨다운 중 — 알림 건너뜀")
         return
 
-    with open(LOG_PATH, "a", newline="", encoding="utf-8-sig") as f:
-        csv.writer(f).writerow([
-            str(ticker), "FALL_BUY_SIGNAL", ts_str, price,
-            "", ""
-        ])
+    with _SIGNAL_COOLDOWN_LOCK:
+        _SIGNAL_COOLDOWN_MEM[f"{clean_ticker}_FALL_BUY_SIGNAL"] = datetime.now(_KST)
 
-    if _TG_AVAILABLE and tg_token and tg_chat_id:
+    try:
+        with open(LOG_PATH, "a", newline="", encoding="utf-8-sig") as f:
+            csv.writer(f).writerow([
+                str(ticker), "FALL_BUY_SIGNAL", ts_str, price,
+                "", ""
+            ])
+    except Exception:
+        pass
+
+    if _TG_AVAILABLE and tg_token and tg_chat_id and is_regular_market_hours():
         try:
             notify_fall_buy_signal(
                 token=tg_token,
@@ -242,9 +298,13 @@ def log_exit_signal(
     _ensure_log_file()
     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:00')
 
-    if is_in_cooldown(ticker, "EXIT_SIGNAL", timestamp, cooldown_minutes=cooldown_minutes):
+    clean_ticker = str(ticker).strip().zfill(6)
+    if is_in_cooldown(clean_ticker, "EXIT_SIGNAL", timestamp, cooldown_minutes=cooldown_minutes):
         print(f"DEBUG: [{name or ticker}] 청산 알림 쿨다운 중 — 알림 건너뜀")
         return
+
+    with _SIGNAL_COOLDOWN_LOCK:
+        _SIGNAL_COOLDOWN_MEM[f"{clean_ticker}_EXIT_SIGNAL"] = datetime.now(_KST)
 
     entry = get_last_entry(ticker)
     pnl_pct = ""

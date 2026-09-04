@@ -33,6 +33,21 @@ def is_allowed_notification_hours() -> bool:
         return True
 
 
+def is_regular_market_hours() -> bool:
+    """KST 기준 정규장 거래 시간(평일 월~금 09:00 ~ 15:30) 여부 판별 (스캘핑/실시간 매매신호 전용)"""
+    try:
+        import datetime as dt
+        kst_tz = dt.timezone(dt.timedelta(hours=9))
+        now = dt.datetime.now(kst_tz)
+        if now.weekday() >= 5: # 주말 (토, 일)
+            return False
+        hm = now.hour * 100 + now.minute
+        return 900 <= hm <= 1530
+    except Exception as e:
+        print(f"DEBUG: is_regular_market_hours error: {e}")
+        return False
+
+
 DEFAULT_REPLY_KEYBOARD = {
     "keyboard": [
         [{"text": "💼 내 포트폴리오"}, {"text": "🔥 퀀트 TOP3 추천"}],
@@ -156,7 +171,10 @@ def notify_buy_signal(
     stop_price: float = None,
     allocation_pct: str = "10~15%",
 ) -> bool:
-    """매수 신호 발생 시 액션 가이드 포함 텔레그램 알림 전송."""
+    """매수 신호 발생 시 액션 가이드 포함 텔레그램 알림 전송 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 매수 신호 전송을 차단합니다.")
+        return False
     time_str = timestamp.strftime("%H:%M")
     
     tgt = target_price or (price * 1.035)
@@ -194,7 +212,10 @@ def notify_exit_signal(
     pnl_pct: float = None,
     holding_minutes: float = None,
 ) -> bool:
-    """매도/청산 신호 발생 시 알림 전송."""
+    """매도/청산 신호 발생 시 알림 전송 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 청산 신호 전송을 차단합니다.")
+        return False
     time_str = timestamp.strftime("%H:%M")
 
     pnl_line = ""
@@ -229,7 +250,10 @@ def notify_add_signal(
     rsi: float = None,
     vwap: float = None,
 ) -> bool:
-    """스마트 추가 매수(물타기/불타기) 신호 알림."""
+    """스마트 추가 매수(물타기/불타기) 신호 알림 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 추가 매수 신호 전송을 차단합니다.")
+        return False
     time_str = timestamp.strftime("%H:%M")
     text = (
         f"🟠 <b>[스마트 추가 매수]</b> {name} ({ticker})\n"
@@ -254,7 +278,10 @@ def notify_fall_buy_signal(
     rsi: float = None,
     vwap: float = None,
 ) -> bool:
-    """낙폭과대 반등 매수 신호 알림."""
+    """낙폭과대 반등 매수 신호 알림 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 낙폭과대 반등매수 알림 전송을 차단합니다.")
+        return False
     time_str = timestamp.strftime("%H:%M")
     text = (
         f"🔵 <b>[낙폭과대 반등 매수]</b> {name} ({ticker})\n"
@@ -286,12 +313,15 @@ def notify_quant_top_pick(
     stop_price: float = None,
     market_energy_status: str = "",  # ⚡ 시장 에너지 상태 (8개년 백테스트 기반 필터)
 ) -> bool:
-    """당일 퀀트 80점 이상 강력 매수 종목 포착 알림.
+    """당일 퀀트 80점 이상 강력 매수 종목 포착 알림 (정규장 09:00~15:30 전용).
     
     ※ 8개년(2019~2026) 95,410건 백테스트 검증 결과:
        - 강세 에너지 구간 진입 시 승률 43.9% / PF 1.19
        - 위험 에너지 구간 진입 시 승률 35.1% / PF 0.80 (무시할 경우 손실 확률 65%)
     """
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 퀀트 매수 포착 알림 전송을 차단합니다.")
+        return False
     tgt = target_price or (price * 1.05)
     stp = stop_price or (price * 0.97)
 
@@ -340,7 +370,9 @@ def notify_smart_stop_loss(
     entry_price: float,
     stop_price: float,
 ) -> bool:
-    """보유 종목 손절가 하향 이탈 시 스마트 경고 알림."""
+    """보유 종목 손절가 하향 이탈 시 스마트 경고 알림 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        return False
     pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
     text = (
         f"🚨 <b>[손절선 이탈 긴급 경고]</b> {name} ({ticker})\n"
@@ -611,7 +643,9 @@ def notify_trailing_stop(
     highest_price: float,
     drop_pct: float = 2.0,
 ) -> bool:
-    """최고점 대비 일정 비율 하락 시 이익 보존을 위한 트레일링 스탑 알림."""
+    """최고점 대비 일정 비율 하락 시 이익 보존을 위한 트레일링 스탑 알림 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        return False
     pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
     # 종목 유형별 맞춤 수익 녹음 경고 강도 계산
     _large_codes = {'005930','000660','005380','035420','009150','051910','207940','068270'}

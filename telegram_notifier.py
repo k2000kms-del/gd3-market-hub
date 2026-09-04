@@ -11,7 +11,6 @@ telegram_notifier.py
 
 import requests
 from datetime import datetime
-import pandas as pd
 
 # 텔레그램 Bot API 기본 URL
 _TG_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
@@ -25,7 +24,7 @@ def is_allowed_notification_hours() -> bool:
         now = dt.datetime.now(kst_tz)
         
         current_time = now.time()
-        start_time = dt.time(6, 30, 0)
+        start_time = dt.time(7, 30, 0)
         end_time = dt.time(23, 30, 0)
         
         return start_time <= current_time <= end_time
@@ -34,10 +33,25 @@ def is_allowed_notification_hours() -> bool:
         return True
 
 
+def is_regular_market_hours() -> bool:
+    """KST 기준 정규장 거래 시간(평일 월~금 09:00 ~ 15:30) 여부 판별 (스캘핑/실시간 매매신호 전용)"""
+    try:
+        import datetime as dt
+        kst_tz = dt.timezone(dt.timedelta(hours=9))
+        now = dt.datetime.now(kst_tz)
+        if now.weekday() >= 5: # 주말 (토, 일)
+            return False
+        hm = now.hour * 100 + now.minute
+        return 900 <= hm <= 1530
+    except Exception as e:
+        print(f"DEBUG: is_regular_market_hours error: {e}")
+        return False
+
+
 DEFAULT_REPLY_KEYBOARD = {
     "keyboard": [
         [{"text": "💼 내 포트폴리오"}, {"text": "🔥 퀀트 TOP3 추천"}],
-        [{"text": "📊 시장 에너지 진단"}, {"text": "🛠️ 시스템 재점검 & 즉시 복구"}]
+        [{"text": "📊 시장 에너지 진단"}, {"text": "❓ 명령어 도움말"}]
     ],
     "resize_keyboard": True,
     "is_persistent": True
@@ -157,7 +171,10 @@ def notify_buy_signal(
     stop_price: float = None,
     allocation_pct: str = "10~15%",
 ) -> bool:
-    """매수 신호 발생 시 액션 가이드 포함 텔레그램 알림 전송."""
+    """매수 신호 발생 시 액션 가이드 포함 텔레그램 알림 전송 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 매수 신호 전송을 차단합니다.")
+        return False
     time_str = timestamp.strftime("%H:%M")
     
     tgt = target_price or (price * 1.035)
@@ -195,7 +212,10 @@ def notify_exit_signal(
     pnl_pct: float = None,
     holding_minutes: float = None,
 ) -> bool:
-    """매도/청산 신호 발생 시 알림 전송."""
+    """매도/청산 신호 발생 시 알림 전송 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 청산 신호 전송을 차단합니다.")
+        return False
     time_str = timestamp.strftime("%H:%M")
 
     pnl_line = ""
@@ -230,7 +250,10 @@ def notify_add_signal(
     rsi: float = None,
     vwap: float = None,
 ) -> bool:
-    """스마트 추가 매수(물타기/불타기) 신호 알림."""
+    """스마트 추가 매수(물타기/불타기) 신호 알림 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 추가 매수 신호 전송을 차단합니다.")
+        return False
     time_str = timestamp.strftime("%H:%M")
     text = (
         f"🟠 <b>[스마트 추가 매수]</b> {name} ({ticker})\n"
@@ -255,7 +278,10 @@ def notify_fall_buy_signal(
     rsi: float = None,
     vwap: float = None,
 ) -> bool:
-    """낙폭과대 반등 매수 신호 알림."""
+    """낙폭과대 반등 매수 신호 알림 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 낙폭과대 반등매수 알림 전송을 차단합니다.")
+        return False
     time_str = timestamp.strftime("%H:%M")
     text = (
         f"🔵 <b>[낙폭과대 반등 매수]</b> {name} ({ticker})\n"
@@ -287,12 +313,15 @@ def notify_quant_top_pick(
     stop_price: float = None,
     market_energy_status: str = "",  # ⚡ 시장 에너지 상태 (8개년 백테스트 기반 필터)
 ) -> bool:
-    """당일 퀀트 80점 이상 강력 매수 종목 포착 알림.
+    """당일 퀀트 80점 이상 강력 매수 종목 포착 알림 (정규장 09:00~15:30 전용).
     
     ※ 8개년(2019~2026) 95,410건 백테스트 검증 결과:
        - 강세 에너지 구간 진입 시 승률 43.9% / PF 1.19
        - 위험 에너지 구간 진입 시 승률 35.1% / PF 0.80 (무시할 경우 손실 확률 65%)
     """
+    if not is_regular_market_hours():
+        print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 퀀트 매수 포착 알림 전송을 차단합니다.")
+        return False
     tgt = target_price or (price * 1.05)
     stp = stop_price or (price * 0.97)
 
@@ -341,7 +370,9 @@ def notify_smart_stop_loss(
     entry_price: float,
     stop_price: float,
 ) -> bool:
-    """보유 종목 손절가 하향 이탈 시 스마트 경고 알림."""
+    """보유 종목 손절가 하향 이탈 시 스마트 경고 알림 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        return False
     pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
     text = (
         f"🚨 <b>[손절선 이탈 긴급 경고]</b> {name} ({ticker})\n"
@@ -459,7 +490,7 @@ def notify_morning_briefing(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>오늘도 원칙 매매로 든든한 수익 거두십시오! 화이팅입니다! 🚀</i>"
     )
-    return _send(token, chat_id, text, force_send=True)
+    return _send(token, chat_id, text)
 
 
 
@@ -517,7 +548,7 @@ def notify_closing_briefing(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>오늘 하루도 정말 수고 많으셨습니다. 편안한 저녁 되십시오! 🌙</i>"
     )
-    return _send(token, chat_id, text, force_send=True)
+    return _send(token, chat_id, text)
 
 
 def notify_daily_buy_signal(
@@ -612,7 +643,9 @@ def notify_trailing_stop(
     highest_price: float,
     drop_pct: float = 2.0,
 ) -> bool:
-    """최고점 대비 일정 비율 하락 시 이익 보존을 위한 트레일링 스탑 알림."""
+    """최고점 대비 일정 비율 하락 시 이익 보존을 위한 트레일링 스탑 알림 (정규장 09:00~15:30 전용)."""
+    if not is_regular_market_hours():
+        return False
     pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
     # 종목 유형별 맞춤 수익 녹음 경고 강도 계산
     _large_codes = {'005930','000660','005380','035420','009150','051910','207940','068270'}
@@ -668,76 +701,18 @@ def notify_market_crash_warning(
 # 6. 🤖 텔레그램 양방향 대화형 비서 (명령어 처리기)
 # ─────────────────────────────────────────────────────────────
 
-def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn=None) -> bool:
+def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn) -> bool:
     """사용자가 보낸 텔레그램 메시지 또는 원터치 버튼 탭을 파싱하고 즉시 응답."""
-    def _safe_context(q_type, **kw):
-        if callable(context_fn):
-            try:
-                res = context_fn(q_type, **kw)
-                if res:
-                    return res
-            except Exception as _ce:
-                print(f"DEBUG: context_fn error for {q_type}: {_ce}")
-        import os, pandas as pd
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        if q_type == 'system_check':
-            q_name, q_code, q_score = "우리금융지주", "316140", 96.0
-            q_rows = 70
-            try:
-                q_p = os.path.join(base_dir, "data", "df_quant_final.csv")
-                if os.path.exists(q_p):
-                    df_q_tmp = pd.read_csv(q_p)
-                    if not df_q_tmp.empty and 'Name' in df_q_tmp.columns:
-                        q_name = str(df_q_tmp.iloc[0]['Name'])
-                        q_code = str(df_q_tmp.iloc[0]['Code']).split('.')[0].strip().zfill(6)
-                        q_score = float(df_q_tmp.iloc[0].get('Calibrated_Score', df_q_tmp.iloc[0].get('Score', 96.0)))
-                        q_rows = len(df_q_tmp)
-            except Exception:
-                pass
-            return {
-                'top1_name': q_name,
-                'top1_code': q_code,
-                'top1_score': q_score,
-                'kospi_close': 6579.48,
-                'quant_rows': q_rows,
-                'morning_status': '✅ 정상 발송 완료',
-                'closing_status': '✅ 정상 발송 완료'
-            }
-        elif q_type == 'quant_top':
-            try:
-                q_p = os.path.join(base_dir, "data", "df_quant_final.csv")
-                m_p = os.path.join(base_dir, "data", "df_full_market.csv")
-                if os.path.exists(q_p) and os.path.exists(m_p):
-                    df_q_tmp = pd.read_csv(q_p)
-                    df_m_tmp = pd.read_csv(m_p)
-                    df_q_tmp['Code'] = df_q_tmp['Code'].astype(str).str.split('.').str[0].str.strip().str.zfill(6)
-                    df_m_tmp['Code'] = df_m_tmp['Code'].astype(str).str.split('.').str[0].str.strip().str.zfill(6)
-                    merged = df_q_tmp.merge(df_m_tmp[['Code', 'Close', 'ChagesRatio']], on='Code', how='left')
-                    res = []
-                    for _, r in merged.head(3).iterrows():
-                        res.append({
-                            'code': str(r.get('Code', '')),
-                            'name': str(r.get('Name', '')),
-                            'score': float(r.get('Calibrated_Score', r.get('Total_Score', r.get('Score', 80)))),
-                            'price': float(r.get('Close', 0)),
-                            'chg': float(r.get('ChagesRatio', 0))
-                        })
-                    if res:
-                        return res
-            except Exception:
-                pass
-        return None
-
     clean_cmd = cmd_text.strip().replace('/', '').lower()
     
     # 1. 퀀트 추천 (우선 매칭: '추천', '퀀트', 'quant', 'top3', 'top')
     if any(k in clean_cmd for k in ['추천', '퀀트', 'quant', 'top3', 'top']) or clean_cmd == 'q':
         # 퀀트 TOP 3 추천
-        top_stocks = _safe_context('quant_top') or []
+        top_stocks = context_fn('quant_top') or []
         if not top_stocks:
             return _send(token, chat_id, "⚠️ 현재 추천 종목 데이터를 집계 중입니다. 잠시 후 다시 시도해주세요.", force_send=True)
 
-        from chart_image_generator import generate_stock_chart_image, fetch_stock_chart_df
+        from chart_image_generator import generate_stock_chart_image
 
         sent_any_photo = False
         for rank, s in enumerate(top_stocks[:3], 1):
@@ -775,19 +750,11 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
                 f"<i>⚡ GD 3.0 실시간 캔들 차트 (MA5 / MA20 / VWAP)</i>"
             )
 
-            # 차트 이미지 생성 시도 (context_fn 실패 시 fetch_stock_chart_df로 100% 자동 폴백)
+            # 차트 이미지 생성 시도
             chart_bytes = None
             try:
-                chart_df = None
-                if context_fn:
-                    try:
-                        chart_df = context_fn('stock_chart', code=code)
-                    except Exception:
-                        chart_df = None
-                if not isinstance(chart_df, pd.DataFrame) or chart_df.empty:
-                    chart_df = fetch_stock_chart_df(code)
-
-                if isinstance(chart_df, pd.DataFrame) and not chart_df.empty:
+                chart_df = context_fn('stock_chart', code=code)
+                if chart_df is not None and not chart_df.empty:
                     chart_bytes = generate_stock_chart_image(
                         code=code,
                         name=name,
@@ -812,7 +779,7 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
 
     # 2. 포트폴리오 현황 ('포트', 'portfolio', '보유')
     elif any(k in clean_cmd for k in ['포트', 'portfolio', '보유']) or clean_cmd == 'p':
-        ctx = _safe_context('portfolio') or {}
+        ctx = context_fn('portfolio') or {}
         items = ctx.get('items', [])
         tot_eval = ctx.get('tot_eval', 0)
         tot_pnl = ctx.get('tot_pnl', 0)
@@ -840,7 +807,7 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
 
     # 3. 시장 에너지 진단 ('시장', 'market', '에너지', '코스피')
     elif any(k in clean_cmd for k in ['시장', 'market', '에너지', '코스피', '지수']) or clean_cmd == 'm':
-        mkt = _safe_context('market') or {}
+        mkt = context_fn('market') or {}
         reply = (
             f"📊 <b>[실시간 시장 & 자산배분 브리핑]</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -852,33 +819,7 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
         )
         return _send(token, chat_id, reply, force_send=True)
 
-    # 4. 시스템 재점검 & 즉시 복구 ('재점검', '점검', '복구', '상태', 'fix', 'check', 'status')
-    elif any(k in clean_cmd for k in ['재점검', '점검', '복구', '시스템', '상태', 'fix', 'check', 'status']) or clean_cmd == 's':
-        sys_info = _safe_context('system_check') or {}
-        q_top1_name = sys_info.get('top1_name', '우리금융지주')
-        q_top1_code = sys_info.get('top1_code', '316140')
-        q_top1_score = sys_info.get('top1_score', 96.0)
-        ks_val = sys_info.get('kospi_close', 6579.48)
-        m_status = sys_info.get('morning_status', '✅ 정상 발송 완료')
-        c_status = sys_info.get('closing_status', '✅ 정상 발송 완료')
-        q_rows = sys_info.get('quant_rows', 70)
-        
-        reply = (
-            f"🛠️ <b>[GD 3.0 시스템 양방향 재점검 & 자가복구 결과]</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"📡 <b>텔레그램 통신</b>: 🟢 <b>양방향 정상 (0.1초 즉각 응답)</b>\n"
-            f"📊 <b>시장 종합 데이터</b>: 🟢 KOSPI <b>{ks_val:,.2f}pt</b> (동기화 완료)\n"
-            f"🎯 <b>실시간 퀀트 분석</b>: 🟢 <b>{q_rows}개 전종목 연산 완료</b>\n"
-            f"🏆 <b>현재 퀀트 1위</b>: <b>{q_top1_name} ({q_top1_code}) {q_top1_score:.1f}점</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"☀️ <b>당일 모닝 브리핑</b>: {m_status}\n"
-            f"🌙 <b>당일 마감 브리핑</b>: {c_status}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ <b>자가 진단 및 큐 동기화가 성공적으로 완료되었습니다!</b>"
-        )
-        return _send(token, chat_id, reply, force_send=True)
-
-    # 5. 도움말 ('도움말', 'help', 'start', '시작', '안내')
+    # 4. 도움말 ('도움말', 'help', 'start', '시작', '안내')
     elif any(k in clean_cmd for k in ['도움말', 'help', 'start', '시작', '안내']) or clean_cmd == 'h':
         reply = (
             f"🤖 <b>[GD 3.0 텔레그램 스마트 비서]</b>\n"
@@ -887,7 +828,7 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
             f"• <b>[💼 내 포트폴리오]</b> : 보유종목 실시간 손익\n"
             f"• <b>[🔥 퀀트 TOP3 추천]</b> : 80점 이상 유망 종목\n"
             f"• <b>[📊 시장 에너지 진단]</b> : KOSPI 국면 & 권장 비중\n"
-            f"• <b>[🛠️ 시스템 재점검 & 즉시 복구]</b> : 시스템 자가 진단 & 동기화\n"
+            f"• <b>[❓ 명령어 도움말]</b> : 비서 메뉴얼\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"<i>💬 궁금하신 종목 질문(예: '삼성전자 목표가?')을 입력하셔도 AI가 답변합니다!</i>"
         )

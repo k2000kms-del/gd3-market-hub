@@ -1997,34 +1997,35 @@ def run_portfolio_background_scanner():
                 except Exception as c_err:
                     print(f"DEBUG: Closing briefing error: {c_err}")
 
-            # ── 🌟 3) 퀀트 TOP 유망주 (80점 이상) 신호 스캔 ──
-            try:
-                df_q_scan = _sync_and_load_csv_raw('df_quant_final.csv')
-                if not df_q_scan.empty and 'Code' in df_q_scan.columns:
-                    score_col = 'Total_Score_Adj' if 'Total_Score_Adj' in df_q_scan.columns else ('Total_Score' if 'Total_Score' in df_q_scan.columns else None)
-                    if score_col:
-                        top_q = df_q_scan[df_q_scan[score_col] >= 80.0].head(3)
-                        for _, q_row in top_q.iterrows():
-                            q_code = str(q_row['Code']).split('.')[0].strip().zfill(6)
-                            if q_code not in _quant_picks_sent_codes and q_code not in portfolio_data:
-                                q_name = str(q_row.get('Name', q_code))
-                                q_score = float(q_row[score_col])
-                                q_close = float(q_row.get('Close', 0))
-                                q_chg = float(q_row.get('ChagesRatio', 0))
-                                if q_close > 0:
-                                    notify_quant_top_pick(
-                                        token=tg_token, chat_id=tg_chat_id,
-                                        ticker=q_code, name=q_name,
-                                        score=q_score, price=q_close, chg_rate=q_chg,
-                                        target_price=q_close * 1.05,
-                                        stop_price=q_close * 0.97
-                                    )
-                                    _quant_picks_sent_codes.add(q_code)
-            except Exception as q_err:
-                print(f"DEBUG: Quant picks scan error: {q_err}")
+            # ── 🌟 3) 퀀트 TOP 유망주 (80점 이상) 신호 스캔 (정규장 09:00~15:30 중에만 동작) ──
+            if is_weekday and (900 <= hm <= 1530):
+                try:
+                    df_q_scan = _sync_and_load_csv_raw('df_quant_final.csv')
+                    if not df_q_scan.empty and 'Code' in df_q_scan.columns:
+                        score_col = 'Total_Score_Adj' if 'Total_Score_Adj' in df_q_scan.columns else ('Total_Score' if 'Total_Score' in df_q_scan.columns else None)
+                        if score_col:
+                            top_q = df_q_scan[df_q_scan[score_col] >= 80.0].head(3)
+                            for _, q_row in top_q.iterrows():
+                                q_code = str(q_row['Code']).split('.')[0].strip().zfill(6)
+                                if q_code not in _quant_picks_sent_codes and q_code not in portfolio_data:
+                                    q_name = str(q_row.get('Name', q_code))
+                                    q_score = float(q_row[score_col])
+                                    q_close = float(q_row.get('Close', 0))
+                                    q_chg = float(q_row.get('ChagesRatio', 0))
+                                    if q_close > 0:
+                                        notify_quant_top_pick(
+                                            token=tg_token, chat_id=tg_chat_id,
+                                            ticker=q_code, name=q_name,
+                                            score=q_score, price=q_close, chg_rate=q_chg,
+                                            target_price=q_close * 1.05,
+                                            stop_price=q_close * 0.97
+                                        )
+                                        _quant_picks_sent_codes.add(q_code)
+                except Exception as q_err:
+                    print(f"DEBUG: Quant picks scan error: {q_err}")
 
-            # ── 💼 4) 보유 포트폴리오 실시간 스캘핑/트레일링스탑/손절선 스캔 ──
-            if portfolio_data:
+            # ── 💼 4) 보유 포트폴리오 실시간 스캘핑/트레일링스탑/손절선 스캔 (정규장 09:00~15:30 중에만 동작) ──
+            if portfolio_data and is_weekday and (900 <= hm <= 1530):
                 def scan_single_stock(code, info):
                     try:
                         name = info.get('name', code)
@@ -2059,8 +2060,9 @@ def run_portfolio_background_scanner():
                                 )
 
                             if 'DateTime' in df_scan.columns and not pd.isna(last_row.get('DateTime')):
-                                time_diff = (pd.Timestamp.now() - pd.to_datetime(last_row['DateTime'])).total_seconds()
-                                if time_diff < 300: # 5분 이내
+                                candle_dt = pd.to_datetime(last_row['DateTime'])
+                                time_diff = (now_dt.replace(tzinfo=None) - candle_dt).total_seconds()
+                                if 0 <= time_diff < 300: # 5분 이내 실시간 캔들만 유효
                                     rsi_v = float(last_row['RSI_14']) if 'RSI_14' in last_row and pd.notna(last_row.get('RSI_14')) else None
                                     vwap_v = float(last_row['VWAP']) if 'VWAP' in last_row and pd.notna(last_row.get('VWAP')) else None
                                     if last_row.get('Buy_Signal') == True:
@@ -5338,14 +5340,18 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 'df_5min':   df_5min,
             }
 
-    # --- 라이브 신호 로거 연동 (최근 1분봉 캔들의 신호 감지, 캐시 히트/미스 모두 실행) ---
-    if not df_1min.empty and len(df_1min) > 1:
+    # --- 라이브 신호 로거 연동 (최근 1분봉 캔들의 신호 감지, 정규장 09:00~15:30 중에만 실행) ---
+    _now_kst_ui = datetime.now(_KST)
+    _is_mkt_open_ui = (
+        _now_kst_ui.weekday() < 5 and (900 <= (_now_kst_ui.hour * 100 + _now_kst_ui.minute) <= 1530)
+    )
+    if _is_mkt_open_ui and not df_1min.empty and len(df_1min) > 1:
         last_row = df_1min.iloc[-1]
-        # 이미 지난 과거가 아닌 최근 1~2분 이내의 신호만 로깅 (실시간성 확보)
-
+        # 이미 지난 과거가 아닌 최근 5분 이내의 실시간 신호만 로깅
         if 'DateTime' in df_1min.columns and pd.notna(last_row.get('DateTime')):
-            time_diff = (pd.Timestamp.now() - pd.to_datetime(last_row['DateTime'])).total_seconds()
-            if time_diff < 300:  # 5분 이내의 최신 신호만 로깅 허용
+            candle_dt = pd.to_datetime(last_row['DateTime'])
+            time_diff = (_now_kst_ui.replace(tzinfo=None) - candle_dt).total_seconds()
+            if 0 <= time_diff < 300:  # 5분 이내의 최신 신호만 로깅 허용
                 _rsi_val  = float(last_row['RSI_14']) if 'RSI_14'  in last_row and pd.notna(last_row.get('RSI_14'))  else None
                 _vwap_val = float(last_row['VWAP'])   if 'VWAP'    in last_row and pd.notna(last_row.get('VWAP'))    else None
                 if last_row.get('Buy_Signal') == True:
