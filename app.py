@@ -4950,7 +4950,7 @@ with col_left:
                 showlegend=False
             ), row=1, col=1)
 
-            fig_p5.update_yaxes(title_text='지수', row=1, col=1, tickformat=',.1f', showgrid=True, gridcolor='rgba(255,255,255,0.08)')
+            fig_p5.update_yaxes(title_text='지수', row=1, col=1, tickformat=',.1f', showgrid=True, gridcolor='rgba(255,255,255,0.08)', fixedrange=True)
         else:
             fig_p5.add_annotation(text='1분봉 데이터 수신 중...', row=1, col=1, showarrow=False, font=dict(color='#888', size=11))
 
@@ -4971,7 +4971,7 @@ with col_left:
                         hovertemplate=f'<b>{name}</b>: %{{y:+,.0f}}억원'
                     ), row=2, col=1)
             fig_p5.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.25)', row=2, col=1)
-            fig_p5.update_yaxes(title_text='수급(억)', row=2, col=1, showgrid=True, gridcolor='rgba(255,255,255,0.08)')
+            fig_p5.update_yaxes(title_text='수급(억)', row=2, col=1, showgrid=True, gridcolor='rgba(255,255,255,0.08)', fixedrange=True)
 
         fig_p5.update_layout(
             height=475,
@@ -4980,6 +4980,7 @@ with col_left:
             xaxis_rangeslider_visible=False,
             xaxis2_rangeslider_visible=False,
             hovermode='x unified',
+            dragmode=False, # 태블릿 터치 시 줌/이동 방지 (Lock)
             legend=dict(
                 orientation='h', 
                 x=1.0, 
@@ -4998,7 +4999,8 @@ with col_left:
                 ],
                 showgrid=True,
                 gridcolor='rgba(255,255,255,0.08)',
-                showticklabels=False
+                showticklabels=False,
+                fixedrange=True # X축 확대/축소 잠금
             ),
             xaxis2=dict(
                 type='date',
@@ -5009,8 +5011,11 @@ with col_left:
                 tickformat='%H:%M',
                 dtick=1800000,
                 showgrid=True,
-                gridcolor='rgba(255,255,255,0.08)'
-            )
+                gridcolor='rgba(255,255,255,0.08)',
+                fixedrange=True # X축 확대/축소 잠금
+            ),
+            yaxis=dict(fixedrange=True),
+            yaxis2=dict(fixedrange=True)
         )
 
     elif p5_view == "🕯️ 1분봉":
@@ -5032,6 +5037,7 @@ with col_left:
             xaxis_rangeslider_visible=False,
             hovermode='x unified',
             showlegend=False,
+            dragmode=False, # 태블릿 터치 시 줌/이동 방지 (Lock)
             font=dict(family='malgun gothic, nanum gothic, sans-serif'),
             xaxis=dict(
                 type='date',
@@ -5042,9 +5048,12 @@ with col_left:
                 tickformat='%H:%M',
                 dtick=1800000,
                 showgrid=True,
-                gridcolor='rgba(255,255,255,0.08)'
-            )
+                gridcolor='rgba(255,255,255,0.08)',
+                fixedrange=True # X축 확대/축소 잠금
+            ),
+            yaxis=dict(fixedrange=True) # Y축 확대/축소 잠금
         )
+        fig_p5.update_yaxes(fixedrange=True)
 
     else:  # 📊 수급선만 단독 보기
         fig_p5 = go.Figure()
@@ -5070,6 +5079,7 @@ with col_left:
             margin=dict(t=5, b=10, l=10, r=10),
             hovermode='x unified',
             showlegend=True,
+            dragmode=False, # 태블릿 터치 시 줌/이동 방지 (Lock)
             legend=dict(
                 orientation='h', 
                 x=0.98, 
@@ -5089,11 +5099,14 @@ with col_left:
                 tickformat='%H:%M',
                 dtick=1800000,
                 showgrid=True,
-                gridcolor='rgba(255,255,255,0.08)'
-            )
+                gridcolor='rgba(255,255,255,0.08)',
+                fixedrange=True # X축 확대/축소 잠금
+            ),
+            yaxis=dict(fixedrange=True) # Y축 확대/축소 잠금
         )
+        fig_p5.update_yaxes(fixedrange=True)
 
-    st.plotly_chart(fig_p5, width='stretch', config={'displayModeBar': False})
+    st.plotly_chart(fig_p5, width='stretch', config={'displayModeBar': False, 'scrollZoom': False})
 
 # ── [Panel 6] 상승률 리더 (Horizontal Bar) ───────────────────
 with col_right:
@@ -6855,6 +6868,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     paper_bgcolor='#0d1b2a',
                     hovermode='x unified',
                     hoverlabel=dict(bgcolor='#0f172a', font_size=12, font_family='malgun gothic'),
+                    dragmode=False, # 태블릿 터치 시 줌/이동 방지 (Lock)
                     # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
                     yaxis3=dict(
                         overlaying='y',
@@ -6865,7 +6879,8 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         tickformat=',d',
                         showticklabels=True,
                         range=y_range_5m,
-                        nticks=18 # 눈금을 더 촘촘히 표시
+                        nticks=18, # 눈금을 더 촘촘히 표시
+                        fixedrange=True # 우측 눈금 확대/축소 잠금
                     )
                 )
                 price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
@@ -6890,6 +6905,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     tickfont=dict(size=10, color='#888'),
                     range=y_range_5m,
                     nticks=18,             # 눈금을 더 촘촘히 표시
+                    fixedrange=True,       # Y축 확대/축소 비활성화
                     row=1, col=1
                 )
                 # 거래량 Y축 스케일 조정 (장 시작 첫 봉의 비정상적인 거래량으로 인해 나머지 막대가 안 보이는 현상 방지)
@@ -6902,6 +6918,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     tickfont=dict(size=10, color='#888'),
                     gridcolor='rgba(255,255,255,0.06)', 
                     range=[0, vol_max_5m], 
+                    fixedrange=True,       # 거래량 Y축 확대/축소 비활성화
                     row=2, col=1
                 )
                 
@@ -6909,6 +6926,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     type='category',
                     gridcolor='rgba(255,255,255,0.04)',
                     showticklabels=False,
+                    fixedrange=True,       # X축 확대/축소 비활성화
                     row=1, col=1
                 )
                 fig_5m.update_xaxes(
@@ -6918,10 +6936,11 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     tickmode='array',
                     tickvals=display_tick_vals_5m,
                     ticktext=display_tick_texts_5m,
+                    fixedrange=True,       # X축 확대/축소 비활성화
                     row=2, col=1
                 )
                 
-                st.plotly_chart(fig_5m, width='stretch', config={'displayModeBar': False})
+                st.plotly_chart(fig_5m, width='stretch', config={'displayModeBar': False, 'scrollZoom': False})
             else:
                 st.info("⚠️ 5분봉 데이터를 불러올 수 없거나 휴장일입니다.")
 
@@ -7152,6 +7171,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     paper_bgcolor='#0d1b2a',
                     hovermode='x unified',
                     hoverlabel=dict(bgcolor='#0f172a', font_size=12, font_family='malgun gothic'),
+                    dragmode=False, # 태블릿 터치 시 줌/이동 방지 (Lock)
                     # 우측 가격축을 활성화하기 위한 overlay yaxis3 정의 (좌측 Y축과 범위 동기화)
                     yaxis3=dict(
                         overlaying='y',
@@ -7162,7 +7182,8 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         tickformat=',d',
                         showticklabels=True,
                         range=y_range_1m,
-                        nticks=18 # 눈금을 더 촘촘히 표시
+                        nticks=18, # 눈금을 더 촘촘히 표시
+                        fixedrange=True # 우측 눈금 확대/축소 잠금
                     )
                 )
                 price_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
@@ -7187,6 +7208,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     tickfont=dict(size=10, color='#888'),
                     range=y_range_1m,
                     nticks=18,             # 눈금을 더 촘촘히 표시
+                    fixedrange=True,       # Y축 확대/축소 비활성화
                     row=1, col=1
                 )
                 # 거래량 Y축 스케일 조정 (장 시작 첫 봉의 비정상적인 거래량으로 인해 나머지 막대가 안 보이는 현상 방지)
@@ -7199,6 +7221,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     tickfont=dict(size=10, color='#888'),
                     gridcolor='rgba(255,255,255,0.06)', 
                     range=[0, vol_max_1m], 
+                    fixedrange=True,       # 거래량 Y축 확대/축소 비활성화
                     row=2, col=1
                 )
                 
@@ -7206,6 +7229,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     type='category',
                     gridcolor='rgba(255,255,255,0.04)',
                     showticklabels=False,
+                    fixedrange=True,       # X축 확대/축소 비활성화
                     row=1, col=1
                 )
                 fig_1m.update_xaxes(
@@ -7215,10 +7239,11 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     tickmode='array',
                     tickvals=display_tick_vals_1m,
                     ticktext=display_tick_texts_1m,
+                    fixedrange=True,       # X축 확대/축소 비활성화
                     row=2, col=1
                 )
                 
-                st.plotly_chart(fig_1m, width='stretch', config={'displayModeBar': False})
+                st.plotly_chart(fig_1m, width='stretch', config={'displayModeBar': False, 'scrollZoom': False})
             else:
                 st.info("⚠️ 1분봉 데이터를 불러올 수 없거나 휴장일입니다.")
 
