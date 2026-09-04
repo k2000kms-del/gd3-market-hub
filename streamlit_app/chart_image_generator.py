@@ -179,3 +179,17 @@ def _generate_fallback_card(name: str, code: str, score: float = None) -> bytes:
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
+
+
+def fetch_stock_chart_df(code: str) -> pd.DataFrame:
+    """종목 일봉 캔들 데이터 조회 (FinanceDataReader 기반 최근 120일)"""
+    try:
+        import FinanceDataReader as fdr
+        start = (pd.Timestamp.now() - pd.Timedelta(days=120)).strftime('%Y-%m-%d')
+        df = fdr.DataReader(str(code).zfill(6), start)
+        if df is not None and not df.empty:
+            return df
+    except Exception as e:
+        print(f"DEBUG: fetch_stock_chart_df error for {code}: {e}")
+    return pd.DataFrame()
+

@@ -26,54 +26,6 @@ def _setup_korean_font():
 
 _setup_korean_font()
 
-def fetch_stock_chart_df(code: str, count: int = 50) -> pd.DataFrame:
-    """
-    네이버 금융 차트 API를 통해 전세계 어디서나(해외 클라우드, 태블릿, PC) 
-    IP 차단 없이 50~60일 OHLCV 캔들스틱 데이터를 0.05초 만에 즉시 가져옵니다.
-    """
-    import xml.etree.ElementTree as ET
-    import requests
-    try:
-        c_str = str(code).zfill(6)
-        url = f"https://fchart.stock.naver.com/sise.nhn?symbol={c_str}&timeframe=day&count={count}&requestType=0"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            root = ET.fromstring(res.text)
-            items = root.findall(".//item")
-            data = []
-            for it in items:
-                parts = it.get("data", "").split("|")
-                if len(parts) >= 6:
-                    data.append({
-                        'Date': parts[0],
-                        'Open': float(parts[1]),
-                        'High': float(parts[2]),
-                        'Low': float(parts[3]),
-                        'Close': float(parts[4]),
-                        'Volume': float(parts[5])
-                    })
-            if data:
-                return pd.DataFrame(data)
-    except Exception as e:
-        print(f"DEBUG: fetch_stock_chart_df error for {code}: {e}")
-
-    # 2차 시도: FDR 로컬 백업
-    try:
-        import FinanceDataReader as fdr
-        from datetime import datetime as _dt, timedelta as _td
-        start_date = (_dt.now() - _td(days=90)).strftime('%Y-%m-%d')
-        df = fdr.DataReader(code, start=start_date)
-        if not df.empty:
-            df.reset_index(inplace=True)
-            df.rename(columns={'Date': 'DateTime'}, inplace=True)
-            return df.tail(count)
-    except Exception:
-        pass
-
-    return pd.DataFrame()
-
-
 def generate_stock_chart_image(code: str, name: str, df: pd.DataFrame, score: float = None, target_price: float = None, stop_loss: float = None) -> bytes:
     """
     주식 OHLCV 데이터프레임을 기반으로 다크 테마 캔들스틱 & 거래량 차트 이미지(PNG 바이너리)를 생성합니다.
@@ -227,3 +179,17 @@ def _generate_fallback_card(name: str, code: str, score: float = None) -> bytes:
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
+
+
+def fetch_stock_chart_df(code: str) -> pd.DataFrame:
+    """종목 일봉 캔들 데이터 조회 (FinanceDataReader 기반 최근 120일)"""
+    try:
+        import FinanceDataReader as fdr
+        start = (pd.Timestamp.now() - pd.Timedelta(days=120)).strftime('%Y-%m-%d')
+        df = fdr.DataReader(str(code).zfill(6), start)
+        if df is not None and not df.empty:
+            return df
+    except Exception as e:
+        print(f"DEBUG: fetch_stock_chart_df error for {code}: {e}")
+    return pd.DataFrame()
+

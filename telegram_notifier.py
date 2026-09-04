@@ -707,14 +707,73 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
     
     # 1. 퀀트 추천 (우선 매칭: '추천', '퀀트', 'quant', 'top3', 'top')
     if any(k in clean_cmd for k in ['추천', '퀀트', 'quant', 'top3', 'top']) or clean_cmd == 'q':
-        # 퀀트 TOP 3 추천
-        top_stocks = context_fn('quant_top') or []
+        top_stocks = []
+        try:
+            top_stocks = context_fn('quant_top') or []
+        except Exception as _q_err:
+            print(f"DEBUG: context_fn quant_top error: {_q_err}")
+
+        # 폴백: context_fn 실패 시 data/df_quant_final.csv 직접 조회
+        if not top_stocks:
+            try:
+                import os, pandas as pd
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+                m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
+                if os.path.exists(q_path):
+                    df_q_fb = pd.read_csv(q_path)
+                    df_m_fb = pd.read_csv(m_path) if os.path.exists(m_path) else pd.DataFrame()
+                    if not df_q_fb.empty and 'Total_Score' in df_q_fb.columns:
+                        m_s = df_q_fb['Total_Score'].mean()
+                        s_s = df_q_fb['Total_Score'].std()
+                        if s_s > 0:
+                            df_q_fb['Total_Score_Adj'] = ((df_q_fb['Total_Score'] - m_s) / s_s * 25.0 + 50.0).clip(0, 100).round(1)
+                        else:
+                            df_q_fb['Total_Score_Adj'] = df_q_fb['Total_Score']
+                        
+                        keywords = ['KODEX', 'TIGER', 'ACE', 'KBSTAR', 'SOL', 'ARIRANG', 'HANARO', 'KOSEF', 'PLUS', 'TIMEFOLIO', '스팩', 'ETN', '선물', '인버스', '레버리지']
+                        df_q_fb = df_q_fb[~df_q_fb['Name'].astype(str).str.contains('|'.join(keywords), case=False, regex=True)].copy()
+                        df_q_fb['Code'] = df_q_fb['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                        if not df_m_fb.empty and 'Code' in df_m_fb.columns:
+                            df_m_fb['Code'] = df_m_fb['Code'].astype(str).str.zfill(6)
+                            df_q_fb = df_q_fb.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
+                            df_q_fb = df_q_fb.merge(df_m_fb[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
+                        top_sub = df_q_fb.sort_values(['Total_Score_Adj', 'Amount'], ascending=[False, False]).head(3)
+                        for _, r in top_sub.iterrows():
+                            top_stocks.append({
+                                'code': str(r['Code']).zfill(6),
+                                'name': str(r.get('Name', '')),
+                                'score': float(r.get('Total_Score_Adj', r.get('Total_Score', 0))),
+                                'price': float(r.get('Close', 0)),
+                                'chg': float(r.get('ChagesRatio', 0))
+                            })
+            except Exception as _fb_err:
+                print(f"DEBUG: quant_top fallback error: {_fb_err}")
+
         if not top_stocks:
             return _send(token, chat_id, "⚠️ 현재 추천 종목 데이터를 집계 중입니다. 잠시 후 다시 시도해주세요.", force_send=True)
 
+        # 1차 요약 헤더 브리핑 전송 (즉각적인 사용자 피드백 체감)
+        header_lines = []
+        for rank, s in enumerate(top_stocks[:3], 1):
+            s_name = s.get('name', '')
+            s_price = s.get('price', 0)
+            s_chg = s.get('chg', 0)
+            s_score = s.get('score', 0)
+            chg_sign = "+" if s_chg >= 0 else ""
+            header_lines.append(f"<b>{rank}위: {s_name}</b> ({s_price:,.0f}원 | {chg_sign}{s_chg:.2f}% | <b>{s_score:.1f}점</b>)")
+        
+        overview_msg = (
+            f"🔥 <b>[GD 3.0 실시간 퀀트 TOP 3 추천 유망주]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            + "\n".join(header_lines) + "\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>💡 종목별 상세 목표가/손절가 및 캔들 차트를 아래로 전송합니다.</i>"
+        )
+        _send(token, chat_id, overview_msg, force_send=True)
+
         from chart_image_generator import generate_stock_chart_image
 
-        sent_any_photo = False
         for rank, s in enumerate(top_stocks[:3], 1):
             cur_p = s.get('price', 0)
             chg = s.get('chg', 0)
@@ -750,11 +809,20 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
                 f"<i>⚡ GD 3.0 실시간 캔들 차트 (MA5 / MA20 / VWAP)</i>"
             )
 
-            # 차트 이미지 생성 시도
+            # 차트 이미지 생성 시도 (안전 타임아웃 및 폴백)
             chart_bytes = None
             try:
-                chart_df = context_fn('stock_chart', code=code)
-                if chart_df is not None and not chart_df.empty:
+                chart_df = None
+                try:
+                    chart_df = context_fn('stock_chart', code=code)
+                except Exception:
+                    pass
+                import pandas as _pd
+                if not isinstance(chart_df, _pd.DataFrame) or chart_df.empty:
+                    from chart_image_generator import fetch_stock_chart_df
+                    chart_df = fetch_stock_chart_df(code)
+                
+                if isinstance(chart_df, _pd.DataFrame) and not chart_df.empty:
                     chart_bytes = generate_stock_chart_image(
                         code=code,
                         name=name,
@@ -768,7 +836,6 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
 
             if chart_bytes:
                 _send_photo(token, chat_id, chart_bytes, caption=caption, force_send=True)
-                sent_any_photo = True
             else:
                 _send(token, chat_id, caption, force_send=True)
             

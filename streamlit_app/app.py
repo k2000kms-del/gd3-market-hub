@@ -1537,12 +1537,21 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
                 return results
 
             elif query_type == 'stock_chart':
-                target_code = code or kwargs.get('code', '')
+                target_code = str(code or kwargs.get('code', '')).zfill(6)
                 if target_code:
-                    from chart_image_generator import fetch_stock_chart_df
-                    df_c = fetch_stock_chart_df(target_code)
-                    if not df_c.empty:
-                        return df_c
+                    try:
+                        from chart_image_generator import fetch_stock_chart_df
+                        df_c = fetch_stock_chart_df(target_code)
+                        if df_c is not None and not df_c.empty:
+                            return df_c
+                    except Exception:
+                        pass
+                    try:
+                        df_c = _get_stock_history_raw(target_code)
+                        if df_c is not None and not df_c.empty:
+                            return df_c
+                    except Exception:
+                        pass
 
             elif query_type == 'market':
                 ks_c, ks_m, _ = get_kospi_ma20()
@@ -1650,13 +1659,32 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
                         for upd in res_data['result']:
                             upd_id = upd.get('update_id', 0)
                             last_update_id = max(last_update_id, upd_id)
+                            
+                            # 1) 일반 텍스트 메시지 및 리플라이 키보드 버튼 수신
                             msg = upd.get('message', {})
                             chat = msg.get('chat', {})
                             sender_id = str(chat.get('id', ''))
                             text = msg.get('text', '')
+
+                            # 2) 인라인 키보드(Inline Button) 콜백 쿼리 수신
+                            cb = upd.get('callback_query')
+                            if cb:
+                                sender_id = str(cb.get('from', {}).get('id', sender_id))
+                                text = cb.get('data', text)
+                                cb_id = cb.get('id')
+                                if cb_id and tg_token:
+                                    try:
+                                        ack_url = f"https://api.telegram.org/bot{tg_token}/answerCallbackQuery?callback_query_id={cb_id}"
+                                        urllib.request.urlopen(urllib.request.Request(ack_url, headers={'User-Agent': 'Mozilla/5.0'}), timeout=3)
+                                    except Exception:
+                                        pass
                             
-                            if text:
-                                print(f"DEBUG: 텔레그램 수신 [{sender_id}]: {text}")
+                            if text and sender_id:
+                                try:
+                                    safe_log = text.encode('ascii', 'replace').decode('ascii')
+                                    print(f"DEBUG: 텔레그램 수신 [{sender_id}]: {safe_log}")
+                                except Exception:
+                                    pass
                                 process_incoming_command(
                                     token=tg_token,
                                     chat_id=sender_id,
@@ -1667,7 +1695,10 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
                 # 409 Conflict 등은 잠시 대기
                 time.sleep(1)
         except Exception as e:
-            print(f"DEBUG: Telegram listener daemon error: {e}")
+            try:
+                print(f"DEBUG: Telegram listener daemon error: {e}")
+            except Exception:
+                pass
         time.sleep(1)
 
 def run_portfolio_background_scanner():
