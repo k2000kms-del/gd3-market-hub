@@ -1456,6 +1456,8 @@ _daily_signals_sent_codes = set()
 
 _briefing_sent_date = ""
 _morning_briefing_sent = False
+_opening_gap_sent = False
+_weekend_briefing_sent = False
 _closing_briefing_sent = False
 _crash_warning_sent = False
 _quant_picks_sent_codes = set()
@@ -1707,7 +1709,7 @@ def run_portfolio_background_scanner():
     정기 브리핑, 트레일링 스탑, 스마트 손절가, 실시간 매매 신호를 발송하는 스마트 데몬.
     """
     global _daily_signals_sent_date, _daily_signals_sent_codes
-    global _briefing_sent_date, _morning_briefing_sent, _closing_briefing_sent, _crash_warning_sent, _quant_picks_sent_codes
+    global _briefing_sent_date, _morning_briefing_sent, _opening_gap_sent, _weekend_briefing_sent, _closing_briefing_sent, _crash_warning_sent, _quant_picks_sent_codes
     
     from datetime import timezone, timedelta
     _KST = timezone(timedelta(hours=9))
@@ -1723,6 +1725,8 @@ def run_portfolio_background_scanner():
             if _briefing_sent_date != today_str:
                 _briefing_sent_date = today_str
                 _morning_briefing_sent = False
+                _opening_gap_sent = False
+                _weekend_briefing_sent = False
                 _closing_briefing_sent = False
                 _crash_warning_sent = False
                 _quant_picks_sent_codes.clear()
@@ -1749,7 +1753,8 @@ def run_portfolio_background_scanner():
                     notify_buy_signal, notify_exit_signal, notify_add_signal, notify_fall_buy_signal,
                     notify_daily_buy_signal, notify_daily_sell_signal,
                     notify_quant_top_pick, notify_smart_stop_loss, notify_trailing_stop, notify_market_crash_warning,
-                    notify_morning_briefing, notify_closing_briefing
+                    notify_morning_briefing, notify_closing_briefing,
+                    notify_opening_gap_check, notify_weekend_briefing, build_dynamic_portfolio_morning_guide
                 )
             except ImportError:
                 time.sleep(15)
@@ -1868,12 +1873,8 @@ def run_portfolio_background_scanner():
                         "└ 💡 <b>오늘의 행동 요령</b>: 오전 장 초반(09:30~10:30)에 주도주 공략 후 오후에는 여유롭게 관망!"
                     )
 
-                    port_morning_lines = [
-                        "🟢 <b>[수익 챙기기]</b> 삼성전자 / LS ELECTRIC: 아침에 주가 오를 때 <b>절반(50%) 먼저 팔아서 수익 확정!</b>",
-                        "🟡 <b>[평단 낮추기 대기]</b> NAVER / 삼성전기: 09:30 이후 주가 안 빠지는 것 보고 분할 매수 준비",
-                        "🔴 <b>[비중 줄이기]</b> LS머티리얼즈 / 티엠씨: 추가 매수 금지! 장중 반등 줄 때 일부 팔아서 현금 만들기"
-                    ]
-                    port_morning_text = "\n".join(port_morning_lines)
+                    df_m_for_port = _sync_and_load_csv_raw('df_full_market.csv')
+                    port_morning_text = build_dynamic_portfolio_morning_guide(portfolio_data, df_m_for_port)
 
                     ks_c, ks_m, _ = get_kospi_ma20()
                     regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"
@@ -1897,6 +1898,29 @@ def run_portfolio_background_scanner():
                     _morning_briefing_sent = True
                 except Exception as b_err:
                     print(f"DEBUG: Morning briefing error: {b_err}")
+
+            # ── 🕒 1-2) 개장 10분 시초가 갭 진위 판별 1줄 속보 (09:08 ~ 09:15 평일) ──
+            if is_weekday and 908 <= hm <= 915 and not _opening_gap_sent:
+                try:
+                    notify_opening_gap_check(
+                        token=tg_token, chat_id=tg_chat_id
+                    )
+                    _opening_gap_sent = True
+                except Exception as gap_err:
+                    print(f"DEBUG: Opening gap check error: {gap_err}")
+
+            # ── ☕ 1-3) 주말 스페셜 브리핑 & 차주 핵심 전략 (09:00 ~ 09:15 주말/휴장일) ──
+            if not is_weekday and 900 <= hm <= 915 and not _weekend_briefing_sent:
+                try:
+                    df_m_for_wk = _sync_and_load_csv_raw('df_full_market.csv')
+                    port_wk_text = build_dynamic_portfolio_morning_guide(portfolio_data, df_m_for_wk)
+                    notify_weekend_briefing(
+                        token=tg_token, chat_id=tg_chat_id,
+                        portfolio_text=port_wk_text
+                    )
+                    _weekend_briefing_sent = True
+                except Exception as wk_err:
+                    print(f"DEBUG: Weekend briefing error: {wk_err}")
 
             # ── 🌙 2) 장마감 브리핑 (15:40 ~ 15:55 평일) ──
             if is_weekday and 1540 <= hm <= 1555 and not _closing_briefing_sent and portfolio_data:
@@ -4050,12 +4074,13 @@ try:
                     f"🧭 <b>오늘 국장 시초가 전망</b>: {kr_open_forecast}"
                 )
 
-                port_morning_lines = [
-                    "🟢 <b>삼성전자/LS ELECTRIC (수익권)</b>: 시초가 갭상승 슈팅 시 1차 익절 목표가에서 50% 분할 익절 대기",
-                    "🟡 <b>NAVER/삼성전기 (소액 관망)</b>: 09:30 이후 20일선 지지 확인 후 1회 스마트 평단 낮추기 타점 대기",
-                    "🔴 <b>LS머티리얼즈/티엠씨 (비중과다)</b>: 추가매수 절대 금지 & 장중 반등 시 비중 축소로 현금 회수"
-                ]
-                port_morning_text = "\n".join(port_morning_lines)
+                try:
+                    from telegram_notifier import build_dynamic_portfolio_morning_guide
+                    df_m_for_port_del = _sync_and_load_csv_raw('df_full_market.csv')
+                    port_del_data = _load_portfolio_raw() or {}
+                    port_morning_text = build_dynamic_portfolio_morning_guide(port_del_data, df_m_for_port_del)
+                except Exception:
+                    port_morning_text = ""
 
                 ks_c, ks_m, _ = get_kospi_ma20()
                 regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"

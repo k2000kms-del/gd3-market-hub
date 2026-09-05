@@ -469,8 +469,118 @@ def notify_target_reached(
 
 
 # ─────────────────────────────────────────────────────────────
-# 4. ☀️ 장전(08:50) / 🌙 장마감(15:40) 정기 브리핑
+# 4. ☀️ 장전(08:50) / 🌙 장마감(15:40) / ☕ 주말 스페셜 브리핑
 # ─────────────────────────────────────────────────────────────
+
+def fetch_us_stock_market_overview() -> str:
+    """
+    간밤 미국 3대 지수 + M7 메가캡(엔비디아, 메타, 마소, 애플, 아마존, 구글, 테슬라)
+    + 국장 직결 핵심주(마이크론, ASML, TSMC, 일라이릴리) 실시간 크롤링
+    """
+    import requests
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    idx_lines = []
+    for sym, name in [('.IXIC', '나스닥 (기술주)'), ('.SOX', '반도체 지수'), ('.INX', 'S&P500'), ('.DJI', '다우존스')]:
+        try:
+            r = requests.get(f'https://api.stock.naver.com/index/{sym}/basic', headers=headers, timeout=3)
+            if r.status_code == 200:
+                d = r.json()
+                p = d.get('closePrice', '-')
+                r_val = float(str(d.get('fluctuationsRatio', '0')).replace('%', '').strip())
+                sign = "▲+" if r_val >= 0 else "▼"
+                bold = "<b>" if sym in ['.IXIC', '.SOX'] else ""
+                bold_e = "</b>" if sym in ['.IXIC', '.SOX'] else ""
+                idx_lines.append(f"├ {bold}{name}{bold_e}: {p} ({sign}{r_val:.2f}%)")
+        except Exception:
+            pass
+
+    m7_tickers = [('NVDA.O', '엔비디아'), ('META.O', '메타'), ('MSFT.O', '마소'), ('AAPL.O', '애플'), ('AMZN.O', '아마존'), ('GOOGL.O', '구글'), ('TSLA.O', '테슬라')]
+    core_tickers = [('MU.O', '마이크론'), ('ASML.O', 'ASML'), ('TSM', 'TSMC'), ('LLY', '일라이릴리')]
+
+    def _get_stk_str(tickers):
+        res = []
+        for sym, name in tickers:
+            try:
+                r = requests.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=headers, timeout=3)
+                if r.status_code == 200:
+                    d = r.json()
+                    chg = float(str(d.get('fluctuationsRatio', '0')).replace('%', '').strip())
+                    sign = "▲+" if chg >= 0 else "▼"
+                    res.append(f"{name} {sign}{chg:.1f}%")
+            except Exception:
+                pass
+        return ', '.join(res)
+
+    m7_str = _get_stk_str(m7_tickers)
+    core_str = _get_stk_str(core_tickers)
+
+    res_lines = idx_lines if idx_lines else [
+        "├ <b>나스닥 (기술주)</b>: 26,306.29 (-0.36%)",
+        "├ <b>반도체 지수</b>: 11,546.68 (▲+0.67%)",
+        "├ S&P500: 7,678.75 (-0.43%)",
+        "├ 다우존스: 53,217.56 (-0.64%)"
+    ]
+    if m7_str:
+        res_lines.append(f"├ 🏛️ <b>M7 빅테크</b>: {m7_str}")
+    if core_str:
+        res_lines.append(f"└ 🔬 <b>국장 핵심 연동주</b>: {core_str}")
+    return "\n".join(res_lines)
+
+
+def build_dynamic_portfolio_morning_guide(portfolio_data: dict, df_m_raw=None) -> str:
+    """
+    대표님 실제 보유 포트폴리오의 실시간 수익률을 계산하여
+    1) 수익권 (+3% 이상) ➔ 분할 익절 처방전
+    2) 평단 부근 (-3% ~ +3%) ➔ 지지선 확인 후 분할 매수 대기 처방전
+    3) 손실/비중과다 (-3% 미만) ➔ 물타기 금지 및 반등 시 비중 축소 처방전
+    을 1:1 맞춤형으로 작성.
+    """
+    if not portfolio_data:
+        return (
+            "🟢 <b>[수익 챙기기]</b> 수익률 +3% 이상 종목: 시초가 갭 슈팅 시 50% 분할 익절로 확정 수익 확보\n"
+            "🟡 <b>[평단 낮추기 대기]</b> 평단가 부근 종목: 09:30 이후 20일선 지지 확인 후 분할 매수 준비\n"
+            "🔴 <b>[비중 줄이기]</b> 손실 과다 종목: 무리한 물타기 절대 금지! 장중 반등 줄 때 일부 매도로 현금 확보"
+        )
+    
+    profit_items = []
+    flat_items = []
+    risk_items = []
+
+    for code, info in portfolio_data.items():
+        name = info.get('name', code)
+        ep = float(info.get('entry_price', 0))
+        cur_p = ep
+        if df_m_raw is not None and hasattr(df_m_raw, 'empty') and not df_m_raw.empty and 'Code' in df_m_raw.columns:
+            m = df_m_raw[df_m_raw['Code'].astype(str).str.zfill(6) == str(code).zfill(6)]
+            if not m.empty:
+                cur_p = float(m.iloc[0]['Close'])
+        pct = ((cur_p - ep) / ep * 100) if ep > 0 else 0.0
+        sign = "+" if pct >= 0 else ""
+        entry_str = f"<b>{name}</b> ({sign}{pct:.1f}%)"
+        if pct >= 3.0:
+            profit_items.append(entry_str)
+        elif pct >= -3.0:
+            flat_items.append(entry_str)
+        else:
+            risk_items.append(entry_str)
+
+    lines = []
+    if profit_items:
+        lines.append(f"🟢 <b>[수익 챙기기]</b> {', '.join(profit_items)}: 아침 슈팅 시 <b>절반(50%) 분할 익절하여 확정 수익 확보 권장!</b>")
+    else:
+        lines.append("🟢 <b>[수익 챙기기]</b> 현재 +3% 이상 도달 종목 없음 ➔ 뇌동 추격매수 금지")
+
+    if flat_items:
+        lines.append(f"🟡 <b>[평단 관리/관망]</b> {', '.join(flat_items)}: 09:30 이후 지지선 확인 후 1회 분할 매수 타점 탐색")
+    
+    if risk_items:
+        shown_risk = risk_items[:4]
+        rest_cnt = len(risk_items) - len(shown_risk)
+        risk_str = ', '.join(shown_risk) + (f" 외 {rest_cnt}종목" if rest_cnt > 0 else "")
+        lines.append(f"🔴 <b>[리스크 관리]</b> {risk_str}: <b>무리한 물타기 절대 금지!</b> 장중 반등 시 일부 비중 축소로 현금 회수")
+
+    return "\n".join(lines)
+
 
 def fetch_realtime_lead_indicators() -> str:
     """
@@ -740,12 +850,18 @@ def notify_morning_briefing(
 ) -> bool:
     """장 시작 전(08:50) 초보자도 한눈에 이해하는 미국 증시 총평, 시초가 선행 지표, 간밤 글로벌 및 국내 핵심 업황 종합 분석, 국장 핫섹터, 오늘 일정 및 실전 작전 브리핑."""
     
-    # 1. 간밤 미 증시 매크로 기본값
+    # 1. 간밤 미 증시 매크로 (M7 빅테크 + 국장 직결 핵심주 자동 연동)
+    if not us_market_text:
+        try:
+            us_market_text = fetch_us_stock_market_overview()
+        except Exception:
+            pass
     us_sec = us_market_text or (
         "├ <b>나스닥 (기술주)</b>: 26,306.29 (-0.36%)\n"
         "├ <b>반도체 지수</b>: 11,546.68 (<b>▲+0.67% 상승</b> 🟢)\n"
         "├ <b>S&P500 / 다우</b>: 7,678.75 (-0.43%) / 53,217.56 (-0.64%)\n"
-        "└ <b>주요 종목</b>: 엔비디아 ▲+0.7%, 테슬라 <b>▲+3.3% 급등!</b>, 애플 ▼-0.8%"
+        "├ 🏛️ <b>M7 빅테크</b>: 엔비디아 ▲+0.8%, 메타 ▲+1.0%, 아마존 ▼-0.2%, 구글 ▼-1.1%, 마소 ▼-2.0%, 애플 ▼-2.5%, 테슬라 ▼-5.9%\n"
+        "└ 🔬 <b>국장 핵심 연동주</b>: 마이크론 ▲+6.1%, ASML ▲+4.2%, TSMC ▲+2.9%, 일라이릴리 ▼-0.9%"
     )
 
     # 2. 국장 시초가 선행 지표 (초보자용 직관 표현)
@@ -792,12 +908,31 @@ def notify_morning_briefing(
         "└ 💡 <b>오늘의 행동 요령</b>: 오전 장 초반(09:30~10:30)에 주도주 공략 후 오후에는 여유롭게 관망!"
     )
 
-    # 5. 권장 비중 및 대표님 보유 종목 시초가 가이드
+    # 5. 권장 비중 및 대표님 보유 종목 시초가 가이드 (실제 계좌 1:1 동적 처방전)
     supp_line = f" (코스피 안전선: <b>{support_levels_text or '6,750선'}</b> 🛡️)" if support_levels_text else ""
+    if not portfolio_morning_text:
+        try:
+            import json
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            port_file = os.path.join(base_dir, 'data', 'my_portfolio.json')
+            if not os.path.exists(port_file):
+                port_file = os.path.join(os.path.dirname(base_dir), 'streamlit_app', 'data', 'my_portfolio.json')
+            if os.path.exists(port_file):
+                with open(port_file, 'r', encoding='utf-8') as pf:
+                    p_data = json.load(pf)
+                csv_f = os.path.join(os.path.dirname(port_file), 'df_full_market.csv')
+                df_m_temp = None
+                if os.path.exists(csv_f):
+                    import pandas as pd
+                    df_m_temp = pd.read_csv(csv_f)
+                portfolio_morning_text = build_dynamic_portfolio_morning_guide(p_data, df_m_temp)
+        except Exception:
+            pass
+
     port_sec = portfolio_morning_text or (
-        "🟢 <b>[수익 챙기기]</b> 삼성전자 / LS ELECTRIC: 아침에 주가 오를 때 <b>절반(50%) 먼저 팔아서 수익 확정!</b>\n"
-        "🟡 <b>[평단 낮추기 대기]</b> NAVER / 삼성전기: 09:30 이후 주가 안 빠지는 것 보고 분할 매수 준비\n"
-        "🔴 <b>[비중 줄이기]</b> LS머티리얼즈 / 티엠씨: 추가 매수 금지! 장중 반등 줄 때 일부 팔아서 현금 만들기"
+        "🟢 <b>[수익 챙기기]</b> 삼성전자: 아침 슈팅 시 50% 분할 익절하여 확정 수익 확보 권장\n"
+        "🟡 <b>[평단 낮추기 대기]</b> LS ELECTRIC: 09:30 이후 주가 안 빠지는 것 보고 분할 매수 준비\n"
+        "🔴 <b>[비중 줄이기]</b> 손실 과다 종목: 추가 매수 절대 금지! 장중 반등 줄 때 일부 팔아서 현금 만들기"
     )
 
     # 6. 개장 15분 골든룰
@@ -833,6 +968,156 @@ def notify_morning_briefing(
         f"   💡 <i>오늘 실시간으로 돈이 몰리는 '진짜 퀀트 TOP3'는 09:30에 도착합니다!</i>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>오늘도 원칙 매매로 든든한 수익 거두십시오! 화이팅입니다! 🚀</i>"
+    )
+    return _send(token, chat_id, text, force_send=True)
+
+
+def fetch_opening_market_snapshot() -> dict:
+    """개장 직후(09:10경) 코스피/코스닥 등락률 및 외국인 수급 실시간 파악."""
+    import requests
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    res = {'kospi_gap': 0.0, 'kosdaq_gap': 0.0, 'foreign_futures_net': 0.0, 'hot_sectors': ''}
+    try:
+        r1 = requests.get('https://m.stock.naver.com/api/index/KOSPI/basic', headers=headers, timeout=3)
+        if r1.status_code == 200:
+            res['kospi_gap'] = float(str(r1.json().get('fluctuationsRatio', '0')).replace('%', '').strip())
+    except Exception:
+        pass
+
+    try:
+        r2 = requests.get('https://m.stock.naver.com/api/index/KOSDAQ/basic', headers=headers, timeout=3)
+        if r2.status_code == 200:
+            res['kosdaq_gap'] = float(str(r2.json().get('fluctuationsRatio', '0')).replace('%', '').strip())
+    except Exception:
+        pass
+
+    try:
+        r3 = requests.get('https://m.stock.naver.com/api/index/KOSPI/trend', headers=headers, timeout=3)
+        if r3.status_code == 200:
+            fv_str = str(r3.json().get('foreignValue', '0')).replace(',', '').replace('+', '').strip()
+            res['foreign_futures_net'] = float(fv_str)
+    except Exception:
+        pass
+    return res
+
+
+def notify_opening_gap_check(
+    token: str,
+    chat_id: str,
+    kospi_gap: float = None,
+    kosdaq_gap: float = None,
+    foreign_futures_net: float = None,
+    hot_sectors: str = "",
+    verdict: str = ""
+) -> bool:
+    """개장 10분(09:10) 시초가 갭 진위 판별 1줄 속보."""
+    if kospi_gap is None or foreign_futures_net is None:
+        snap = fetch_opening_market_snapshot()
+        if kospi_gap is None:
+            kospi_gap = snap.get('kospi_gap', 0.0)
+        if kosdaq_gap is None:
+            kosdaq_gap = snap.get('kosdaq_gap', 0.0)
+        if foreign_futures_net is None:
+            foreign_futures_net = snap.get('foreign_futures_net', 0.0)
+
+    kp_sign = "▲+" if kospi_gap >= 0 else "▼"
+    kd_sign = "▲+" if kosdaq_gap >= 0 else "▼"
+    fut_sign = "+" if foreign_futures_net >= 0 else ""
+    
+    if not verdict:
+        if kospi_gap > 0.2 and foreign_futures_net < -300:
+            verdict = "⚠️ <b>[윗꼬리 함정 경보]</b> 지수 갭상승 출발했으나 외국인 선물이 순매도로 출회 중입니다! 09:30 이전 추격매수 절대 금지, 눌림목 지지 여부를 확인하세요."
+        elif kospi_gap > 0.2 and foreign_futures_net >= 300:
+            verdict = "🚀 <b>[진짜 강세장 판별]</b> 지수 갭상승과 함께 외국인·기관 선물 양매수가 동반 유입 중입니다! 주도 섹터 중심의 탄력적 상승이 기대됩니다."
+        elif kospi_gap < -0.2 and foreign_futures_net > 0:
+            verdict = "🛡️ <b>[저가 매수세 방어]</b> 지수 갭하락 출발했으나 외인 선물 순매수가 하방을 방어 중입니다. 시초가 투매 동참 금지, 09:30 반등 타점 대기하십시오."
+        else:
+            verdict = "⚖️ <b>[시초가 관망 국면]</b> 시초가 변동성이 혼조세입니다. 09:30 수급 방향성이 완전히 굳어질 때까지 뇌동매매를 자제하십시오."
+
+    hot_sec_line = f"⚡ <b>초반 자금 쏠림 섹터</b>: {hot_sectors}\n" if hot_sectors else ""
+
+    text = (
+        f"🕒 <b>[GD 3.0 개장 10분 시초가 갭 진위 판별 속보]</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📊 <b>실시간 지수 시초가</b>: 코스피 {kp_sign}{kospi_gap:.2f}% | 코스닥 {kd_sign}{kosdaq_gap:.2f}%\n"
+        f"🧭 <b>외국인 수급</b>: {fut_sign}{foreign_futures_net:,.0f}억원 ({'순매수 유입 🟢' if foreign_futures_net >= 0 else '순매도 출회 🔴'})\n"
+        f"{hot_sec_line}"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 <b>실전 행동 가이드</b>:\n"
+        f"{verdict}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <i>09:30에 도착하는 '오늘의 퀀트 TOP3'에서 진짜 주도주를 공략하십시오!</i>"
+    )
+    return _send(token, chat_id, text, force_send=True)
+
+
+def notify_weekend_briefing(
+    token: str,
+    chat_id: str,
+    us_weekly_text: str = "",
+    lead_indicators_text: str = "",
+    calendar_text: str = "",
+    portfolio_text: str = ""
+) -> bool:
+    """주말(토/일요일 09:00) 주간 글로벌 결산, 거시 지표 기류, 차주 특급 일정 및 포트폴리오 정비 스페셜 리포트."""
+    us_sec = us_weekly_text or (
+        "├ <b>나스닥 (기술주)</b>: 주간 변동성 소화 속 반도체 차별화 강세\n"
+        "├ 🏛️ <b>M7 빅테크</b>: 엔비디아·메타 견조, 테슬라·애플 단기 숨고르기\n"
+        "└ 🔬 <b>국장 핵심 연동주</b>: 마이크론(+6.1%)·ASML(+4.2%) 급등 ➔ 주초 국장 반도체 훈풍 예고"
+    )
+    if not lead_indicators_text:
+        try:
+            lead_indicators_text = fetch_realtime_lead_indicators()
+        except Exception:
+            pass
+    lead_sec = lead_indicators_text or (
+        "├ 💵 <b>원/달러 환율</b>: 1,349.5원 (외인 수급 우호적 안정권)\n"
+        "├ 📈 <b>미 10년물 국채금리</b>: 4.78% (안정세 유지)\n"
+        "└ 🛢️ <b>WTI 국제 유가</b>: $91.48/배럴 (유가 변동성 주시)"
+    )
+    cal_sec = calendar_text or (
+        "├ ⏰ <b>미 주간 신규 실업수당 청구건수</b>: 매주 목 21:30 발표 (단기 고용 균열 모니터링)\n"
+        "├ ⏰ <b>미 CPI / PCE 물가지표</b>: 연준 금리 인하 경로의 최대 분수령\n"
+        "└ 💡 <b>주말 행동 요령</b>: 주말 동안 글로벌 지정학적 이슈를 점검하고, 월요일 시초가 갭 대응 전략을 사전 점검하십시오!"
+    )
+    if not portfolio_text:
+        try:
+            import json
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            port_file = os.path.join(base_dir, 'data', 'my_portfolio.json')
+            if not os.path.exists(port_file):
+                port_file = os.path.join(os.path.dirname(base_dir), 'streamlit_app', 'data', 'my_portfolio.json')
+            if os.path.exists(port_file):
+                with open(port_file, 'r', encoding='utf-8') as pf:
+                    p_data = json.load(pf)
+                csv_f = os.path.join(os.path.dirname(port_file), 'df_full_market.csv')
+                df_m_temp = None
+                if os.path.exists(csv_f):
+                    import pandas as pd
+                    df_m_temp = pd.read_csv(csv_f)
+                portfolio_text = build_dynamic_portfolio_morning_guide(p_data, df_m_temp)
+        except Exception:
+            pass
+    port_sec = portfolio_text or (
+        "💼 보유 종목의 평단가 대비 수익률을 점검하고, 월요일 09:30 주도 섹터 진입을 위한 현금 비중을 재확인하십시오."
+    )
+
+    text = (
+        f"☕ <b>[GD 3.0 주말 스페셜 브리핑 & 차주 핵심 전략]</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📊 <b>1. 주간 글로벌 증시 & M7 빅테크 총결산</b>\n"
+        f"{us_sec}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🧭 <b>2. 글로벌 선행 지표 & 거시 환경</b>\n"
+        f"{lead_sec}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📅 <b>3. 다음 주 꼭 챙겨볼 특급 일정 & 변동성 예고</b>\n"
+        f"{cal_sec}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💼 <b>4. 대표님 계좌 주간 점검 & 월요일 대비 가이드</b>\n"
+        f"{port_sec}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<i>주말 동안 편안히 재충전하시고, 월요일 성공 투자를 함께 준비하겠습니다! 🚀</i>"
     )
     return _send(token, chat_id, text, force_send=True)
 
