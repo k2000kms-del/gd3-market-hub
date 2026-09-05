@@ -1794,7 +1794,8 @@ def run_portfolio_background_scanner():
                     us_stk_lines = []
                     nvda_chg = 0.0
                     tsla_chg = 0.0
-                    for sym, name in [('NVDA.O', '엔비디아'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
+                    mu_chg = 0.0
+                    for sym, name in [('NVDA.O', '엔비디아'), ('MU.O', '마이크론'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
                         try:
                             r_s = req.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=h_headers, timeout=3)
                             if r_s.status_code == 200:
@@ -1803,6 +1804,7 @@ def run_portfolio_background_scanner():
                                 c_r_str = str(d_s.get('fluctuationsRatio', '0')).replace('%', '').strip()
                                 c_r = float(c_r_str)
                                 if 'NVDA' in sym: nvda_chg = c_r
+                                if 'MU' in sym: mu_chg = c_r
                                 if 'TSLA' in sym: tsla_chg = c_r
                                 sign = "▲+" if c_r >= 0 else "▼"
                                 us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
@@ -1825,8 +1827,12 @@ def run_portfolio_background_scanner():
 
                     kr_beneficiaries = []
                     kr_cautions = []
-                    if sox_chg > 0.3 or nvda_chg > 0.5:
-                        kr_beneficiaries.append("<b>반도체·AI</b> (엔비디아/반도체 지수 훈풍 ➔ SK하이닉스, 삼성전자 갭상승 견인 유력)")
+                    if sox_chg > 0.3 or nvda_chg > 0.5 or mu_chg > 0.5:
+                        semi_reasons = []
+                        if nvda_chg > 0: semi_reasons.append(f"엔비디아 +{nvda_chg:.1f}%")
+                        if mu_chg > 0: semi_reasons.append(f"마이크론 +{mu_chg:.1f}%")
+                        reason_str = f" ({'/'.join(semi_reasons)} 훈풍 ➔ SK하이닉스·삼성전자 갭상승 유력)" if semi_reasons else " (미 반도체 훈풍 ➔ 삼전/닉스 갭상승 유력)"
+                        kr_beneficiaries.append(f"<b>반도체·AI 메모리</b>{reason_str}")
                     else:
                         kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
 
@@ -3985,7 +3991,8 @@ try:
                 us_stk_lines = []
                 nvda_chg = 0.0
                 tsla_chg = 0.0
-                for sym, name in [('NVDA.O', '엔비디아'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
+                mu_chg = 0.0
+                for sym, name in [('NVDA.O', '엔비디아'), ('MU.O', '마이크론'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
                     try:
                         r_s = req.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=h_headers, timeout=3)
                         if r_s.status_code == 200:
@@ -3994,6 +4001,7 @@ try:
                             c_r_str = str(d_s.get('fluctuationsRatio', '0')).replace('%', '').strip()
                             c_r = float(c_r_str)
                             if 'NVDA' in sym: nvda_chg = c_r
+                            if 'MU' in sym: mu_chg = c_r
                             if 'TSLA' in sym: tsla_chg = c_r
                             sign = "+" if c_r >= 0 else ""
                             us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
@@ -4006,8 +4014,12 @@ try:
 
                 kr_beneficiaries = []
                 kr_cautions = []
-                if sox_chg > 0.3 or nvda_chg > 0.5:
-                    kr_beneficiaries.append("<b>반도체/HBM·AI 소부장</b> (필라델피아 반도체/엔비디아 훈풍 ➔ SK하이닉스, 삼성전자 갭상승 견인 유력)")
+                if sox_chg > 0.3 or nvda_chg > 0.5 or mu_chg > 0.5:
+                    semi_reasons = []
+                    if nvda_chg > 0: semi_reasons.append(f"엔비디아 +{nvda_chg:.1f}%")
+                    if mu_chg > 0: semi_reasons.append(f"마이크론 +{mu_chg:.1f}%")
+                    reason_str = f" ({'/'.join(semi_reasons)} 훈풍 ➔ SK하이닉스·삼성전자 갭상승 견인 유력)" if semi_reasons else " (필라델피아 반도체 훈풍 ➔ 삼전/닉스 갭상승 유력)"
+                    kr_beneficiaries.append(f"<b>반도체/HBM·AI 메모리</b>{reason_str}")
                 else:
                     kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
 
