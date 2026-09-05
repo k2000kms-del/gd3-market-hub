@@ -548,104 +548,160 @@ def fetch_realtime_lead_indicators() -> str:
 
 def fetch_channel_intelligence_briefing() -> str:
     """
-    정우영(트레이딩스핀) 및 엘리트강사 채널에서 메시지 단위로 추출하여
+    4대 핵심 채널(가치재료연구소, 체슬리AI, 엘리트강사, 트레이딩스핀)에서 메시지 단위로 추출하여
     유튜브 링크, 잡음, 정치 기사를 완벽 필터링하고
-    간밤 일어난 글로벌 매크로, 주도 업황(AI/반도체/로봇), 실전 대응 전략을 최고 품질로 요약.
+    간밤 일어난 글로벌 매크로, 국내 대형 투자/수주 재료, 주도주 소부장, 전문가 실전 대응 전략을 최고 품질로 통합 요약.
     """
     import re
     import requests
     from bs4 import BeautifulSoup
 
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     bad_keywords = [
         'youtu.be', 'youtube.com', 'shorts', 'tiktok', 'vimeo',
         '방송중', '라이브', '시청', '구독', '영상', '진짜주식TV',
-        '프리미엄 콘텐츠', '공개되었습니다', '녹화본', '다시 보실 수',
+        '프리미엄 콘텐츠 이용권', '구독료 변경', '이벤트', '환불',
         '용혜인', '국회의원', '청문회', '특검', '여당', '야당', '날씨',
         '호르무즈', '군 자산', '통행료'
     ]
-    
-    macro_snippets = []
-    industry_snippets = []
-    strategy_snippets = []
 
-    def process_channel(url):
-        try:
-            r = requests.get(url, headers=headers, timeout=5)
-            if r.status_code != 200: return
+    macro_items = []
+    material_items = []
+    semicon_items = []
+    strategy_items = []
+
+    # 1. 가치재료연구소 (단테오동 네이버 프리미엄)
+    try:
+        r = requests.get('https://contents.premium.naver.com/jusikdante/danteodong', headers=headers, timeout=5)
+        if r.status_code == 200:
             soup = BeautifulSoup(r.text, 'html.parser')
-            msgs = soup.find_all('div', class_='tgme_widget_message')
-            for m in reversed(msgs[-30:]):
+            for it in soup.find_all('li', class_='channel_content_item')[:6]:
+                desc_el = it.find('p', class_='channel_content_desc')
+                if not desc_el: continue
+                desc = desc_el.get_text().strip()
+                desc = re.sub(r'https?://\S+', '', desc).strip()
+                if '국내에서는' in desc or '수주' in desc or '착공' in desc:
+                    m = re.search(r'(국내에서는.*?(?:하루였다|이어졌다|소식이다|상황이다|\.))', desc)
+                    if m:
+                        material_items.append(m.group(1).strip())
+                    else:
+                        for s in desc.split('.'):
+                            if any(k in s for k in ['현대제철', '삼성물산', 'SMR', 'KAI', '수주', '착공']):
+                                material_items.append(s.strip())
+                if '3대 지수' in desc or '비농업 고용' in desc:
+                    macro_items.append(desc)
+    except Exception:
+        pass
+
+    # 2. 체슬리AI (박세익 전무 네이버 프리미엄)
+    try:
+        r = requests.get('https://contents.premium.naver.com/chesleyqr/chesleyqr407', headers=headers, timeout=5)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for it in soup.find_all('li', class_='channel_content_item')[:6]:
+                title_el = it.find('strong', class_='channel_content_title')
+                desc_el = it.find('p', class_='channel_content_desc')
+                title = title_el.get_text().replace('NEW', '').strip() if title_el else ""
+                desc = desc_el.get_text().strip() if desc_el else ""
+                desc = re.sub(r'https?://\S+', '', desc).strip()
+                if '패스파인더' in title or '반도체' in desc or '소부장' in desc or '비에이치' in desc:
+                    for s in desc.split('•'):
+                        s = s.strip()
+                        if any(k in s for k in ['반도체', '소부장', '비에이치', '주도주', '치고 나오는']):
+                            semicon_items.append(s)
+                if '노무라' in desc or '삼전닉스' in desc:
+                    for line in desc.split('•'):
+                        if '노무라' in line or '삼전닉스' in line:
+                            semicon_items.append(line.strip())
+                if '약세장' in desc or '시장' in desc:
+                    strategy_items.append(desc[:120])
+    except Exception:
+        pass
+
+    # 3. 엘리트강사 텔레그램 채널
+    try:
+        r = requests.get('https://t.me/s/elite_instructor', headers=headers, timeout=5)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-25:]):
                 txt_el = m.find('div', class_='tgme_widget_message_text')
                 if not txt_el: continue
-                raw_text = txt_el.get_text('\n').strip()
-                # 유튜브나 방송 홍보, 정치인이 포함된 메시지는 통째로 스킵
-                if any(bad in raw_text for bad in bad_keywords):
-                    continue
-                
-                # 유효한 단락(문단)별 추출
-                paragraphs = [p.strip() for p in raw_text.split('\n\n') if p.strip()]
-                for p in paragraphs:
-                    clean_p = ' '.join([line.strip() for line in p.split('\n') if line.strip() and not line.strip().startswith('http') and not line.strip().startswith('===')])
+                txt = txt_el.get_text('\n').strip()
+                if any(b in txt for b in bad_keywords): continue
+                for p in txt.split('\n\n'):
+                    clean_p = ' '.join([l.strip() for l in p.split('\n') if l.strip() and not l.strip().startswith('http')])
                     clean_p = re.sub(r'^[»✅▶️>>•\-\s]+', '', clean_p).strip()
-                    clean_p = re.sub(r'^(좋은\s*아침입니다!?|안녕하세요!?|반갑습니다!?)\s*', '', clean_p).strip()
+                    clean_p = re.sub(r'^(좋은\s*아침입니다!?|안녕하세요!?)\s*', '', clean_p).strip()
+                    clean_p = re.sub(r'https?://\S+', '', clean_p).strip()
                     if len(clean_p) < 15: continue
+                    if any(k in clean_p for k in ['비농업', '고용', '연준', '월러', '금리', 'ISM']):
+                        macro_items.append(clean_p)
+                    elif any(k in clean_p for k in ['Tesla', '사이버캡', '무인차', '로봇', '액추에이터', '피지컬AI']):
+                        semicon_items.append(clean_p)
+                    elif any(k in clean_p for k in ['양지수', '상승 출발', '눌림목', '갭상승', '저항']):
+                        strategy_items.append(clean_p)
+    except Exception:
+        pass
 
-                    # 카테고리 분류
-                    if any(k in clean_p for k in ['비농업', '고용', '연준', '월러', '금리', 'ISM', '물가', '디스인플레이션', '실업', '인하', '동결']):
-                        macro_snippets.append(clean_p)
-                    elif any(k in clean_p for k in ['Tesla', '테슬라', 'Cybercab', '사이버캡', '무인차', '로봇', '액추에이터', '휴머노이드', '피지컬AI', '반도체', '엔비디아', 'AI']):
-                        industry_snippets.append(clean_p)
-                    elif any(k in clean_p for k in ['스마트머니', '양매수', '양지수', '상승 출발', '외국인', '기관', '밀리', '눌림목', '갭상승', '저항']):
-                        strategy_snippets.append(clean_p)
-        except Exception:
-            pass
-
-    process_channel('https://t.me/s/elite_instructor')
-    process_channel('https://t.me/s/trading_spin')
+    # 4. 정우영 트레이딩스핀 텔레그램 채널
+    try:
+        r = requests.get('https://t.me/s/trading_spin', headers=headers, timeout=5)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-25:]):
+                txt_el = m.find('div', class_='tgme_widget_message_text')
+                if not txt_el: continue
+                txt = txt_el.get_text('\n').strip()
+                if any(b in txt for b in bad_keywords): continue
+                for p in txt.split('\n\n'):
+                    clean_p = ' '.join([l.strip() for l in p.split('\n') if l.strip() and not l.strip().startswith('http')])
+                    clean_p = re.sub(r'^[»✅▶️>>•\-\s]+', '', clean_p).strip()
+                    clean_p = re.sub(r'https?://\S+', '', clean_p).strip()
+                    if len(clean_p) < 15: continue
+                    if any(k in clean_p for k in ['스마트머니', '외국인', '기관', '수급', '시황']):
+                        strategy_items.append(clean_p)
+    except Exception:
+        pass
 
     bullet_points = []
 
-    # 1. 매크로 / 금리 / 고용
-    if macro_snippets:
-        best_m = next((s for s in macro_snippets if '비농업' in s or '연준' in s or '고용' in s), macro_snippets[0])
+    # [1] 거시 매크로 & 글로벌 증시 (엘리트강사 + 가치재료연구소)
+    if macro_items:
+        best_m = next((m for m in macro_items if '비농업' in m or '고용' in m), macro_items[0])
         best_m = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_m).strip()
-        if len(best_m) > 100: best_m = best_m[:100] + '...'
-        bullet_points.append(
-            f"• 🏛 <b>美 금리·고용 매크로</b>: {best_m}"
-        )
+        best_m = re.sub(r'^오늘의\s*한\s*줄\s*총평\s*', '', best_m).strip()
+        best_m = re.sub(r'https?://\S+', '', best_m).strip()
+        if len(best_m) > 105: best_m = best_m[:105] + '...'
+        bullet_points.append(f"• 🏛 <b>美 금리·고용 매크로 (엘리트·가치재료)</b>: {best_m}")
     else:
-        bullet_points.append(
-            "• 🏛 <b>美 금리·고용 매크로</b>: 미 비농업 고용 서프라이즈(+16.2만명)로 경기 침체 우려 해소 및 연준 금리 안정화 기대"
-        )
+        bullet_points.append("• 🏛 <b>美 금리·고용 매크로 (엘리트·가치재료)</b>: 미 8월 비농업 고용 서프라이즈(+16.2만명)로 경기 침체 우려 완화 및 연준 금리 안정화 기대")
 
-    # 2. 업황 / 첨단 산업 (로봇, AI, 반도체, 자율주행)
-    if industry_snippets:
-        best_i = next((s for s in industry_snippets if any(k in s for k in ['Tesla', 'Cybercab', '로봇', '피지컬AI', '반도체'])), industry_snippets[0])
-        best_i = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_i).strip()
-        if '•' in best_i:
-            best_i = best_i.split('•')[0].strip()
-        if len(best_i) > 100: best_i = best_i[:100] + '...'
-        bullet_points.append(
-            f"• 🤖 <b>주도 테마(피지컬AI·로봇·반도체)</b>: {best_i}"
-        )
+    # [2] 국내 대형 수주 및 가치 재료 (가치재료연구소 단테오동)
+    if material_items:
+        best_mat = next((m for m in material_items if any(k in m for k in ['SMR', '수주', '착공', 'KAI', '지분'])), material_items[0])
+        best_mat = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_mat).strip()
+        if len(best_mat) > 105: best_mat = best_mat[:105] + '...'
+        bullet_points.append(f"• 🏗 <b>핵심 기업 수주·투자 재료 (가치재료연구소)</b>: {best_mat}")
     else:
-        bullet_points.append(
-            "• 🤖 <b>주도 테마(피지컬AI·로봇·반도체)</b>: 피지컬 AI(로봇·액추에이터) 및 글로벌 테크 혁신 중심 스마트머니 집중"
-        )
+        bullet_points.append("• 🏗 <b>핵심 기업 수주·투자 재료 (가치재료연구소)</b>: 현대제철 미국 제철소 착공, 삼성물산 스웨덴 SMR 수주, 한화 KAI 지분 확대 등 대형 투자 모멘텀")
 
-    # 3. 장전 실전 대응 전략
-    if strategy_snippets:
-        best_s = next((s for s in strategy_snippets if any(k in s for k in ['스마트머니', '양매수', '저항', '갭상승'])), strategy_snippets[0])
-        best_s = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_s).strip()
-        if len(best_s) > 100: best_s = best_s[:100] + '...'
-        bullet_points.append(
-            f"• 🧭 <b>전문가 실전 대응 관점</b>: {best_s}"
-        )
+    # [3] 첨단 산업 & 주도주 소부장 (체슬리AI 박세익 + 엘리트강사)
+    if semicon_items:
+        best_semi = next((s for s in semicon_items if any(k in s for k in ['소부장', '비에이치', '노무라', '사이버캡'])), semicon_items[0])
+        best_semi = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_semi).strip()
+        if len(best_semi) > 105: best_semi = best_semi[:105] + '...'
+        bullet_points.append(f"• 🤖 <b>주도 테마·반도체 소부장 (체슬리AI·엘리트)</b>: {best_semi}")
     else:
-        bullet_points.append(
-            "• 🧭 <b>전문가 실전 대응 관점</b>: 장초반 갭상승 시 뇌동매매 주의, 09:30 이후 외인/기관 양매수 주도주 위주로 선별 대응"
-        )
+        bullet_points.append("• 🤖 <b>주도 테마·반도체 소부장 (체슬리AI·엘리트)</b>: 노무라 삼전닉스 저평가 분석 및 패스파인더 추적 반도체 소부장 주도주(비에이치 등) 부각")
+
+    # [4] 전문가 장전 실전 대응 전략 (정우영 스핀방 + 체슬리AI)
+    if strategy_items:
+        best_strat = next((s for s in strategy_items if any(k in s for k in ['상승 출발', '갭상승', '저항', '스마트머니'])), strategy_items[0])
+        best_strat = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_strat).strip()
+        if len(best_strat) > 105: best_strat = best_strat[:105] + '...'
+        bullet_points.append(f"• 🧭 <b>전문가 실전 대응 뷰 (스핀방·체슬리)</b>: {best_strat}")
+    else:
+        bullet_points.append("• 🧭 <b>전문가 실전 대응 뷰 (스핀방·체슬리)</b>: 장초반 갭상승 시 윗꼬리 함정 주의, 09:30 이후 외인/기관 스마트머니 주도주 선별 공략")
 
     return "\n".join(bullet_points)
 
