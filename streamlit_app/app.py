@@ -1460,6 +1460,9 @@ _opening_gap_sent = False
 _weekend_briefing_sent = False
 _closing_briefing_sent = False
 _crash_warning_sent = False
+_vasily_signal_sent = False
+_bod_signal_sent = False
+_option_expiry_sent = False
 _quant_picks_sent_codes = set()
 
 def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str = ""):
@@ -1709,7 +1712,8 @@ def run_portfolio_background_scanner():
     정기 브리핑, 트레일링 스탑, 스마트 손절가, 실시간 매매 신호를 발송하는 스마트 데몬.
     """
     global _daily_signals_sent_date, _daily_signals_sent_codes
-    global _briefing_sent_date, _morning_briefing_sent, _opening_gap_sent, _weekend_briefing_sent, _closing_briefing_sent, _crash_warning_sent, _quant_picks_sent_codes
+    global _briefing_sent_date, _morning_briefing_sent, _opening_gap_sent, _weekend_briefing_sent, _closing_briefing_sent, _crash_warning_sent
+    global _vasily_signal_sent, _bod_signal_sent, _option_expiry_sent, _quant_picks_sent_codes
     
     from datetime import timezone, timedelta
     _KST = timezone(timedelta(hours=9))
@@ -1729,6 +1733,9 @@ def run_portfolio_background_scanner():
                 _weekend_briefing_sent = False
                 _closing_briefing_sent = False
                 _crash_warning_sent = False
+                _vasily_signal_sent = False
+                _bod_signal_sent = False
+                _option_expiry_sent = False
                 _quant_picks_sent_codes.clear()
                 with _daily_signals_sent_lock:
                     _daily_signals_sent_date = today_str
@@ -1754,7 +1761,10 @@ def run_portfolio_background_scanner():
                     notify_daily_buy_signal, notify_daily_sell_signal,
                     notify_quant_top_pick, notify_smart_stop_loss, notify_trailing_stop, notify_market_crash_warning,
                     notify_morning_briefing, notify_closing_briefing,
-                    notify_opening_gap_check, notify_weekend_briefing, build_dynamic_portfolio_morning_guide
+                    notify_opening_gap_check, notify_weekend_briefing, build_dynamic_portfolio_morning_guide,
+                    check_gd_vasily_signal, notify_gd_vasily_signal,
+                    check_gd_bod_signal, notify_gd_bod_signal,
+                    is_option_expiry_week, notify_option_expiry_briefing
                 )
             except ImportError:
                 time.sleep(15)
@@ -1899,6 +1909,19 @@ def run_portfolio_background_scanner():
                 except Exception as b_err:
                     print(f"DEBUG: Morning briefing error: {b_err}")
 
+            # ── 🌊 1-1-b) GD BOD 미국 지수 바닥 매수 신호 (08:00 ~ 08:50 평일) ──
+            if is_weekday and 800 <= hm <= 850 and not _bod_signal_sent:
+                try:
+                    bod_res = check_gd_bod_signal()
+                    if bod_res.get('active'):
+                        notify_gd_bod_signal(
+                            token=tg_token, chat_id=tg_chat_id,
+                            signal_data=bod_res
+                        )
+                        _bod_signal_sent = True
+                except Exception as bod_err:
+                    print(f"DEBUG: GD BOD check error: {bod_err}")
+
             # ── 🕒 1-2) 개장 10분 시초가 갭 진위 판별 1줄 속보 (09:08 ~ 09:15 평일) ──
             if is_weekday and 908 <= hm <= 915 and not _opening_gap_sent:
                 try:
@@ -1908,6 +1931,18 @@ def run_portfolio_background_scanner():
                     _opening_gap_sent = True
                 except Exception as gap_err:
                     print(f"DEBUG: Opening gap check error: {gap_err}")
+
+            # ── 🏛️ 1-2-b) 옵션 만기일 특별 리포트 (만기 주간 목요일 09:05 ~ 09:20) ──
+            if is_weekday and 905 <= hm <= 920 and not _option_expiry_sent:
+                try:
+                    is_exp_wk, d_days, _, _ = is_option_expiry_week()
+                    if is_exp_wk and d_days == 0:
+                        notify_option_expiry_briefing(
+                            token=tg_token, chat_id=tg_chat_id
+                        )
+                        _option_expiry_sent = True
+                except Exception as exp_err:
+                    print(f"DEBUG: Option expiry check error: {exp_err}")
 
             # ── ☕ 1-3) 주말 스페셜 브리핑 & 차주 핵심 전략 (09:00 ~ 09:15 주말/휴장일) ──
             if not is_weekday and 900 <= hm <= 915 and not _weekend_briefing_sent:
@@ -1921,6 +1956,19 @@ def run_portfolio_background_scanner():
                     _weekend_briefing_sent = True
                 except Exception as wk_err:
                     print(f"DEBUG: Weekend briefing error: {wk_err}")
+
+            # ── 🎯 1-4) GD 바실리 KOSPI 역발상 바닥 매수 신호 (09:30 ~ 15:20 평일) ──
+            if is_weekday and (930 <= hm <= 1520) and not _vasily_signal_sent:
+                try:
+                    vasily_res = check_gd_vasily_signal()
+                    if vasily_res.get('active'):
+                        notify_gd_vasily_signal(
+                            token=tg_token, chat_id=tg_chat_id,
+                            signal_data=vasily_res
+                        )
+                        _vasily_signal_sent = True
+                except Exception as vasily_err:
+                    print(f"DEBUG: GD Vasily check error: {vasily_err}")
 
             # ── 🌙 2) 장마감 브리핑 (15:40 ~ 15:55 평일) ──
             if is_weekday and 1540 <= hm <= 1555 and not _closing_briefing_sent and portfolio_data:
