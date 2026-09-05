@@ -1795,7 +1795,10 @@ def run_portfolio_background_scanner():
                     nvda_chg = 0.0
                     tsla_chg = 0.0
                     mu_chg = 0.0
-                    for sym, name in [('NVDA.O', '엔비디아'), ('MU.O', '마이크론'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
+                    asml_chg = 0.0
+                    tsm_chg = 0.0
+                    lly_chg = 0.0
+                    for sym, name in [('NVDA.O', '엔비디아'), ('MU.O', '마이크론'), ('ASML.O', 'ASML'), ('TSM', 'TSMC'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('LLY', '일라이릴리')]:
                         try:
                             r_s = req.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=h_headers, timeout=3)
                             if r_s.status_code == 200:
@@ -1805,7 +1808,10 @@ def run_portfolio_background_scanner():
                                 c_r = float(c_r_str)
                                 if 'NVDA' in sym: nvda_chg = c_r
                                 if 'MU' in sym: mu_chg = c_r
+                                if 'ASML' in sym: asml_chg = c_r
+                                if 'TSM' in sym: tsm_chg = c_r
                                 if 'TSLA' in sym: tsla_chg = c_r
+                                if 'LLY' in sym: lly_chg = c_r
                                 sign = "▲+" if c_r >= 0 else "▼"
                                 us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
                         except Exception:
@@ -1817,28 +1823,31 @@ def run_portfolio_background_scanner():
                         stk_joined = ', '.join(us_stk_lines)
                         us_mkt_text += f"\n└ <b>주요 종목</b>: {stk_joined}"
 
-                    fut_chg = 0.45 if sox_chg >= 0 else -0.35
-                    fut_sign = "▲+" if fut_chg >= 0 else "▼"
-                    lead_text = (
-                        f"├ 🚀 <b>야간 한국 선물</b>: {fut_sign}{fut_chg:.2f}% (<b>오늘 장 시작이 '빨간불(상승)'로 뜰 확률 75%!</b>)\n"
-                        f"├ 💵 <b>원/달러 환율</b>: 1,376.5원 (▼-2.0원 하락 ➔ 외국인이 한국 주식 사기 좋은 환경! 🟢)\n"
-                        f"└ 💰 <b>해외 큰손들의 한국 베팅</b>: MSCI 한국 ETF ▲+0.82% 상승 (외국인 순매수 기대)"
-                    )
+                    try:
+                        from telegram_notifier import fetch_realtime_lead_indicators
+                        lead_text = fetch_realtime_lead_indicators()
+                    except Exception:
+                        lead_text = ""
 
                     kr_beneficiaries = []
                     kr_cautions = []
-                    if sox_chg > 0.3 or nvda_chg > 0.5 or mu_chg > 0.5:
+                    if sox_chg > 0.3 or nvda_chg > 0.5 or mu_chg > 0.5 or asml_chg > 0.5:
                         semi_reasons = []
                         if nvda_chg > 0: semi_reasons.append(f"엔비디아 +{nvda_chg:.1f}%")
                         if mu_chg > 0: semi_reasons.append(f"마이크론 +{mu_chg:.1f}%")
-                        reason_str = f" ({'/'.join(semi_reasons)} 훈풍 ➔ SK하이닉스·삼성전자 갭상승 유력)" if semi_reasons else " (미 반도체 훈풍 ➔ 삼전/닉스 갭상승 유력)"
-                        kr_beneficiaries.append(f"<b>반도체·AI 메모리</b>{reason_str}")
+                        if asml_chg > 0: semi_reasons.append(f"ASML +{asml_chg:.1f}%")
+                        reason_str = f" ({'/'.join(semi_reasons)} 훈풍 ➔ SK하이닉스·삼성전자·소부장 갭상승 유력)" if semi_reasons else " (미 반도체 훈풍 ➔ 삼전/닉스 갭상승 유력)"
+                        kr_beneficiaries.append(f"<b>반도체·AI 메모리/소부장</b>{reason_str}")
                     else:
                         kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
 
                     if tsla_chg > 1.5:
                         kr_beneficiaries.append(f"<b>2차전지·전기차</b> (테슬라 +{tsla_chg:.1f}% 급등 연동 반등 탄력 기대)")
                     elif tsla_chg < -1.5:
+                        kr_cautions.append("<b>2차전지·배터리</b> (테슬라 약세로 단기 투심 위축)")
+
+                    if lly_chg > 1.0:
+                        kr_beneficiaries.append(f"<b>바이오·비만치료제</b> (일라이릴리 +{lly_chg:.1f}% 훈풍 ➔ 삼바/알테오젠/펩트론 수급 기대)")
                         kr_cautions.append("<b>2차전지·배터리</b> (테슬라 약세로 단기 투심 위축)")
 
                     if nasdaq_chg > 0.5:

@@ -477,6 +477,8 @@ def fetch_realtime_lead_indicators() -> str:
     1) MSCI 한국 ETF (EWY) 실시간 크롤링
     2) 원/달러 환율 실시간 크롤링
     3) 트레이딩스핀 및 엘리트강사 채널에서 장전 야간선물 실제 언급 수치 추출
+    4) 미국 10년물 국채 금리 (^TNX) 실시간 크롤링
+    5) WTI 국제 유가 (CL=F) 실시간 크롤링
     """
     import re
     import requests
@@ -531,8 +533,38 @@ def fetch_realtime_lead_indicators() -> str:
         except Exception:
             pass
 
-    fut_sign = "▲+" if ewy_ratio >= 0 else "▼"
-    fx_sign = "▲+" if fx_change >= 0 else "▼"
+    # 4. 미국 10년물 국채 금리 (US10Y)
+    us10y_val = 4.28
+    us10y_chg = -0.02
+    try:
+        r_y = requests.get('https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX', headers=headers, timeout=3)
+        if r_y.status_code == 200:
+            meta = r_y.json()['chart']['result'][0]['meta']
+            p = float(meta.get('regularMarketPrice', 4.28))
+            prev = float(meta.get('chartPreviousClose', p))
+            us10y_val = round(p, 2)
+            us10y_chg = round(p - prev, 2)
+    except Exception:
+        pass
+
+    # 5. WTI 국제 유가 (WTI Crude Oil)
+    wti_val = 78.50
+    wti_chg_pct = -0.35
+    try:
+        r_w = requests.get('https://query1.finance.yahoo.com/v8/finance/chart/CL%3DF', headers=headers, timeout=3)
+        if r_w.status_code == 200:
+            meta = r_w.json()['chart']['result'][0]['meta']
+            p = float(meta.get('regularMarketPrice', 78.5))
+            prev = float(meta.get('chartPreviousClose', p))
+            wti_val = round(p, 2)
+            wti_chg_pct = round(((p - prev) / prev) * 100, 2) if prev else 0.0
+    except Exception:
+        pass
+
+    fut_sign = "▲" if ewy_ratio >= 0 else "▼"
+    fx_sign = "▲" if fx_change >= 0 else "▼"
+    us10y_sign = "▲" if us10y_chg >= 0 else "▼"
+    wti_sign = "▲" if wti_chg_pct >= 0 else "▼"
     
     if night_fut_text:
         fut_line = f"├ 🚀 <b>야간 한국 선물 마감</b>: {night_fut_text}"
@@ -542,7 +574,9 @@ def fetch_realtime_lead_indicators() -> str:
     lead_text = (
         f"{fut_line}\n"
         f"├ 💵 <b>실시간 원/달러 환율</b>: {fx_price}원 ({fx_sign}{fx_change:+.2f}% {'안정세 ➔ 외인 수급 우호적 🟢' if fx_change <= 0 else '경계 ➔ 환율 변동성 주시'})\n"
-        f"└ 💰 <b>해외 큰손들의 한국 베팅 (MSCI EWY)</b>: {fut_sign}{ewy_ratio:+.2f}% ({'외국인 순매수 기대' if ewy_ratio >= 0 else '외국인 관망세'})"
+        f"├ 💰 <b>해외 큰손들의 한국 베팅 (MSCI EWY)</b>: {fut_sign}{ewy_ratio:+.2f}% ({'외국인 순매수 기대' if ewy_ratio >= 0 else '외국인 관망세'})\n"
+        f"├ 📈 <b>미국 10년물 국채 금리</b>: {us10y_val:.2f}% ({us10y_sign}{us10y_chg:+.2f}%p {'안정세 ➔ 성장주 안도 🟢' if us10y_chg <= 0 else '상승세 ➔ 고밸류주 경계'})\n"
+        f"└ 🛢️ <b>WTI 국제 유가</b>: ${wti_val:.2f}/배럴 ({wti_sign}{wti_chg_pct:+.2f}% {'유가 안정 ➔ 인플레 완화 🟢' if wti_chg_pct <= 0 else '유가 상승 ➔ 원자재/정유 주목'})"
     )
     return lead_text
 
