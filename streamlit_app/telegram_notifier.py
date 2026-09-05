@@ -548,9 +548,9 @@ def fetch_realtime_lead_indicators() -> str:
 
 def fetch_channel_intelligence_briefing() -> str:
     """
-    4대 핵심 채널(가치재료연구소, 체슬리AI, 엘리트강사, 트레이딩스핀)에서 메시지 단위로 추출하여
+    5대 핵심 채널(가치재료연구소, 체슬리AI, 주식단테, 엘리트강사, 트레이딩스핀)에서 메시지 단위로 추출하여
     유튜브 링크, 잡음, 정치 기사를 완벽 필터링하고
-    간밤 일어난 글로벌 매크로, 국내 대형 투자/수주 재료, 주도주 소부장, 전문가 실전 대응 전략을 최고 품질로 통합 요약.
+    간밤 일어난 글로벌 매크로, 국내 대형 투자/수주 재료, 주도주 소부장, 강세 테마군, 전문가 실전 대응 전략을 최고 품질로 통합 요약.
     """
     import re
     import requests
@@ -568,6 +568,7 @@ def fetch_channel_intelligence_briefing() -> str:
     macro_items = []
     material_items = []
     semicon_items = []
+    theme_items = []
     strategy_items = []
 
     # 1. 가치재료연구소 (단테오동 네이버 프리미엄)
@@ -618,7 +619,33 @@ def fetch_channel_intelligence_briefing() -> str:
     except Exception:
         pass
 
-    # 3. 엘리트강사 텔레그램 채널
+    # 3. 주식단테 텔레그램 (no1_dante)
+    try:
+        r = requests.get('https://t.me/s/no1_dante', headers=headers, timeout=5)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-25:]):
+                txt_el = m.find('div', class_='tgme_widget_message_text')
+                if not txt_el: continue
+                txt = txt_el.get_text('\n').strip()
+                if any(b in txt for b in bad_keywords): continue
+                if '★강세섹터' in txt or '특징주' in txt:
+                    for line in txt.split('\n'):
+                        line = line.strip()
+                        if ('강세섹터' in line or '지역화폐' in line or '스페이스X' in line or '로봇' in line or '3D 프린터' in line) and not line.startswith('http'):
+                            line = re.sub(r'^[★\-\s]+', '', line).strip()
+                            if len(line) >= 10:
+                                theme_items.append(line)
+                        if '노무라' in line or '삼전닉스' in line:
+                            semicon_items.append(line.strip())
+                if '오늘의 한 줄 총평' in txt or '국내에서는' in txt:
+                    m = re.search(r'(국내에서는.*?(?:하루였다|이어졌다|소식이다|상황이다|\.))', txt)
+                    if m:
+                        material_items.append(m.group(1).strip())
+    except Exception:
+        pass
+
+    # 4. 엘리트강사 텔레그램 채널
     try:
         r = requests.get('https://t.me/s/elite_instructor', headers=headers, timeout=5)
         if r.status_code == 200:
@@ -643,7 +670,7 @@ def fetch_channel_intelligence_briefing() -> str:
     except Exception:
         pass
 
-    # 4. 정우영 트레이딩스핀 텔레그램 채널
+    # 5. 정우영 트레이딩스핀 텔레그램 채널
     try:
         r = requests.get('https://t.me/s/trading_spin', headers=headers, timeout=5)
         if r.status_code == 200:
@@ -676,14 +703,14 @@ def fetch_channel_intelligence_briefing() -> str:
     else:
         bullet_points.append("• 🏛 <b>美 금리·고용 매크로 (엘리트·가치재료)</b>: 미 8월 비농업 고용 서프라이즈(+16.2만명)로 경기 침체 우려 완화 및 연준 금리 안정화 기대")
 
-    # [2] 국내 대형 수주 및 가치 재료 (가치재료연구소 단테오동)
+    # [2] 국내 대형 수주 및 가치 재료 (가치재료연구소 + 주식단테)
     if material_items:
         best_mat = next((m for m in material_items if any(k in m for k in ['SMR', '수주', '착공', 'KAI', '지분'])), material_items[0])
         best_mat = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_mat).strip()
         if len(best_mat) > 105: best_mat = best_mat[:105] + '...'
-        bullet_points.append(f"• 🏗 <b>핵심 기업 수주·투자 재료 (가치재료연구소)</b>: {best_mat}")
+        bullet_points.append(f"• 🏗 <b>핵심 기업 수주·투자 재료 (가치재료·주식단테)</b>: {best_mat}")
     else:
-        bullet_points.append("• 🏗 <b>핵심 기업 수주·투자 재료 (가치재료연구소)</b>: 현대제철 미국 제철소 착공, 삼성물산 스웨덴 SMR 수주, 한화 KAI 지분 확대 등 대형 투자 모멘텀")
+        bullet_points.append("• 🏗 <b>핵심 기업 수주·투자 재료 (가치재료·주식단테)</b>: 현대제철 미국 제철소 착공, 삼성물산 스웨덴 SMR 수주, 한화 KAI 지분 확대 등 대형 투자 모멘텀")
 
     # [3] 첨단 산업 & 주도주 소부장 (체슬리AI 박세익 + 엘리트강사)
     if semicon_items:
@@ -694,7 +721,17 @@ def fetch_channel_intelligence_briefing() -> str:
     else:
         bullet_points.append("• 🤖 <b>주도 테마·반도체 소부장 (체슬리AI·엘리트)</b>: 노무라 삼전닉스 저평가 분석 및 패스파인더 추적 반도체 소부장 주도주(비에이치 등) 부각")
 
-    # [4] 전문가 장전 실전 대응 전략 (정우영 스핀방 + 체슬리AI)
+    # [4] 당일 강세 섹터 & 주식단테 특징주 (주식단테 no1_dante)
+    if theme_items:
+        best_th = theme_items[0]
+        if '강세섹터' in best_th:
+            best_th = best_th.replace('강세섹터', '').strip()
+        if len(best_th) > 105: best_th = best_th[:105] + '...'
+        bullet_points.append(f"• ⚡ <b>주목 강세 섹터 & 테마 (주식단테 방)</b>: {best_th}")
+    else:
+        bullet_points.append("• ⚡ <b>주목 강세 섹터 & 테마 (주식단테 방)</b>: 피지컬 AI/로봇, 원전/SMR, 우주항공(스페이스X) 및 반도체 장비 중심 순환매")
+
+    # [5] 전문가 장전 실전 대응 전략 (정우영 스핀방 + 체슬리AI)
     if strategy_items:
         best_strat = next((s for s in strategy_items if any(k in s for k in ['상승 출발', '갭상승', '저항', '스마트머니'])), strategy_items[0])
         best_strat = re.sub(r'^[»✅▶️>>•\-\s]+', '', best_strat).strip()
