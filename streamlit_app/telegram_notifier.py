@@ -636,10 +636,12 @@ def fetch_vix_and_putcall_indicator() -> dict:
         pc_desc = "중립·안정세 ➔ 지수 하방 압력 제한적 🟢"
 
     return {
+        'vix': vix_val,
         'vix_val': vix_val,
         'vix_chg': vix_chg,
         'vix_pct': vix_pct,
         'vix_desc': vix_desc,
+        'vix_status': vix_desc,
         'put_call_ratio': put_call_ratio,
         'pc_desc': pc_desc
     }

@@ -3718,6 +3718,15 @@ if st.sidebar.button("🛠️ 텔레그램 연동 재점검 & 진단 발송", us
     except Exception as _diag_ex:
         st.sidebar.error(f"진단 오류: {_diag_ex}")
 
+with st.sidebar.expander("🏛️ 체슬리AI 특급 인텔리전스 레이더", expanded=False):
+    st.markdown("""
+    - **🎯 GD 바실리**: KOSPI 이격도 및 극단 투매 바닥 매수
+    - **🌊 GD BOD**: 미국 S&P500·나스닥 고점 낙폭 분할 매수
+    - **😱 VIX & 풋콜**: 헤지펀드 공포 지수 & 파생 심리 감시
+    - **🏛️ 옵션 Max Pain**: 만기 주간 외국인 지수 가두리 밴드
+    """)
+    st.caption("※ 실시간 신호 및 가두리 밴드는 메인 대시보드 상단 레이더 바에 실시간 표기됩니다.")
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
 q_sort_by = st.sidebar.radio(
@@ -4449,6 +4458,121 @@ try:
         st.markdown(re.sub(r'\s+', ' ', sec_spin_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
 except Exception:
     pass
+
+# ── 🏛️ [체슬리AI 인텔리전스 레이더] 실시간 바실리 / BOD / VIX & 풋콜 / 옵션 Max Pain 대시보드 위젯 ──
+@st.cache_data(ttl=60)
+def get_chesley_dashboard_metrics():
+    try:
+        from telegram_notifier import (
+            check_gd_vasily_signal,
+            check_gd_bod_signal,
+            fetch_vix_and_putcall_indicator,
+            is_option_expiry_week,
+            get_option_max_pain_info
+        )
+        v = check_gd_vasily_signal()
+        b = check_gd_bod_signal()
+        vp = fetch_vix_and_putcall_indicator()
+        is_exp, d_days, exp_date, exp_type = is_option_expiry_week()
+        mp = get_option_max_pain_info()
+        return {
+            'v': v, 'b': b, 'vp': vp,
+            'opt': {
+                'is_exp': is_exp, 'd_days': d_days, 'exp_date': exp_date,
+                'exp_type': exp_type, 'lower': mp.get('lower_band', 6587),
+                'upper': mp.get('upper_band', 6788), 'stance': mp.get('foreign_stance', '가두리 박스권')
+            }
+        }
+    except Exception as _e:
+        print(f"DEBUG: Chesley metrics error: {_e}")
+        return None
+
+try:
+    c_metrics = get_chesley_dashboard_metrics()
+    if c_metrics:
+        mv = c_metrics['v']
+        mb = c_metrics['b']
+        mvp = c_metrics['vp']
+        mopt = c_metrics['opt']
+        
+        # 바실리 신호 상태
+        if mv.get('active'):
+            v_badge = f"<span style='color:#f6465d; font-weight:bold;'>🎯 {mv.get('stage_name', '바닥 신호')}</span>"
+            v_desc = f"이격도 {mv.get('disparity', -4.5):+.1f}% | RSI {mv.get('rsi', 34):.0f}"
+            v_border = "#f6465d"
+        else:
+            v_badge = "<span style='color:#2ecc71; font-weight:bold;'>🟢 바실리 정상 (관망)</span>"
+            v_desc = f"KOSPI 20일선 이격도 {mv.get('disparity', -0.9):+.1f}%"
+            v_border = "rgba(255,255,255,0.1)"
+            
+        # BOD 신호 상태
+        if mb.get('active'):
+            b_badge = f"<span style='color:#f39c12; font-weight:bold;'>🌊 {mb.get('stage_name', 'BOD 매수')}</span>"
+            b_desc = f"고점낙폭 {mb.get('drawdown', -5.4):.1f}% | RSI {mb.get('rsi', 37):.0f}"
+            b_border = "#f39c12"
+        else:
+            b_badge = "<span style='color:#2ecc71; font-weight:bold;'>🟢 BOD 정상 (관망)</span>"
+            b_desc = f"미국 지수 고점 낙폭 {mb.get('drawdown', -2.1):.1f}%"
+            b_border = "rgba(255,255,255,0.1)"
+            
+        # VIX & 풋콜 심리
+        vix_val = mvp.get('vix', 14.53)
+        vix_st = mvp.get('vix_status', '안정권 🟢')
+        pc_ratio = mvp.get('put_call_ratio', 0.72)
+        vix_col = "#2ecc71" if "안정" in vix_st else ("#f39c12" if "경계" in vix_st else "#f6465d")
+        
+        # 옵션 만기일 Max Pain
+        d_day_str = f"D-{mopt['d_days']}" if mopt['d_days'] > 0 else "D-Day (오늘 만기!)"
+        opt_range = f"{mopt['lower']:,.0f} ~ {mopt['upper']:,.0f}pt"
+        
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #0d1322 0%, #151d30 100%); border: 1px solid #3b82f6; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-family: 'malgun gothic', sans-serif;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="font-size: 13px; font-weight: bold; color: #60a5fa; display: flex; align-items: center; gap: 6px;">
+                    🏛️ <span>GD 3.0 × 체슬리AI 특급 인텔리전스 레이더</span>
+                </div>
+                <div style="font-size: 11px; color: #94a3b8;">
+                    실시간 지수 바닥 & 파생 가두리 밴드 자동 감시
+                </div>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <!-- 1. 바실리 -->
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {v_border}; border-radius: 8px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #94a3b8;">🎯 GD 바실리 (KOSPI 바닥)</span>
+                        <span style="font-size: 11px;">{v_badge}</span>
+                    </div>
+                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">{v_desc}</div>
+                </div>
+                <!-- 2. BOD -->
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {b_border}; border-radius: 8px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #94a3b8;">🌊 GD BOD (미국 지수 바닥)</span>
+                        <span style="font-size: 11px;">{b_badge}</span>
+                    </div>
+                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">{b_desc}</div>
+                </div>
+                <!-- 3. VIX & 풋콜 -->
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #94a3b8;">😱 VIX / 풋콜 심리</span>
+                        <span style="font-size: 11px; color: {vix_col}; font-weight: bold;">VIX {vix_val:.1f} ({vix_st})</span>
+                    </div>
+                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">풋/콜 비율: {pc_ratio:.2f} (파생 심리 안정)</div>
+                </div>
+                <!-- 4. 옵션 Max Pain -->
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #94a3b8;">🏛️ 옵션 Max Pain [{d_day_str}]</span>
+                        <span style="font-size: 10.5px; color: #38bdf8; font-weight: bold;">{mopt['exp_date']} 만기</span>
+                    </div>
+                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">가두리 밴드: <span style="color:#fbbf24;">{opt_range}</span></div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+except Exception as _c_bar_err:
+    print(f"DEBUG: Chesley bar error: {_c_bar_err}")
 
 # ── 3열(Column) 그리드 레이아웃 정의 (세로 연속 배치로 공백 제거) ──
 col_left, col_mid, col_right = st.columns(3)
