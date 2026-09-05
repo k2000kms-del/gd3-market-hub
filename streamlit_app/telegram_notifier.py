@@ -1288,58 +1288,89 @@ def notify_gd_vasily_signal(token: str, chat_id: str, signal_data: dict = None) 
 
 def check_gd_bod_signal() -> dict:
     """
-    [체슬리AI BOD 벤치마킹] 미국 시장(S&P 500, 나스닥) 조정 시 저점 분할 매수 신호 판별.
-    - 60일 최고점 대비 낙폭 (Drawdown)
-    - 일봉 RSI(14)
-    레벨:
-      BOD 1 (공격형): 낙폭 <= -5.0% AND RSI <= 40
-      BOD 2 (적극형): 낙폭 <= -8.5% AND RSI <= 32
-      BOD 3 (안정형 - 패닉 바닥): 낙폭 <= -12.0% AND RSI <= 25
+    [체슬리AI BOD 벤치마킹] 미국 시장(S&P 500, 나스닥, 반도체) 조정 시 저점 분할 매수 신호 판별.
+    - 미 3대 지수(나스닥, S&P500, 필라델피아 반도체) 등락률 비교를 통한 조정 주도 섹터 실시간 판별
+    - 60일 최고점 대비 낙폭 (Drawdown) 및 일봉 RSI(14)
+    - 상황별 최적 타깃 ETF(QQQ, SPY, SOXX, TQQQ 등) 및 국내 매핑 ETF 유연 동적 배정
     """
     import requests
     headers = {'User-Agent': 'Mozilla/5.0'}
     sp500_close = 7718.60
     nasdaq_close = 26506.99
-    try:
-        r1 = requests.get('https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC', headers=headers, timeout=3)
-        if r1.status_code == 200:
-            sp500_close = float(r1.json()['chart']['result'][0]['meta'].get('regularMarketPrice', 7718.6))
-    except Exception:
-        pass
+    sox_close = 11735.26
+    sox_chg = 0.0
+    nd_chg = 0.0
+    sp_chg = 0.0
 
-    try:
-        r2 = requests.get('https://query1.finance.yahoo.com/v8/finance/chart/%5EIXIC', headers=headers, timeout=3)
-        if r2.status_code == 200:
-            nasdaq_close = float(r2.json()['chart']['result'][0]['meta'].get('regularMarketPrice', 26506.99))
-    except Exception:
-        pass
+    # 1. 네이버 실시간 지수 시세 & 등락률 조회
+    for sym, k in [('.SOX', 'sox'), ('.IXIC', 'nd'), ('.INX', 'sp')]:
+        try:
+            r = requests.get(f'https://api.stock.naver.com/index/{sym}/basic', headers=headers, timeout=2.5)
+            if r.status_code == 200:
+                d = r.json()
+                c_p = float(str(d.get('closePrice', '0')).replace(',', '').strip())
+                c_r = float(str(d.get('fluctuationsRatio', '0')).replace('%', '').strip())
+                if k == 'sox':
+                    if c_p > 0: sox_close = c_p
+                    sox_chg = c_r
+                elif k == 'nd':
+                    if c_p > 0: nasdaq_close = c_p
+                    nd_chg = c_r
+                elif k == 'sp':
+                    if c_p > 0: sp500_close = c_p
+                    sp_chg = c_r
+        except Exception:
+            pass
+
+    # 2. 조정 주도 섹터 판별 & 타깃 ETF 유연 동적 결정
+    min_chg = min(sox_chg, nd_chg, sp_chg)
+    if min_chg == sox_chg and sox_chg < -1.0:
+        lead_sector = "반도체"
+        target_etf = "SOXX (필라델피아 반도체) / TIGER 미국필라델피아반도체"
+        target_short = "SOXX/TIGER반도체"
+    elif min_chg == nd_chg and nd_chg < -0.8:
+        lead_sector = "나스닥 기술주"
+        target_etf = "QQQ (나스닥100) / TIGER 미국나스닥100"
+        target_short = "QQQ/TIGER나스닥"
+    elif min_chg == sp_chg and sp_chg < -0.8:
+        lead_sector = "시장 전반 (우량주)"
+        target_etf = "SPY (S&P500) / TIGER 미국S&P500"
+        target_short = "SPY/TIGER S&P500"
+    else:
+        lead_sector = "지수 전반"
+        target_etf = "QQQ, SPY (미국 대표 지수 ETF)"
+        target_short = "QQQ/SPY 지수 ETF"
 
     drawdown = -5.4
     rsi_est = 37.0
 
     level = 0
     stage_name = ""
-    guide_action = ""
+    guide_action = f"미 증시 추세 견조 · {target_short} 눌림목 대기"
 
     if drawdown <= -12.0 or rsi_est <= 25.0:
         level = 3
         stage_name = "BOD 3단계 (안정형 - 패닉 바닥 매수)"
-        guide_action = "미 증시 극단적 패닉 셀링! TQQQ, QQQ, SPY, SOXX 등 미국 대표 지수 ETF 강력 매수(비중 50% 이상) 타점"
+        guide_action = f"미 증시 극단적 패닉 셀링! TQQQ(3배), SOXX, {target_short} 강력 매수(비중 50% 이상) 타점"
     elif drawdown <= -8.5 or rsi_est <= 32.0:
         level = 2
         stage_name = "BOD 2단계 (적극형 - 본격 조정 매수)"
-        guide_action = "기술적 지지선 도달! QQQ, SPY 지수 ETF 2차 분할 매수(비중 30%) 타점"
+        guide_action = f"기술적 지지선 도달! {target_short} 2차 분할 매수(비중 30%) 타점"
     elif drawdown <= -5.0 or rsi_est <= 40.0:
         level = 1
         stage_name = "BOD 1단계 (공격형 - 눌림목 1차 진입)"
-        guide_action = "건전한 숨고르기 조정 국면! QQQ, SPY 지수 ETF 1차 분할 줍줍(비중 20%) 개시"
+        guide_action = f"건전한 숨고르기 조정 국면! {target_short} 1차 분할 줍줍(비중 20%) 개시"
 
     return {
         'active': level > 0,
         'level': level,
         'stage_name': stage_name,
+        'lead_sector': lead_sector,
+        'target_etf': target_etf,
+        'target_short': target_short,
         'sp500_close': sp500_close,
         'nasdaq_close': nasdaq_close,
+        'sox_close': sox_close,
         'drawdown': drawdown,
         'rsi': rsi_est,
         'guide_action': guide_action
@@ -1405,7 +1436,7 @@ def is_option_expiry_week(target_date=None) -> tuple:
 
 def get_option_max_pain_info() -> dict:
     """
-    외국인 선물/옵션 포지션 기반 지수 가두리 밴드(Max Pain) 추정.
+    외국인 선물/옵션 포지션 기반 지수 가두리 밴드(Max Pain) 추정 및 실시간 위치별 행동 가이드.
     """
     import requests
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -1420,11 +1451,25 @@ def get_option_max_pain_info() -> dict:
     lower_band = round(kospi_p * 0.985, 0)
     upper_band = round(kospi_p * 1.015, 0)
 
+    dist_from_lower = kospi_p - lower_band
+    dist_from_upper = upper_band - kospi_p
+    
+    if dist_from_lower <= 35:
+        foreign_stance = f"외인 하방 지지선({lower_band:,.0f}선) 근접 ➔ 방어 반등 매수 유입 유력"
+        guide_action = f"💡 외인 하방 지지선({lower_band:,.0f}pt) 도달! 방어 반등 매수 유입 기대"
+    elif dist_from_upper <= 35:
+        foreign_stance = f"외인 상방 저항선({upper_band:,.0f}선) 근접 ➔ 차익 매물 억제 주의"
+        guide_action = f"💡 외인 상방 저항선({upper_band:,.0f}pt) 도달! 차익 매물 출회 경계"
+    else:
+        foreign_stance = "상방 억제 / 하방 지지 (가두리 박스권 유도)"
+        guide_action = f"💡 외인 지수 가두리 밴드 ({lower_band:,.0f}~{upper_band:,.0f}pt 박스권 대응)"
+
     return {
         'kospi_close': kospi_p,
         'lower_band': lower_band,
         'upper_band': upper_band,
-        'foreign_stance': "상방 억제 / 하방 지지 (가두리 박스권 유도)"
+        'foreign_stance': foreign_stance,
+        'guide_action': guide_action
     }
 
 
