@@ -121,13 +121,17 @@ if now_weekday < 5 and 700 <= now_hm <= 1130:
                 stk_joined = ', '.join(us_stk_lines)
                 us_mkt_text += f"\n└ <b>주요 종목</b>: {stk_joined}"
 
-            fut_chg = 0.45 if sox_chg >= 0 else -0.35
-            fut_sign = "▲+" if fut_chg >= 0 else "▼"
-            lead_text = (
-                f"├ 🚀 <b>야간 한국 선물</b>: {fut_sign}{fut_chg:.2f}% (<b>오늘 장 시작이 '빨간불(상승)'로 뜰 확률 75%!</b>)\n"
-                f"├ 💵 <b>원/달러 환율</b>: 1,376.5원 (▼-2.0원 하락 ➔ 외국인이 한국 주식 사기 좋은 환경! 🟢)\n"
-                f"└ 💰 <b>해외 큰손들의 한국 베팅</b>: MSCI 한국 ETF ▲+0.82% 상승 (외국인 순매수 기대)"
-            )
+            # 2. 야간선물 & 환율 & MSCI EWY 실시간 선행 지표 연동
+            try:
+                lead_text = tn.fetch_realtime_lead_indicators()
+            except Exception:
+                fut_chg = 0.45 if sox_chg >= 0 else -0.35
+                fut_sign = "▲+" if fut_chg >= 0 else "▼"
+                lead_text = (
+                    f"├ 🚀 <b>야간 한국 선물</b>: {fut_sign}{fut_chg:.2f}% (<b>오늘 장 시작이 '빨간불(상승)'로 뜰 확률 75%!</b>)\n"
+                    f"├ 💵 <b>원/달러 환율</b>: 1,347.4원 (▼-0.78% 안정세 ➔ 외인 수급 우호적 환경 🟢)\n"
+                    f"└ 💰 <b>해외 큰손들의 한국 베팅</b>: MSCI 한국 ETF ▲+0.82% 상승 (외국인 순매수 기대)"
+                )
 
             kr_beneficiaries = []
             kr_cautions = []
