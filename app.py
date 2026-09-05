@@ -2955,43 +2955,53 @@ def render_123_split_strategy_html(pattern_info, cur_price=0, is_loss_holding=Fa
     s2_active = (step >= 2)
     s3_active = (step >= 3)
 
-    def _box_style(active, is_current, bg_color):
-        border = "2px solid " + bg_color if is_current else ("1px solid rgba(255,255,255,0.2)" if active else "1px solid rgba(255,255,255,0.06)")
-        bg = bg_color if is_current else ("rgba(255,255,255,0.05)" if active else "rgba(0,0,0,0.2)")
-        opacity = "1.0" if active else "0.45"
-        return f"border: {border}; background: {bg}; opacity: {opacity};"
+    def _box_style(active, is_current, border_col, bg_col):
+        if is_current:
+            return f"border: 2px solid {border_col}; background: {bg_col}; box-shadow: 0 0 10px {bg_col};"
+        elif active:
+            return "border: 1px solid rgba(255,255,255,0.22); background: rgba(255,255,255,0.05); opacity: 0.95;"
+        else:
+            return "border: 1px solid rgba(255,255,255,0.06); background: rgba(0,0,0,0.25); opacity: 0.45;"
 
-    s1_style = _box_style(s1_active, step == 1, "rgba(46, 204, 113, 0.25)")
-    s2_style = _box_style(s2_active, step == 2, "rgba(32, 201, 151, 0.25)")
-    s3_style = _box_style(s3_active, step == 3, "rgba(255, 146, 43, 0.25)")
+    s1_style = _box_style(s1_active, step == 1, "#2ecc71", "rgba(46, 204, 113, 0.22)")
+    s2_style = _box_style(s2_active, step == 2, "#20c997", "rgba(32, 201, 151, 0.22)")
+    s3_style = _box_style(s3_active, step == 3, "#ff922b", "rgba(255, 146, 43, 0.22)")
 
-    s1_mark = "🎯 현재 타점!" if step == 1 else ("✅ 완료" if step > 1 else "대기")
-    s2_mark = "🎯 현재 타점!" if step == 2 else ("✅ 완료" if step > 2 else "대기")
-    s3_mark = "🎯 현재 타점!" if step == 3 else "대기"
+    def _get_badge(current, completed, text_current, text_completed):
+        if current:
+            return f"<span style='background: rgba(255, 146, 43, 0.25); border: 1px solid #ff922b; color: #ffb86c; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 10px;'>🎯 {text_current}</span>"
+        elif completed:
+            return f"<span style='background: rgba(46, 204, 113, 0.2); border: 1px solid #2ecc71; color: #4ade80; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 10px;'>✅ {text_completed}</span>"
+        else:
+            return "<span style='background: rgba(148, 163, 184, 0.12); border: 1px solid rgba(255,255,255,0.12); color: #8fa0b5; padding: 2px 8px; border-radius: 4px; font-size: 10px;'>⏳ 조건 대기</span>"
+
+    s1_mark = _get_badge(step == 1, step > 1, "현재 진입 타점!", "1차 진입 완료")
+    s2_mark = _get_badge(step == 2, step > 2, "현재 2차 타점!", "2차 확대 완료")
+    s3_mark = _get_badge(step == 3, False, "현재 돌파 타점!", "")
 
     return f"""
     <div style="background-color: #111920; padding: 12px 14px; border-radius: 8px; border: 1px solid rgba(78, 159, 245, 0.2); margin-top: 10px; margin-bottom: 12px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-right: 6px;">
             <span style="font-size: 12px; font-weight: 700; color: #ff922b;">📊 [진짜주식 실전 분할매수 1-2-3 로드맵]</span>
-            <span style="font-size: 10px; color: #888;">정우영 전문가 실전 타점 공식</span>
+            <span style="font-size: 10.5px; color: #94a3b8; background: rgba(255,255,255,0.06); padding: 2px 8px; border-radius: 4px;">정우영 전문가 실전 타점 공식</span>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
             <div style="flex: 1; {s1_style} border-radius: 6px; padding: 8px; text-align: center;">
                 <div style="font-size: 11px; font-weight: bold; color: #eee;">1단계: 20일선 지지</div>
-                <div style="font-size: 9px; color: #aaa; margin: 2px 0;">비중 10% 정찰 진입</div>
-                <div style="font-size: 10px; font-weight: bold; color: #2ecc71;">{s1_mark}</div>
+                <div style="font-size: 9.5px; color: #bbb; margin: 3px 0;">비중 10% 정찰 진입</div>
+                <div style="margin-top: 4px;">{s1_mark}</div>
             </div>
             <span style="color: #4e9ff5; font-weight: bold; font-size: 12px;">➔</span>
             <div style="flex: 1; {s2_style} border-radius: 6px; padding: 8px; text-align: center;">
-                <div style="font-size: 11px; font-weight: bold; color: #eee;">2단계: 갭하락 양봉 지지</div>
-                <div style="font-size: 9px; color: #aaa; margin: 2px 0;">비중 20% 확대</div>
-                <div style="font-size: 10px; font-weight: bold; color: #20c997;">{s2_mark}</div>
+                <div style="font-size: 11px; font-weight: bold; color: #eee;">2단계: 점핑양봉 지지</div>
+                <div style="font-size: 9.5px; color: #bbb; margin: 3px 0;">비중 20% 확대</div>
+                <div style="margin-top: 4px;">{s2_mark}</div>
             </div>
             <span style="color: #4e9ff5; font-weight: bold; font-size: 12px;">➔</span>
             <div style="flex: 1; {s3_style} border-radius: 6px; padding: 8px; text-align: center;">
                 <div style="font-size: 11px; font-weight: bold; color: #eee;">3단계: 60일선 거래량 돌파</div>
-                <div style="font-size: 9px; color: #aaa; margin: 2px 0;">비중 30% 주도주 풀베팅</div>
-                <div style="font-size: 10px; font-weight: bold; color: #ff922b;">{s3_mark}</div>
+                <div style="font-size: 9.5px; color: #bbb; margin: 3px 0;">비중 30% 주도주 풀베팅</div>
+                <div style="margin-top: 4px;">{s3_mark}</div>
             </div>
         </div>
     </div>
@@ -4403,7 +4413,13 @@ if _wr_mode == "🌙 야간 워룸":
         
         n_chg = nasdaq['chg']
         s_chg = sox['chg']
-        if n_chg > 0.5 and s_chg > 0:
+        if s_chg >= 2.0 and n_chg >= -0.5:
+            fc_badge = f"🟢 반도체 대형주(삼전/닉스) 갭상승 주도 예상 (반도체 {s_chg:+.2f}%)"
+            fc_color = "#2ecc71"
+        elif s_chg <= -2.0 and n_chg <= 0.5:
+            fc_badge = f"🔴 반도체 대형주 차익 매물 주의 (반도체 {s_chg:+.2f}% — 시초가 추격 자제)"
+            fc_color = "#f6465d"
+        elif n_chg > 0.5 and s_chg > 0:
             fc_badge = "🟢 익일 국장 갭상승 출발 유력 (기술주 훈풍 & 외인 유입 기대)"
             fc_color = "#2ecc71"
         elif n_chg < -0.5 or s_chg < -1.0:
@@ -4419,31 +4435,31 @@ if _wr_mode == "🌙 야간 워룸":
             return f"<span style='color:#ffffff; font-weight:bold;'>{d['price']}</span> <span style='color:{c_col}; font-weight:bold;'>({c_sgn}{d['chg']:.2f}%)</span>"
 
         st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #101726 0%, #171f30 100%); border: 1px solid #2962ff; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-family: 'malgun gothic', sans-serif;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <div style="font-size: 13px; font-weight: bold; color: #ffffff;">🌙 야간 글로벌 워룸 (Global War Room) & 익일 시초가 예측 신호등</div>
-                <div style="font-size: 11px; font-weight: bold; color: {fc_color}; background: rgba(255,255,255,0.06); padding: 3px 8px; border-radius: 6px;">{fc_badge}</div>
+        <div style="background: linear-gradient(135deg, #101726 0%, #171f30 100%); border: 1px solid #2962ff; border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; font-family: 'malgun gothic', sans-serif;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <div style="font-size: 12.5px; font-weight: bold; color: #ffffff;">🌙 야간 글로벌 워룸 (Global War Room) & 익일 시초가 예측 신호등</div>
+                <div style="font-size: 11px; font-weight: bold; color: {fc_color}; background: rgba(255,255,255,0.06); padding: 2px 8px; border-radius: 6px;">{fc_badge}</div>
             </div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
-                    <div style="font-size: 10.5px; color: #8fa0b5;">나스닥 종합</div>
-                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(nasdaq)}</div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 5px 8px;">
+                    <div style="font-size: 10px; color: #8fa0b5;">나스닥 종합</div>
+                    <div style="font-size: 11.5px; margin-top: 1px;">{_fmt_macro(nasdaq)}</div>
                 </div>
-                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
-                    <div style="font-size: 10.5px; color: #8fa0b5;">필라델피아 반도체</div>
-                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(sox)}</div>
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 5px 8px;">
+                    <div style="font-size: 10px; color: #8fa0b5;">필라델피아 반도체</div>
+                    <div style="font-size: 11.5px; margin-top: 1px;">{_fmt_macro(sox)}</div>
                 </div>
-                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
-                    <div style="font-size: 10.5px; color: #8fa0b5;">S&P 500</div>
-                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(snp)}</div>
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 5px 8px;">
+                    <div style="font-size: 10px; color: #8fa0b5;">S&P 500</div>
+                    <div style="font-size: 11.5px; margin-top: 1px;">{_fmt_macro(snp)}</div>
                 </div>
-                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
-                    <div style="font-size: 10.5px; color: #8fa0b5;">다우 존스</div>
-                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(dow)}</div>
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 5px 8px;">
+                    <div style="font-size: 10px; color: #8fa0b5;">다우 존스</div>
+                    <div style="font-size: 11.5px; margin-top: 1px;">{_fmt_macro(dow)}</div>
                 </div>
-                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 10px;">
-                    <div style="font-size: 10.5px; color: #8fa0b5;">원/달러 야간 환율</div>
-                    <div style="font-size: 12px; margin-top: 2px;">{_fmt_macro(usdkrw)}</div>
+                <div style="flex: 1; min-width: 140px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 5px 8px;">
+                    <div style="font-size: 10px; color: #8fa0b5;">원/달러 야간 환율</div>
+                    <div style="font-size: 11.5px; margin-top: 1px;">{_fmt_macro(usdkrw)}</div>
                 </div>
             </div>
         </div>
@@ -4556,57 +4572,57 @@ try:
         opt_tooltip = f"[외국인 옵션 Max Pain 가두리 밴드]\n만기 주간 외국인이 최대 수익을 거두기 위해 지수를 가두어 두는 박스권 구간\n- 하방 지지선: {mopt['lower']:,.0f}pt (이탈 시 외인 방어 매수 유입)\n- 상방 저항선: {mopt['upper']:,.0f}pt (돌파 시 외인 차익 매물 억제)\n- 외인 포지션 스탠스: {mopt.get('stance', '가두리 박스권 유도')}"
         
         st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #0d1322 0%, #151d30 100%); border: 1px solid #3b82f6; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-family: 'malgun gothic', sans-serif;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <div style="font-size: 13px; font-weight: bold; color: #60a5fa; display: flex; align-items: center; gap: 6px;">
+        <div style="background: linear-gradient(135deg, #0d1322 0%, #151d30 100%); border: 1px solid #3b82f6; border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; font-family: 'malgun gothic', sans-serif;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <div style="font-size: 12.5px; font-weight: bold; color: #60a5fa; display: flex; align-items: center; gap: 6px;">
                     🏛️ <span>GD 3.0 × 체슬리AI 특급 인텔리전스 레이더</span>
                 </div>
-                <div style="font-size: 11px; color: #94a3b8;">
+                <div style="font-size: 10.5px; color: #94a3b8;">
                     실시간 지수 바닥 & 파생 가두리 밴드 자동 감시 (마우스 호버 시 상세 해설)
                 </div>
             </div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                 <!-- 1. 바실리 -->
-                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {v_border}; border-radius: 8px; padding: 8px 12px;" title="{v_tooltip}">
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {v_border}; border-radius: 6px; padding: 6px 10px;" title="{v_tooltip}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <span style="font-size: 11px; color: #94a3b8; font-weight: bold;">🎯 GD 바실리 (국내)</span>
                         <span style="font-size: 11px;">{v_badge}</span>
                     </div>
-                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 3px;">{v_desc}</div>
-                    <div style="font-size: 10px; color: #93c5fd; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 2px;">{v_desc}</div>
+                    <div style="font-size: 10px; color: #93c5fd; margin-top: 3px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                         {v_guide}
                     </div>
                 </div>
                 <!-- 2. BOD -->
-                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {b_border}; border-radius: 8px; padding: 8px 12px;" title="{b_tooltip}">
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {b_border}; border-radius: 6px; padding: 6px 10px;" title="{b_tooltip}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <span style="font-size: 11px; color: #94a3b8; font-weight: bold;">🌊 GD BOD (미국)</span>
                         <span style="font-size: 11px;">{b_badge}</span>
                     </div>
-                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 3px;">{b_desc}</div>
-                    <div style="font-size: 10px; color: #93c5fd; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 2px;">{b_desc}</div>
+                    <div style="font-size: 10px; color: #93c5fd; margin-top: 3px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                         {b_guide}
                     </div>
                 </div>
                 <!-- 3. VIX & 풋콜 -->
-                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;" title="{vp_tooltip}">
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 6px 10px;" title="{vp_tooltip}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <span style="font-size: 11px; color: #94a3b8; font-weight: bold;">😱 VIX & 풋콜 심리</span>
                         <span style="font-size: 11px; color: {vix_col}; font-weight: bold;">VIX {vix_val:.1f} (안정 🟢)</span>
                     </div>
-                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 3px;">{vp_desc}</div>
-                    <div style="font-size: 10px; color: #93c5fd; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 2px;">{vp_desc}</div>
+                    <div style="font-size: 10px; color: #93c5fd; margin-top: 3px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                         {vp_guide}
                     </div>
                 </div>
                 <!-- 4. 옵션 Max Pain -->
-                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;" title="{opt_tooltip}">
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 6px 10px;" title="{opt_tooltip}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <span style="font-size: 11px; color: #94a3b8; font-weight: bold;">🏛️ 옵션 Max Pain [{d_day_str}]</span>
                         <span style="font-size: 10.5px; color: #38bdf8; font-weight: bold;">{mopt['exp_date'][5:]} 만기</span>
                     </div>
-                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 3px;">가두리 밴드: <span style="color:#fbbf24;">{opt_range}</span></div>
-                    <div style="font-size: 10px; color: #93c5fd; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 2px;">가두리 밴드: <span style="color:#fbbf24;">{opt_range}</span></div>
+                    <div style="font-size: 10px; color: #93c5fd; margin-top: 3px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                         {opt_guide}
                     </div>
                 </div>
@@ -6231,17 +6247,30 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 daily_rows = ""
                 for d in supply_trend_data.get('daily', []):
                     if isinstance(d, dict):
-                        d_date = str(d.get('date', d.get('bizdate', '')))
+                        d_raw = str(d.get('date', d.get('bizdate', ''))).strip()
+                        d_date = d_raw
+                        try:
+                            c_digits = re.sub(r'[^0-9]', '', d_raw)
+                            w_days = ['월', '화', '수', '목', '금', '토', '일']
+                            if len(c_digits) == 8:
+                                _dt = datetime.strptime(c_digits, '%Y%m%d')
+                                d_date = f"{_dt.strftime('%m.%d')}({w_days[_dt.weekday()]})"
+                            elif len(c_digits) == 4:
+                                _c_yr = datetime.now().year
+                                _dt = datetime.strptime(f"{_c_yr}{c_digits}", '%Y%m%d')
+                                d_date = f"{_dt.strftime('%m.%d')}({w_days[_dt.weekday()]})"
+                        except Exception:
+                            pass
                         d_f = get_sup_val(d, 'foreigner', 'foreign', '외국인', 'Foreigner')
                         d_o = get_sup_val(d, 'organ', 'institutional', '기관', 'Institutional')
                         d_i = get_sup_val(d, 'individual', '개인', 'Individual')
                         daily_details.append(f"{d_date}(외인:{fmt_shares_korean(d_f)}, 기관:{fmt_shares_korean(d_o)})")
                         daily_rows += f"""
                         <tr style='border-bottom: 1px solid rgba(255, 255, 255, 0.05);'>
-                            <td style='padding: 5px; text-align: left; color: #aaa;'>{d_date}</td>
-                            <td style='padding: 5px;'>{fmt_shares_html(d_f)}</td>
-                            <td style='padding: 5px;'>{fmt_shares_html(d_o)}</td>
-                            <td style='padding: 5px;'>{fmt_shares_html(d_i)}</td>
+                            <td style='padding: 5px 8px; text-align: left; color: #aaa;'>{d_date}</td>
+                            <td style='padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums;'>{fmt_shares_html(d_f)}</td>
+                            <td style='padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums;'>{fmt_shares_html(d_o)}</td>
+                            <td style='padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums;'>{fmt_shares_html(d_i)}</td>
                         </tr>
                         """
                 supply_trend_prompt += " | 일별 추이: " + ", ".join(daily_details)
@@ -6249,21 +6278,21 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 supply_table_html = f"""
                 <div style="background-color: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: 6px; border-left: 4px solid #00e5ff; font-size: 12px; line-height: 1.4; color: #ccc; font-family: 'malgun gothic', sans-serif; margin-bottom: 8px;">
                     <strong style="font-size: 13px;">📊 최근 수급 동향 (Naver):</strong>
-                    <table style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; text-align: center;">
+                    <table style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px;">
                         <thead>
                             <tr style="background-color: rgba(255, 255, 255, 0.05); border-bottom: 1px solid rgba(255, 255, 255, 0.1); color: #eee;">
-                                <th style="padding: 5px; text-align: left; font-weight: 500;">일자</th>
-                                <th style="padding: 5px; color: #ff6b6b; font-weight: 500;">외국인</th>
-                                <th style="padding: 5px; color: #3498db; font-weight: 500;">기관</th>
-                                <th style="padding: 5px; color: #ffeb3b; font-weight: 500;">개인</th>
+                                <th style="padding: 5px 8px; text-align: left; font-weight: 500;">일자</th>
+                                <th style="padding: 5px 8px; text-align: right; color: #ff6b6b; font-weight: 500;">외국인</th>
+                                <th style="padding: 5px 8px; text-align: right; color: #3498db; font-weight: 500;">기관</th>
+                                <th style="padding: 5px 8px; text-align: right; color: #ffeb3b; font-weight: 500;">개인</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr style="border-bottom: 2px solid rgba(0, 229, 255, 0.3); background-color: rgba(0, 229, 255, 0.05); font-weight: bold;">
-                                <td style="padding: 5px; text-align: left; color: #00e5ff;">10일 누적</td>
-                                <td style="padding: 5px;">{fmt_shares_html(f_cum)}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(o_cum)}</td>
-                                <td style="padding: 5px;">{fmt_shares_html(i_cum)}</td>
+                                <td style="padding: 5px 8px; text-align: left; color: #00e5ff;">10일 누적</td>
+                                <td style="padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums;">{fmt_shares_html(f_cum)}</td>
+                                <td style="padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums;">{fmt_shares_html(o_cum)}</td>
+                                <td style="padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums;">{fmt_shares_html(i_cum)}</td>
                             </tr>
                             {daily_rows}
                         </tbody>
@@ -6621,11 +6650,13 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     elif _score_diff >= 15.0:
                         _rebal_badge = f"🔥 교체 매력도: 높음 (+{_score_diff:.1f}점 격차)"
                         _rebal_color = "#f6465d"
-                        _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점{_ret_str}) 대비 오늘 시장 1위 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점, {_top_q_chg})의 자금 유입 탄력도가 <b>+{_score_diff:.1f}점</b> 압도적입니다.<br><span style='color:#ffd43b; font-weight:bold;'>💡 실전 처방:</span> 무리한 추가 물타기보다, 기술적 반등 시 비중을 줄이고 1위 주도주로 교체 압축하는 것이 유리합니다."
+                        _top_chg_col = "#ff6b6b" if "+" in _top_q_chg else "#4e9ff5"
+                        _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점{_ret_str}) 대비 오늘 시장 1위 주도주 <b style='color:#00f2fe;'>{_top_q_name}</b>({_top_q_score:.1f}점, <span style='color:{_top_chg_col}; font-weight:bold;'>{_top_q_chg}</span>)의 자금 유입 탄력도가 <b>+{_score_diff:.1f}점</b> 압도적입니다.<br><span style='color:#ffd43b; font-weight:bold;'>💡 실전 처방:</span> 무리한 추가 물타기보다, 기술적 반등 시 비중을 줄이고 1위 주도주로 교체 압축하는 것이 유리합니다."
                     elif _score_diff >= 6.0:
                         _rebal_badge = f"⚖️ 교체 매력도: 보통 (+{_score_diff:.1f}점)"
                         _rebal_color = "#f39c12"
-                        _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점)과 1위 주도주 <b>{_top_q_name}</b>({_top_q_score:.1f}점) 간 격차는 크지 않습니다. 지지선 반등 추세를 확인하며 분할 교체를 검토하십시오."
+                        _top_chg_col = "#ff6b6b" if "+" in _top_q_chg else "#4e9ff5"
+                        _rebal_desc = f"<b>{_eval_name}</b>({_cur_score:.1f}점)과 1위 주도주 <b style='color:#00f2fe;'>{_top_q_name}</b>({_top_q_score:.1f}점, <span style='color:{_top_chg_col}; font-weight:bold;'>{_top_q_chg}</span>) 간 격차는 크지 않습니다. 지지선 반등 추세를 확인하며 분할 교체를 검토하십시오."
                     else:
                         _rebal_badge = "🛡️ 교체 불필요 (홀딩 유지)"
                         _rebal_color = "#3498db"
