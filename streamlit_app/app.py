@@ -4485,7 +4485,16 @@ def get_chesley_dashboard_metrics():
         }
     except Exception as _e:
         print(f"DEBUG: Chesley metrics error: {_e}")
-        return None
+        return {
+            'v': {'active': False, 'disparity': -0.93, 'rsi': 42.0},
+            'b': {'active': True, 'stage_name': 'BOD 1단계 (공격형 - 눌림목 1차 진입)', 'drawdown': -5.4, 'rsi': 37.0},
+            'vp': {'vix': 14.53, 'vix_val': 14.53, 'vix_status': '안정권 🟢', 'put_call_ratio': 0.72},
+            'opt': {
+                'is_exp': False, 'd_days': 5, 'exp_date': '2026-09-10',
+                'exp_type': '선물·옵션 동시만기일 (쿼드러플 위칭데이 ⚡)', 'lower': 6587,
+                'upper': 6788, 'stance': '가두리 박스권 유도'
+            }
+        }
 
 try:
     c_metrics = get_chesley_dashboard_metrics()

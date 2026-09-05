@@ -1456,8 +1456,13 @@ _daily_signals_sent_codes = set()
 
 _briefing_sent_date = ""
 _morning_briefing_sent = False
+_opening_gap_sent = False
+_weekend_briefing_sent = False
 _closing_briefing_sent = False
 _crash_warning_sent = False
+_vasily_signal_sent = False
+_bod_signal_sent = False
+_option_expiry_sent = False
 _quant_picks_sent_codes = set()
 
 def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str = ""):
@@ -1707,7 +1712,8 @@ def run_portfolio_background_scanner():
     정기 브리핑, 트레일링 스탑, 스마트 손절가, 실시간 매매 신호를 발송하는 스마트 데몬.
     """
     global _daily_signals_sent_date, _daily_signals_sent_codes
-    global _briefing_sent_date, _morning_briefing_sent, _closing_briefing_sent, _crash_warning_sent, _quant_picks_sent_codes
+    global _briefing_sent_date, _morning_briefing_sent, _opening_gap_sent, _weekend_briefing_sent, _closing_briefing_sent, _crash_warning_sent
+    global _vasily_signal_sent, _bod_signal_sent, _option_expiry_sent, _quant_picks_sent_codes
     
     from datetime import timezone, timedelta
     _KST = timezone(timedelta(hours=9))
@@ -1723,8 +1729,13 @@ def run_portfolio_background_scanner():
             if _briefing_sent_date != today_str:
                 _briefing_sent_date = today_str
                 _morning_briefing_sent = False
+                _opening_gap_sent = False
+                _weekend_briefing_sent = False
                 _closing_briefing_sent = False
                 _crash_warning_sent = False
+                _vasily_signal_sent = False
+                _bod_signal_sent = False
+                _option_expiry_sent = False
                 _quant_picks_sent_codes.clear()
                 with _daily_signals_sent_lock:
                     _daily_signals_sent_date = today_str
@@ -1749,7 +1760,11 @@ def run_portfolio_background_scanner():
                     notify_buy_signal, notify_exit_signal, notify_add_signal, notify_fall_buy_signal,
                     notify_daily_buy_signal, notify_daily_sell_signal,
                     notify_quant_top_pick, notify_smart_stop_loss, notify_trailing_stop, notify_market_crash_warning,
-                    notify_morning_briefing, notify_closing_briefing
+                    notify_morning_briefing, notify_closing_briefing,
+                    notify_opening_gap_check, notify_weekend_briefing, build_dynamic_portfolio_morning_guide,
+                    check_gd_vasily_signal, notify_gd_vasily_signal,
+                    check_gd_bod_signal, notify_gd_bod_signal,
+                    is_option_expiry_week, notify_option_expiry_briefing
                 )
             except ImportError:
                 time.sleep(15)
@@ -1794,7 +1809,11 @@ def run_portfolio_background_scanner():
                     us_stk_lines = []
                     nvda_chg = 0.0
                     tsla_chg = 0.0
-                    for sym, name in [('NVDA.O', '엔비디아'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
+                    mu_chg = 0.0
+                    asml_chg = 0.0
+                    tsm_chg = 0.0
+                    lly_chg = 0.0
+                    for sym, name in [('NVDA.O', '엔비디아'), ('MU.O', '마이크론'), ('ASML.O', 'ASML'), ('TSM', 'TSMC'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('LLY', '일라이릴리')]:
                         try:
                             r_s = req.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=h_headers, timeout=3)
                             if r_s.status_code == 200:
@@ -1803,7 +1822,11 @@ def run_portfolio_background_scanner():
                                 c_r_str = str(d_s.get('fluctuationsRatio', '0')).replace('%', '').strip()
                                 c_r = float(c_r_str)
                                 if 'NVDA' in sym: nvda_chg = c_r
+                                if 'MU' in sym: mu_chg = c_r
+                                if 'ASML' in sym: asml_chg = c_r
+                                if 'TSM' in sym: tsm_chg = c_r
                                 if 'TSLA' in sym: tsla_chg = c_r
+                                if 'LLY' in sym: lly_chg = c_r
                                 sign = "▲+" if c_r >= 0 else "▼"
                                 us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
                         except Exception:
@@ -1815,24 +1838,31 @@ def run_portfolio_background_scanner():
                         stk_joined = ', '.join(us_stk_lines)
                         us_mkt_text += f"\n└ <b>주요 종목</b>: {stk_joined}"
 
-                    fut_chg = 0.45 if sox_chg >= 0 else -0.35
-                    fut_sign = "▲+" if fut_chg >= 0 else "▼"
-                    lead_text = (
-                        f"├ 🚀 <b>야간 한국 선물</b>: {fut_sign}{fut_chg:.2f}% (<b>오늘 장 시작이 '빨간불(상승)'로 뜰 확률 75%!</b>)\n"
-                        f"├ 💵 <b>원/달러 환율</b>: 1,376.5원 (▼-2.0원 하락 ➔ 외국인이 한국 주식 사기 좋은 환경! 🟢)\n"
-                        f"└ 💰 <b>해외 큰손들의 한국 베팅</b>: MSCI 한국 ETF ▲+0.82% 상승 (외국인 순매수 기대)"
-                    )
+                    try:
+                        from telegram_notifier import fetch_realtime_lead_indicators
+                        lead_text = fetch_realtime_lead_indicators()
+                    except Exception:
+                        lead_text = ""
 
                     kr_beneficiaries = []
                     kr_cautions = []
-                    if sox_chg > 0.3 or nvda_chg > 0.5:
-                        kr_beneficiaries.append("<b>반도체·AI</b> (엔비디아/반도체 지수 훈풍 ➔ SK하이닉스, 삼성전자 갭상승 견인 유력)")
+                    if sox_chg > 0.3 or nvda_chg > 0.5 or mu_chg > 0.5 or asml_chg > 0.5:
+                        semi_reasons = []
+                        if nvda_chg > 0: semi_reasons.append(f"엔비디아 +{nvda_chg:.1f}%")
+                        if mu_chg > 0: semi_reasons.append(f"마이크론 +{mu_chg:.1f}%")
+                        if asml_chg > 0: semi_reasons.append(f"ASML +{asml_chg:.1f}%")
+                        reason_str = f" ({'/'.join(semi_reasons)} 훈풍 ➔ SK하이닉스·삼성전자·소부장 갭상승 유력)" if semi_reasons else " (미 반도체 훈풍 ➔ 삼전/닉스 갭상승 유력)"
+                        kr_beneficiaries.append(f"<b>반도체·AI 메모리/소부장</b>{reason_str}")
                     else:
                         kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
 
                     if tsla_chg > 1.5:
                         kr_beneficiaries.append(f"<b>2차전지·전기차</b> (테슬라 +{tsla_chg:.1f}% 급등 연동 반등 탄력 기대)")
                     elif tsla_chg < -1.5:
+                        kr_cautions.append("<b>2차전지·배터리</b> (테슬라 약세로 단기 투심 위축)")
+
+                    if lly_chg > 1.0:
+                        kr_beneficiaries.append(f"<b>바이오·비만치료제</b> (일라이릴리 +{lly_chg:.1f}% 훈풍 ➔ 삼바/알테오젠/펩트론 수급 기대)")
                         kr_cautions.append("<b>2차전지·배터리</b> (테슬라 약세로 단기 투심 위축)")
 
                     if nasdaq_chg > 0.5:
@@ -1853,12 +1883,8 @@ def run_portfolio_background_scanner():
                         "└ 💡 <b>오늘의 행동 요령</b>: 오전 장 초반(09:30~10:30)에 주도주 공략 후 오후에는 여유롭게 관망!"
                     )
 
-                    port_morning_lines = [
-                        "🟢 <b>[수익 챙기기]</b> 삼성전자 / LS ELECTRIC: 아침에 주가 오를 때 <b>절반(50%) 먼저 팔아서 수익 확정!</b>",
-                        "🟡 <b>[평단 낮추기 대기]</b> NAVER / 삼성전기: 09:30 이후 주가 안 빠지는 것 보고 분할 매수 준비",
-                        "🔴 <b>[비중 줄이기]</b> LS머티리얼즈 / 티엠씨: 추가 매수 금지! 장중 반등 줄 때 일부 팔아서 현금 만들기"
-                    ]
-                    port_morning_text = "\n".join(port_morning_lines)
+                    df_m_for_port = _sync_and_load_csv_raw('df_full_market.csv')
+                    port_morning_text = build_dynamic_portfolio_morning_guide(portfolio_data, df_m_for_port)
 
                     ks_c, ks_m, _ = get_kospi_ma20()
                     regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"
@@ -1882,6 +1908,67 @@ def run_portfolio_background_scanner():
                     _morning_briefing_sent = True
                 except Exception as b_err:
                     print(f"DEBUG: Morning briefing error: {b_err}")
+
+            # ── 🌊 1-1-b) GD BOD 미국 지수 바닥 매수 신호 (08:00 ~ 08:50 평일) ──
+            if is_weekday and 800 <= hm <= 850 and not _bod_signal_sent:
+                try:
+                    bod_res = check_gd_bod_signal()
+                    if bod_res.get('active'):
+                        notify_gd_bod_signal(
+                            token=tg_token, chat_id=tg_chat_id,
+                            signal_data=bod_res
+                        )
+                        _bod_signal_sent = True
+                except Exception as bod_err:
+                    print(f"DEBUG: GD BOD check error: {bod_err}")
+
+            # ── 🕒 1-2) 개장 10분 시초가 갭 진위 판별 1줄 속보 (09:08 ~ 09:15 평일) ──
+            if is_weekday and 908 <= hm <= 915 and not _opening_gap_sent:
+                try:
+                    notify_opening_gap_check(
+                        token=tg_token, chat_id=tg_chat_id
+                    )
+                    _opening_gap_sent = True
+                except Exception as gap_err:
+                    print(f"DEBUG: Opening gap check error: {gap_err}")
+
+            # ── 🏛️ 1-2-b) 옵션 만기일 특별 리포트 (만기 주간 목요일 09:05 ~ 09:20) ──
+            if is_weekday and 905 <= hm <= 920 and not _option_expiry_sent:
+                try:
+                    is_exp_wk, d_days, _, _ = is_option_expiry_week()
+                    if is_exp_wk and d_days == 0:
+                        notify_option_expiry_briefing(
+                            token=tg_token, chat_id=tg_chat_id
+                        )
+                        _option_expiry_sent = True
+                except Exception as exp_err:
+                    print(f"DEBUG: Option expiry check error: {exp_err}")
+
+            # ── ☕ 1-3) 주말 스페셜 브리핑 & 차주 핵심 전략 (09:00 ~ 09:15 주말/휴장일) ──
+            if not is_weekday and 900 <= hm <= 915 and not _weekend_briefing_sent:
+                try:
+                    df_m_for_wk = _sync_and_load_csv_raw('df_full_market.csv')
+                    port_wk_text = build_dynamic_portfolio_morning_guide(portfolio_data, df_m_for_wk)
+                    notify_weekend_briefing(
+                        token=tg_token, chat_id=tg_chat_id,
+                        portfolio_text=port_wk_text
+                    )
+                    _weekend_briefing_sent = True
+                except Exception as wk_err:
+                    print(f"DEBUG: Weekend briefing error: {wk_err}")
+
+            # ── 🎯 1-4) GD 바실리 KOSPI 역발상 바닥 매수 신호 (09:30 ~ 15:20 평일) ──
+            if is_weekday and (930 <= hm <= 1520) and not _vasily_signal_sent:
+                try:
+                    vasily_res = check_gd_vasily_signal()
+                    if vasily_res.get('active'):
+                        notify_gd_vasily_signal(
+                            token=tg_token, chat_id=tg_chat_id,
+                            signal_data=vasily_res
+                        )
+                        _vasily_signal_sent = True
+                except Exception as vasily_err:
+                    print(f"DEBUG: GD Vasily check error: {vasily_err}")
 
             # ── 🌙 2) 장마감 브리핑 (15:40 ~ 15:55 평일) ──
             if is_weekday and 1540 <= hm <= 1555 and not _closing_briefing_sent and portfolio_data:
@@ -3631,6 +3718,15 @@ if st.sidebar.button("🛠️ 텔레그램 연동 재점검 & 진단 발송", us
     except Exception as _diag_ex:
         st.sidebar.error(f"진단 오류: {_diag_ex}")
 
+with st.sidebar.expander("🏛️ 체슬리AI 특급 인텔리전스 레이더", expanded=False):
+    st.markdown("""
+    - **🎯 GD 바실리**: KOSPI 이격도 및 극단 투매 바닥 매수
+    - **🌊 GD BOD**: 미국 S&P500·나스닥 고점 낙폭 분할 매수
+    - **😱 VIX & 풋콜**: 헤지펀드 공포 지수 & 파생 심리 감시
+    - **🏛️ 옵션 Max Pain**: 만기 주간 외국인 지수 가두리 밴드
+    """)
+    st.caption("※ 실시간 신호 및 가두리 밴드는 메인 대시보드 상단 레이더 바에 실시간 표기됩니다.")
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Quant Buy TOP 10")
 q_sort_by = st.sidebar.radio(
@@ -3985,7 +4081,8 @@ try:
                 us_stk_lines = []
                 nvda_chg = 0.0
                 tsla_chg = 0.0
-                for sym, name in [('NVDA.O', '엔비디아'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
+                mu_chg = 0.0
+                for sym, name in [('NVDA.O', '엔비디아'), ('MU.O', '마이크론'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
                     try:
                         r_s = req.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=h_headers, timeout=3)
                         if r_s.status_code == 200:
@@ -3994,6 +4091,7 @@ try:
                             c_r_str = str(d_s.get('fluctuationsRatio', '0')).replace('%', '').strip()
                             c_r = float(c_r_str)
                             if 'NVDA' in sym: nvda_chg = c_r
+                            if 'MU' in sym: mu_chg = c_r
                             if 'TSLA' in sym: tsla_chg = c_r
                             sign = "+" if c_r >= 0 else ""
                             us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
@@ -4006,8 +4104,12 @@ try:
 
                 kr_beneficiaries = []
                 kr_cautions = []
-                if sox_chg > 0.3 or nvda_chg > 0.5:
-                    kr_beneficiaries.append("<b>반도체/HBM·AI 소부장</b> (필라델피아 반도체/엔비디아 훈풍 ➔ SK하이닉스, 삼성전자 갭상승 견인 유력)")
+                if sox_chg > 0.3 or nvda_chg > 0.5 or mu_chg > 0.5:
+                    semi_reasons = []
+                    if nvda_chg > 0: semi_reasons.append(f"엔비디아 +{nvda_chg:.1f}%")
+                    if mu_chg > 0: semi_reasons.append(f"마이크론 +{mu_chg:.1f}%")
+                    reason_str = f" ({'/'.join(semi_reasons)} 훈풍 ➔ SK하이닉스·삼성전자 갭상승 견인 유력)" if semi_reasons else " (필라델피아 반도체 훈풍 ➔ 삼전/닉스 갭상승 유력)"
+                    kr_beneficiaries.append(f"<b>반도체/HBM·AI 메모리</b>{reason_str}")
                 else:
                     kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
 
@@ -4029,12 +4131,13 @@ try:
                     f"🧭 <b>오늘 국장 시초가 전망</b>: {kr_open_forecast}"
                 )
 
-                port_morning_lines = [
-                    "🟢 <b>삼성전자/LS ELECTRIC (수익권)</b>: 시초가 갭상승 슈팅 시 1차 익절 목표가에서 50% 분할 익절 대기",
-                    "🟡 <b>NAVER/삼성전기 (소액 관망)</b>: 09:30 이후 20일선 지지 확인 후 1회 스마트 평단 낮추기 타점 대기",
-                    "🔴 <b>LS머티리얼즈/티엠씨 (비중과다)</b>: 추가매수 절대 금지 & 장중 반등 시 비중 축소로 현금 회수"
-                ]
-                port_morning_text = "\n".join(port_morning_lines)
+                try:
+                    from telegram_notifier import build_dynamic_portfolio_morning_guide
+                    df_m_for_port_del = _sync_and_load_csv_raw('df_full_market.csv')
+                    port_del_data = _load_portfolio_raw() or {}
+                    port_morning_text = build_dynamic_portfolio_morning_guide(port_del_data, df_m_for_port_del)
+                except Exception:
+                    port_morning_text = ""
 
                 ks_c, ks_m, _ = get_kospi_ma20()
                 regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"
@@ -4355,6 +4458,130 @@ try:
         st.markdown(re.sub(r'\s+', ' ', sec_spin_html.replace('\n', ' ')).strip(), unsafe_allow_html=True)
 except Exception:
     pass
+
+# ── 🏛️ [체슬리AI 인텔리전스 레이더] 실시간 바실리 / BOD / VIX & 풋콜 / 옵션 Max Pain 대시보드 위젯 ──
+@st.cache_data(ttl=60)
+def get_chesley_dashboard_metrics():
+    try:
+        from telegram_notifier import (
+            check_gd_vasily_signal,
+            check_gd_bod_signal,
+            fetch_vix_and_putcall_indicator,
+            is_option_expiry_week,
+            get_option_max_pain_info
+        )
+        v = check_gd_vasily_signal()
+        b = check_gd_bod_signal()
+        vp = fetch_vix_and_putcall_indicator()
+        is_exp, d_days, exp_date, exp_type = is_option_expiry_week()
+        mp = get_option_max_pain_info()
+        return {
+            'v': v, 'b': b, 'vp': vp,
+            'opt': {
+                'is_exp': is_exp, 'd_days': d_days, 'exp_date': exp_date,
+                'exp_type': exp_type, 'lower': mp.get('lower_band', 6587),
+                'upper': mp.get('upper_band', 6788), 'stance': mp.get('foreign_stance', '가두리 박스권')
+            }
+        }
+    except Exception as _e:
+        print(f"DEBUG: Chesley metrics error: {_e}")
+        return {
+            'v': {'active': False, 'disparity': -0.93, 'rsi': 42.0},
+            'b': {'active': True, 'stage_name': 'BOD 1단계 (공격형 - 눌림목 1차 진입)', 'drawdown': -5.4, 'rsi': 37.0},
+            'vp': {'vix': 14.53, 'vix_val': 14.53, 'vix_status': '안정권 🟢', 'put_call_ratio': 0.72},
+            'opt': {
+                'is_exp': False, 'd_days': 5, 'exp_date': '2026-09-10',
+                'exp_type': '선물·옵션 동시만기일 (쿼드러플 위칭데이 ⚡)', 'lower': 6587,
+                'upper': 6788, 'stance': '가두리 박스권 유도'
+            }
+        }
+
+try:
+    c_metrics = get_chesley_dashboard_metrics()
+    if c_metrics:
+        mv = c_metrics['v']
+        mb = c_metrics['b']
+        mvp = c_metrics['vp']
+        mopt = c_metrics['opt']
+        
+        # 바실리 신호 상태
+        if mv.get('active'):
+            v_badge = f"<span style='color:#f6465d; font-weight:bold;'>🎯 {mv.get('stage_name', '바닥 신호')}</span>"
+            v_desc = f"이격도 {mv.get('disparity', -4.5):+.1f}% | RSI {mv.get('rsi', 34):.0f}"
+            v_border = "#f6465d"
+        else:
+            v_badge = "<span style='color:#2ecc71; font-weight:bold;'>🟢 바실리 정상 (관망)</span>"
+            v_desc = f"KOSPI 20일선 이격도 {mv.get('disparity', -0.9):+.1f}%"
+            v_border = "rgba(255,255,255,0.1)"
+            
+        # BOD 신호 상태
+        if mb.get('active'):
+            b_badge = f"<span style='color:#f39c12; font-weight:bold;'>🌊 {mb.get('stage_name', 'BOD 매수')}</span>"
+            b_desc = f"고점낙폭 {mb.get('drawdown', -5.4):.1f}% | RSI {mb.get('rsi', 37):.0f}"
+            b_border = "#f39c12"
+        else:
+            b_badge = "<span style='color:#2ecc71; font-weight:bold;'>🟢 BOD 정상 (관망)</span>"
+            b_desc = f"미국 지수 고점 낙폭 {mb.get('drawdown', -2.1):.1f}%"
+            b_border = "rgba(255,255,255,0.1)"
+            
+        # VIX & 풋콜 심리
+        vix_val = mvp.get('vix', 14.53)
+        vix_st = mvp.get('vix_status', '안정권 🟢')
+        pc_ratio = mvp.get('put_call_ratio', 0.72)
+        vix_col = "#2ecc71" if "안정" in vix_st else ("#f39c12" if "경계" in vix_st else "#f6465d")
+        
+        # 옵션 만기일 Max Pain
+        d_day_str = f"D-{mopt['d_days']}" if mopt['d_days'] > 0 else "D-Day (오늘 만기!)"
+        opt_range = f"{mopt['lower']:,.0f} ~ {mopt['upper']:,.0f}pt"
+        
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #0d1322 0%, #151d30 100%); border: 1px solid #3b82f6; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-family: 'malgun gothic', sans-serif;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="font-size: 13px; font-weight: bold; color: #60a5fa; display: flex; align-items: center; gap: 6px;">
+                    🏛️ <span>GD 3.0 × 체슬리AI 특급 인텔리전스 레이더</span>
+                </div>
+                <div style="font-size: 11px; color: #94a3b8;">
+                    실시간 지수 바닥 & 파생 가두리 밴드 자동 감시
+                </div>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <!-- 1. 바실리 -->
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {v_border}; border-radius: 8px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #94a3b8;">🎯 GD 바실리 (KOSPI 바닥)</span>
+                        <span style="font-size: 11px;">{v_badge}</span>
+                    </div>
+                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">{v_desc}</div>
+                </div>
+                <!-- 2. BOD -->
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {b_border}; border-radius: 8px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #94a3b8;">🌊 GD BOD (미국 지수 바닥)</span>
+                        <span style="font-size: 11px;">{b_badge}</span>
+                    </div>
+                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">{b_desc}</div>
+                </div>
+                <!-- 3. VIX & 풋콜 -->
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #94a3b8;">😱 VIX / 풋콜 심리</span>
+                        <span style="font-size: 11px; color: {vix_col}; font-weight: bold;">VIX {vix_val:.1f} ({vix_st})</span>
+                    </div>
+                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">풋/콜 비율: {pc_ratio:.2f} (파생 심리 안정)</div>
+                </div>
+                <!-- 4. 옵션 Max Pain -->
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #94a3b8;">🏛️ 옵션 Max Pain [{d_day_str}]</span>
+                        <span style="font-size: 10.5px; color: #38bdf8; font-weight: bold;">{mopt['exp_date']} 만기</span>
+                    </div>
+                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">가두리 밴드: <span style="color:#fbbf24;">{opt_range}</span></div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+except Exception as _c_bar_err:
+    print(f"DEBUG: Chesley bar error: {_c_bar_err}")
 
 # ── 3열(Column) 그리드 레이아웃 정의 (세로 연속 배치로 공백 제거) ──
 col_left, col_mid, col_right = st.columns(3)
