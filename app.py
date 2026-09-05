@@ -4504,35 +4504,46 @@ try:
         mvp = c_metrics['vp']
         mopt = c_metrics['opt']
         
-        # 바실리 신호 상태
+        # 1. 바실리 신호 상태
         if mv.get('active'):
             v_badge = f"<span style='color:#f6465d; font-weight:bold;'>🎯 {mv.get('stage_name', '바닥 신호')}</span>"
-            v_desc = f"이격도 {mv.get('disparity', -4.5):+.1f}% | RSI {mv.get('rsi', 34):.0f}"
+            v_desc = f"이격도 {mv.get('disparity', -4.5):+.1f}% · RSI {mv.get('rsi', 34):.0f}"
+            v_guide = "💡 지수 20일선 이탈! KODEX 200/대형주 분할 줍줍 구간"
             v_border = "#f6465d"
         else:
-            v_badge = "<span style='color:#2ecc71; font-weight:bold;'>🟢 바실리 정상 (관망)</span>"
-            v_desc = f"KOSPI 20일선 이격도 {mv.get('disparity', -0.9):+.1f}%"
+            v_badge = "<span style='color:#2ecc71; font-weight:bold;'>🟢 정상 (관망)</span>"
+            v_desc = f"KOSPI 이격도 {mv.get('disparity', -0.9):+.1f}% · RSI {mv.get('rsi', 42):.0f}"
+            v_guide = "💡 극단 투매 시 KODEX 200/대형주 역발상 바닥 매수 타점"
             v_border = "rgba(255,255,255,0.1)"
+        v_tooltip = "[GD 바실리: 국내 코스피 바닥 저격]\n20일선 이격도와 RSI 과매도로 KOSPI 투매 바닥을 저격하는 역발상 매수 신호\n- 평소: 개별 퀀트 주도주 공략\n- 신호 발생(1~3단계): KODEX 200 및 대형주 적극 분할 줍줍!"
             
-        # BOD 신호 상태
+        # 2. BOD 신호 상태
         if mb.get('active'):
-            b_badge = f"<span style='color:#f39c12; font-weight:bold;'>🌊 {mb.get('stage_name', 'BOD 매수')}</span>"
-            b_desc = f"고점낙폭 {mb.get('drawdown', -5.4):.1f}% | RSI {mb.get('rsi', 37):.0f}"
+            b_badge = f"<span style='color:#f39c12; font-weight:bold;'>🌊 {mb.get('stage_name', 'BOD 1단계')}</span>"
+            b_desc = f"고점낙폭 {mb.get('drawdown', -5.4):.1f}% · RSI {mb.get('rsi', 37):.0f}"
+            b_guide = "💡 Buy On Dips (QQQ/SPY 지수 ETF 1차 20% 분할 줍줍)"
             b_border = "#f39c12"
         else:
-            b_badge = "<span style='color:#2ecc71; font-weight:bold;'>🟢 BOD 정상 (관망)</span>"
+            b_badge = "<span style='color:#2ecc71; font-weight:bold;'>🟢 정상 (관망)</span>"
             b_desc = f"미국 지수 고점 낙폭 {mb.get('drawdown', -2.1):.1f}%"
+            b_guide = "💡 미국 S&P500·나스닥 건전한 조정 시 분할 매수 타점"
             b_border = "rgba(255,255,255,0.1)"
+        b_tooltip = "[GD BOD: 미국 지수 Buy On Dips]\n미국 60일 전고점 대비 낙폭을 추적하여 건전한 조정 시 분할 매수하는 신호\n- 1단계(-5%): QQQ, SPY 20% 1차 줍줍\n- 2단계(-8.5%): 30% 2차 매수\n- 3단계(-12%): 패닉 셀링 적극 매수"
             
-        # VIX & 풋콜 심리
+        # 3. VIX & 풋콜 심리
         vix_val = mvp.get('vix', 14.53)
         vix_st = mvp.get('vix_status', '안정권 🟢')
         pc_ratio = mvp.get('put_call_ratio', 0.72)
         vix_col = "#2ecc71" if "안정" in vix_st else ("#f39c12" if "경계" in vix_st else "#f6465d")
+        vp_desc = f"풋/콜 비율: {pc_ratio:.2f} (상승 기대 우세)"
+        vp_guide = "💡 헤지펀드 투매 위험 낮음 · 단기 과열 시 분할 익절 대응"
+        vp_tooltip = "[VIX & 풋콜 심리]\n- VIX 14.5: 18 미만 평온/안정권으로 헤지펀드 급락 투매 위험 낮음\n- 풋/콜 0.72: 콜옵션(상승 기대) 우세하여 하방 경직성 확보 (단기 과열 시 분할 익절)"
         
-        # 옵션 만기일 Max Pain
-        d_day_str = f"D-{mopt['d_days']}" if mopt['d_days'] > 0 else "D-Day (오늘 만기!)"
+        # 4. 옵션 만기일 Max Pain
+        d_day_str = f"D-{mopt['d_days']}" if mopt['d_days'] > 0 else "D-Day"
         opt_range = f"{mopt['lower']:,.0f} ~ {mopt['upper']:,.0f}pt"
+        opt_guide = "💡 외인 지수 가두리 밴드 (하단 지지 매수 / 상단 저항 익절)"
+        opt_tooltip = "[외국인 옵션 Max Pain 가두리 밴드]\n만기 주간 외국인이 최대 수익을 거두기 위해 지수를 가두어 두는 박스권 구간\n- 하방 6,587pt 이탈 시 외인 방어 매수 유입\n- 상방 6,788pt 돌파 시 외인 차익 매물 억제"
         
         st.markdown(f"""
         <div style="background: linear-gradient(135deg, #0d1322 0%, #151d30 100%); border: 1px solid #3b82f6; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-family: 'malgun gothic', sans-serif;">
@@ -4541,41 +4552,53 @@ try:
                     🏛️ <span>GD 3.0 × 체슬리AI 특급 인텔리전스 레이더</span>
                 </div>
                 <div style="font-size: 11px; color: #94a3b8;">
-                    실시간 지수 바닥 & 파생 가두리 밴드 자동 감시
+                    실시간 지수 바닥 & 파생 가두리 밴드 자동 감시 (마우스 호버 시 상세 해설)
                 </div>
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                 <!-- 1. 바실리 -->
-                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {v_border}; border-radius: 8px; padding: 8px 12px;">
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {v_border}; border-radius: 8px; padding: 8px 12px;" title="{v_tooltip}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 11px; color: #94a3b8;">🎯 GD 바실리 (KOSPI 바닥)</span>
+                        <span style="font-size: 11px; color: #94a3b8; font-weight: bold;">🎯 GD 바실리 (국내)</span>
                         <span style="font-size: 11px;">{v_badge}</span>
                     </div>
-                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">{v_desc}</div>
+                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 3px;">{v_desc}</div>
+                    <div style="font-size: 10px; color: #93c5fd; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        {v_guide}
+                    </div>
                 </div>
                 <!-- 2. BOD -->
-                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {b_border}; border-radius: 8px; padding: 8px 12px;">
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid {b_border}; border-radius: 8px; padding: 8px 12px;" title="{b_tooltip}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 11px; color: #94a3b8;">🌊 GD BOD (미국 지수 바닥)</span>
+                        <span style="font-size: 11px; color: #94a3b8; font-weight: bold;">🌊 GD BOD (미국)</span>
                         <span style="font-size: 11px;">{b_badge}</span>
                     </div>
-                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">{b_desc}</div>
+                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 3px;">{b_desc}</div>
+                    <div style="font-size: 10px; color: #93c5fd; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        {b_guide}
+                    </div>
                 </div>
                 <!-- 3. VIX & 풋콜 -->
-                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;">
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;" title="{vp_tooltip}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 11px; color: #94a3b8;">😱 VIX / 풋콜 심리</span>
-                        <span style="font-size: 11px; color: {vix_col}; font-weight: bold;">VIX {vix_val:.1f} ({vix_st})</span>
+                        <span style="font-size: 11px; color: #94a3b8; font-weight: bold;">😱 VIX & 풋콜 심리</span>
+                        <span style="font-size: 11px; color: {vix_col}; font-weight: bold;">VIX {vix_val:.1f} (안정 🟢)</span>
                     </div>
-                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">풋/콜 비율: {pc_ratio:.2f} (파생 심리 안정)</div>
+                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 3px;">{vp_desc}</div>
+                    <div style="font-size: 10px; color: #93c5fd; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        {vp_guide}
+                    </div>
                 </div>
                 <!-- 4. 옵션 Max Pain -->
-                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;">
+                <div style="flex: 1; min-width: 220px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 12px;" title="{opt_tooltip}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 11px; color: #94a3b8;">🏛️ 옵션 Max Pain [{d_day_str}]</span>
-                        <span style="font-size: 10.5px; color: #38bdf8; font-weight: bold;">{mopt['exp_date']} 만기</span>
+                        <span style="font-size: 11px; color: #94a3b8; font-weight: bold;">🏛️ 옵션 Max Pain [{d_day_str}]</span>
+                        <span style="font-size: 10.5px; color: #38bdf8; font-weight: bold;">{mopt['exp_date'][5:]} 만기</span>
                     </div>
-                    <div style="font-size: 12px; color: #f1f5f9; font-weight: bold; margin-top: 4px;">가두리 밴드: <span style="color:#fbbf24;">{opt_range}</span></div>
+                    <div style="font-size: 11.5px; color: #f1f5f9; font-weight: bold; margin-top: 3px;">가두리 밴드: <span style="color:#fbbf24;">{opt_range}</span></div>
+                    <div style="font-size: 10px; color: #93c5fd; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        {opt_guide}
+                    </div>
                 </div>
             </div>
         </div>
