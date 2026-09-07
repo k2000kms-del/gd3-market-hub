@@ -12,11 +12,15 @@ from datetime import datetime, timedelta, timezone
 
 # 텔레그램 알림 모듈 임포트
 try:
-    from telegram_notifier import notify_buy_signal, notify_exit_signal, notify_add_signal, notify_fall_buy_signal, _send, is_regular_market_hours
+    from telegram_notifier import (
+        notify_buy_signal, notify_exit_signal, notify_add_signal, notify_fall_buy_signal,
+        _send, is_regular_market_hours, fetch_realtime_current_price
+    )
     _TG_AVAILABLE = True
 except ImportError:
     _TG_AVAILABLE = False
     def is_regular_market_hours(): return True
+    def fetch_realtime_current_price(code): return 0.0
 
 _KST = timezone(timedelta(hours=9))
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -329,6 +333,11 @@ def log_buy_signal(
         print(f"DEBUG: [{name or ticker}] 정규장 거래시간 외이므로 매수 신호 알림 차단")
         return
 
+    # ── [실시간 체결가 100% 동기화] ──
+    _live_p = fetch_realtime_current_price(clean_ticker)
+    if _live_p > 0:
+        price = _live_p
+
     # 2. 퀀트 포지션 수명주기 검증 (보유 중 중복 차단 + 청산 후 15분 쿨다운)
     allowed, reason = can_send_entry_signal(clean_ticker, timestamp)
     if not allowed:
@@ -382,6 +391,11 @@ def log_add_signal(
     if not is_regular_market_hours():
         return
 
+    # ── [실시간 체결가 100% 동기화] ──
+    _live_p = fetch_realtime_current_price(clean_ticker)
+    if _live_p > 0:
+        price = _live_p
+
     allowed, reason = can_send_add_signal(clean_ticker)
     if not allowed:
         print(f"DEBUG: [{name or ticker}] 추가매수 알림 건너뜀 — {reason}")
@@ -434,6 +448,11 @@ def log_fall_buy_signal(
         print(f"DEBUG: [{name or ticker}] 정규장 거래시간 외이므로 낙폭과대 알림 차단")
         return
 
+    # ── [실시간 체결가 100% 동기화] ──
+    _live_p = fetch_realtime_current_price(clean_ticker)
+    if _live_p > 0:
+        price = _live_p
+
     allowed, reason = can_send_entry_signal(clean_ticker, timestamp)
     if not allowed:
         print(f"DEBUG: [{name or ticker}] 낙폭과대 알림 건너뜀 — {reason}")
@@ -482,6 +501,11 @@ def log_exit_signal(
 
     if not is_regular_market_hours():
         return
+
+    # ── [실시간 체결가 100% 동기화] ──
+    _live_p = fetch_realtime_current_price(clean_ticker)
+    if _live_p > 0:
+        price = _live_p
 
     allowed, reason = can_send_exit_signal(clean_ticker)
     if not allowed:
@@ -562,6 +586,11 @@ def check_and_notify_stop_loss(
     - 이미 이탈된 상태가 유지되는 동안에는 이중 도배 알림 차단
     - 가격이 손절가 위로 회복되면 상태 리셋
     """
+    # ── [실시간 체결가 100% 동기화] ──
+    _live_p = fetch_realtime_current_price(code)
+    if _live_p > 0:
+        current_price = _live_p
+
     if not stop_loss or stop_loss <= 0 or current_price <= 0:
         return False
 
@@ -642,6 +671,11 @@ def check_and_notify_trailing_stop(
     tg_chat_id: str = "",
 ) -> bool:
     """수익권(+4% 이상) 도달 후 최고점 대비 -2% 하락 시 트레일링 스탑 알림."""
+    # ── [실시간 체결가 100% 동기화] ──
+    _live_p = fetch_realtime_current_price(code)
+    if _live_p > 0:
+        current_price = _live_p
+
     if not entry_price or entry_price <= 0 or current_price <= 0:
         return False
 

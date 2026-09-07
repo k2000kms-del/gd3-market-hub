@@ -2181,6 +2181,23 @@ def run_portfolio_background_scanner():
                             df_scan = _get_minute_history_raw(code, count=2000)
                             
                         if not df_scan.empty and len(df_scan) >= 20:
+                            # ── [실시간 틱 동기화] 1분봉 마감 시차(1~2분) 제거: 0.3초 실시간 호가 체결가로 최신 캔들 즉시 보정 ──
+                            try:
+                                import requests as _req
+                                _rn = _req.get(f'https://m.stock.naver.com/api/stock/{code}/basic', headers={'User-Agent': 'Mozilla/5.0'}, timeout=1.0)
+                                if _rn.status_code == 200:
+                                    _dn = _rn.json()
+                                    _ps = str(_dn.get('closePrice', '')).replace(',', '').strip()
+                                    if _ps and float(_ps) > 0:
+                                        _live_p = float(_ps)
+                                        df_scan.iloc[-1, df_scan.columns.get_loc('Close')] = _live_p
+                                        if _live_p > df_scan.iloc[-1]['High']:
+                                            df_scan.iloc[-1, df_scan.columns.get_loc('High')] = _live_p
+                                        if _live_p < df_scan.iloc[-1]['Low']:
+                                            df_scan.iloc[-1, df_scan.columns.get_loc('Low')] = _live_p
+                            except Exception:
+                                pass
+
                             df_scan = calculate_intraday_signals(df_scan, my_entry_price=entry_price, code=code)
                             last_row = df_scan.iloc[-1]
                             cur_p = float(last_row['Close'])

@@ -416,15 +416,18 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
                     if not match.empty:
                         row = match.iloc[0]
                         c_price = float(row.get('Close', 0))
+                        live_p = tn.fetch_realtime_current_price(c_str)
+                        if live_p > 0:
+                            c_price = live_p
                         e_price = float(item.get('entry_price', 0))
                         stop_loss = float(item.get('stop_loss', 0)) if item.get('stop_loss') else e_price * 0.95
                         
                         # 손절선 이탈 감지
                         if c_price > 0 and c_price <= stop_loss:
                             tn.notify_daily_sell_signal(
-                                code=c_str, name=item.get('name', c_str),
-                                current_price=c_price, entry_price=e_price,
-                                reason="🛑 손절선 이탈", signal_type="손절경고",
+                                ticker=c_str, name=item.get('name', c_str),
+                                price=c_price, entry_price=e_price,
+                                date=today_str, signal_reason="🛑 손절선 이탈 경고",
                                 token=token, chat_id=chat_id
                             )
 
@@ -444,6 +447,9 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
                         if c_code in sent_jumping:
                             continue
                         s_close = float(s_row.get('Close', 0))
+                        live_p = tn.fetch_realtime_current_price(c_code)
+                        if live_p > 0:
+                            s_close = live_p
                         s_open = float(s_row.get('Open', s_close)) if 'Open' in s_row else s_close
                         s_low = float(s_row.get('Low', s_open)) if 'Low' in s_row else s_open
                         s_chg = float(s_row.get('ChagesRatio', 0))
