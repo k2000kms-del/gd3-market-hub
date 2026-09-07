@@ -6778,6 +6778,15 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     print(f"DEBUG: Rebal card error: {_rebal_err}")
 
 
+        # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 가격 사전 계산 (일봉/5분봉/1분봉 공통) ──
+        jumping_defense_price = None
+        try:
+            j_info = detect_jumping_candle(df_candle)
+            if j_info.get('is_jumping') or (len(df_candle) > 0 and df_candle['Open'].iloc[-1] > df_candle['Close'].iloc[-2] * 1.025):
+                jumping_defense_price = float(j_info.get('open_price') or df_candle['Open'].iloc[-1])
+        except Exception:
+            jumping_defense_price = None
+
         # ── 차트 선택 (st.tabs의 오버헤드를 막기 위해 레이지 렌더링 적용) ─────────────────────────────
         chart_type = st.radio(
             "차트 주기 선택",
@@ -6966,21 +6975,15 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 ), row=1, col=1)
 
             # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 (범례 순서: 나의 매수단가 뒤) ──
-            s_open = None
-            try:
-                j_info = detect_jumping_candle(df_candle)
-                if j_info.get('is_jumping') or (len(df_candle) > 0 and df_candle['Open'].iloc[-1] > df_candle['Close'].iloc[-2] * 1.025):
-                    s_open = float(j_info.get('open_price') or df_candle['Open'].iloc[-1])
-                    fig_c.add_trace(go.Scattergl(
-                        x=date_str_list,
-                        y=[s_open] * len(date_str_list),
-                        name=f'세력 절대 방어선 ({s_open:,.0f}원)',
-                        mode='lines',
-                        line=dict(color='#2ecc71', width=2, dash='dash'),
-                        hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {s_open:,.0f}원<extra></extra>"
-                    ), row=1, col=1)
-            except Exception as _je:
-                pass
+            if jumping_defense_price is not None and jumping_defense_price > 0:
+                fig_c.add_trace(go.Scattergl(
+                    x=date_str_list,
+                    y=[jumping_defense_price] * len(date_str_list),
+                    name=f'세력 절대 방어선 ({jumping_defense_price:,.0f}원)',
+                    mode='lines',
+                    line=dict(color='#2ecc71', width=2, dash='dash'),
+                    hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {jumping_defense_price:,.0f}원<extra></extra>"
+                ), row=1, col=1)
 
             # 일봉 차트의 가격 범위(y_range)를 완벽히 동기화하기 위한 수동 계산
             try:
@@ -6993,9 +6996,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 if my_entry_price > 0:
                     min_val = min(min_val, my_entry_price)
                     max_val = max(max_val, my_entry_price)
-                if s_open is not None and s_open > 0:
-                    min_val = min(min_val, s_open)
-                    max_val = max(max_val, s_open)
+                if jumping_defense_price is not None and jumping_defense_price > 0:
+                    min_val = min(min_val, jumping_defense_price)
+                    max_val = max(max_val, jumping_defense_price)
                 margin_bottom = (max_val - min_val) * 0.05 if max_val > min_val else 1000
                 margin_top = (max_val - min_val) * 0.25 if max_val > min_val else 2000
                 y_range = [min_val - margin_bottom, max_val + margin_top]
@@ -7283,6 +7286,17 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         name='나의 매수단가', mode='lines',
                         line=dict(color='#ffd700', width=2.0, dash='dashdot')
                     ), row=1, col=1)
+
+                # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 (범례 순서: 나의 매수단가 뒤) ──
+                if jumping_defense_price is not None and jumping_defense_price > 0:
+                    fig_5m.add_trace(go.Scattergl(
+                        x=tick_vals_5m,
+                        y=[jumping_defense_price] * len(tick_vals_5m),
+                        name=f'세력 절대 방어선 ({jumping_defense_price:,.0f}원)',
+                        mode='lines',
+                        line=dict(color='#2ecc71', width=2, dash='dash'),
+                        hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {jumping_defense_price:,.0f}원<extra></extra>"
+                    ), row=1, col=1)
                     
                 vol_colors_5m = [
                     '#ff6b6b' if c >= o else '#4e9ff5'
@@ -7302,6 +7316,12 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         if col in df_5min_tail.columns:
                             min_val_5m = min(min_val_5m, df_5min_tail[col].min(skipna=True))
                             max_val_5m = max(max_val_5m, df_5min_tail[col].max(skipna=True))
+                    if my_entry_price > 0:
+                        min_val_5m = min(min_val_5m, my_entry_price)
+                        max_val_5m = max(max_val_5m, my_entry_price)
+                    if jumping_defense_price is not None and jumping_defense_price > 0:
+                        min_val_5m = min(min_val_5m, jumping_defense_price)
+                        max_val_5m = max(max_val_5m, jumping_defense_price)
                     margin_5m = (max_val_5m - min_val_5m) * 0.05 if max_val_5m > min_val_5m else 100
                     y_range_5m = [min_val_5m - margin_5m, max_val_5m + margin_5m]
                 except Exception:
@@ -7586,6 +7606,17 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         name='나의 매수단가', mode='lines',
                         line=dict(color='#ffd700', width=2.0, dash='dashdot')
                     ), row=1, col=1)
+
+                # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 (범례 순서: 나의 매수단가 뒤) ──
+                if jumping_defense_price is not None and jumping_defense_price > 0:
+                    fig_1m.add_trace(go.Scattergl(
+                        x=tick_vals_1m,
+                        y=[jumping_defense_price] * len(tick_vals_1m),
+                        name=f'세력 절대 방어선 ({jumping_defense_price:,.0f}원)',
+                        mode='lines',
+                        line=dict(color='#2ecc71', width=2, dash='dash'),
+                        hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {jumping_defense_price:,.0f}원<extra></extra>"
+                    ), row=1, col=1)
                     
                 vol_colors_1m = [
                     '#ff6b6b' if c >= o else '#4e9ff5'
@@ -7605,6 +7636,12 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         if col in df_1min_tail.columns:
                             min_val_1m = min(min_val_1m, df_1min_tail[col].min(skipna=True))
                             max_val_1m = max(max_val_1m, df_1min_tail[col].max(skipna=True))
+                    if my_entry_price > 0:
+                        min_val_1m = min(min_val_1m, my_entry_price)
+                        max_val_1m = max(max_val_1m, my_entry_price)
+                    if jumping_defense_price is not None and jumping_defense_price > 0:
+                        min_val_1m = min(min_val_1m, jumping_defense_price)
+                        max_val_1m = max(max_val_1m, jumping_defense_price)
                     margin_1m = (max_val_1m - min_val_1m) * 0.05 if max_val_1m > min_val_1m else 100
                     y_range_1m = [min_val_1m - margin_1m, max_val_1m + margin_1m]
                 except Exception:
