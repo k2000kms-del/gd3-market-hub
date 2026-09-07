@@ -1782,8 +1782,8 @@ def run_portfolio_background_scanner():
             # 2. 포트폴리오 및 퀀트 데이터 로드
             portfolio_data = _load_portfolio_raw() or {}
             
-            # ── ☀️ 1) 아침 출근 모닝 브리핑 (07:50 ~ 08:59 평일) ──
-            if is_weekday and 750 <= hm <= 859 and not _morning_briefing_sent:
+            # ── ☀️ 1) 아침 출근 모닝 브리핑 (07:40 ~ 08:00 평일 NXT 시작 전 정시 발송, 08:00 이후 차단) ──
+            if is_weekday and 740 <= hm <= 800 and not _morning_briefing_sent:
                 try:
                     import requests as req
                     h_headers = {'User-Agent': 'Mozilla/5.0'}
@@ -2126,10 +2126,33 @@ def run_portfolio_background_scanner():
                             for _, q_row in top_q.iterrows():
                                 q_code = str(q_row['Code']).split('.')[0].strip().zfill(6)
                                 if q_code not in _quant_picks_sent_codes and q_code not in portfolio_data:
+                                    # ── [신규 상장주 제외] 상장 60일 미만이면 스킵 ──
+                                    try:
+                                        import FinanceDataReader as _fdr
+                                        _df_hc = _fdr.DataReader(q_code)
+                                        if len(_df_hc) < 60:
+                                            continue
+                                    except Exception:
+                                        pass
+
                                     q_name = str(q_row.get('Name', q_code))
                                     q_score = float(q_row[score_col])
                                     q_close = float(q_row.get('Close', 0))
                                     q_chg = float(q_row.get('ChagesRatio', 0))
+
+                                    # ── [실시간 체결가 갱신] 네이버 모바일 API로 현재 실시간 가격 즉시 조회 ──
+                                    try:
+                                        import requests as _req
+                                        _rn = _req.get(f'https://m.stock.naver.com/api/stock/{q_code}/basic', headers={'User-Agent': 'Mozilla/5.0'}, timeout=1.5)
+                                        if _rn.status_code == 200:
+                                            _dn = _rn.json()
+                                            _ps = str(_dn.get('closePrice', '')).replace(',', '').strip()
+                                            _cs = str(_dn.get('fluctuationsRatio', '')).replace('%', '').strip()
+                                            if _ps: q_close = float(_ps)
+                                            if _cs: q_chg = float(_cs)
+                                    except Exception:
+                                        pass
+
                                     if q_close > 0:
                                         notify_quant_top_pick(
                                             token=tg_token, chat_id=tg_chat_id,
@@ -3904,7 +3927,23 @@ st.sidebar.caption('대시보드 질문뿐만 아니라 **"현재 종목을 사�
 
 # 1. API Key 불러오기 및 입력창
 import os
-gemini_api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+
+# secrets.toml → 환경변수 → 사용자 직접 입력 순으로 탐색 (st.secrets는 try/except로 안전하게 접근)
+def _load_gemini_api_key():
+    # 1순위: 환경변수
+    k = os.environ.get("GEMINI_API_KEY", "")
+    if k:
+        return k
+    # 2순위: st.secrets (secrets.toml / Streamlit Cloud Secrets)
+    try:
+        k = st.secrets.get("GEMINI_API_KEY", "") or st.secrets["GEMINI_API_KEY"]
+        if k:
+            return k
+    except Exception:
+        pass
+    return ""
+
+gemini_api_key = _load_gemini_api_key()
 if not gemini_api_key:
     gemini_api_key = st.sidebar.text_input(
         "Gemini API Key 입력",
@@ -4036,13 +4075,23 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
                 st.sidebar.error(f"❌ Gemini 답변 생성 실패: {last_err}")
 
 
-# KIS API Key 정보 (st.secrets 및 os.environ 다각적 별칭 탐색)
-kis_key = st.secrets.get("KIS_APP_KEY", st.secrets.get("KIS_KEY", os.environ.get("KIS_APP_KEY", os.environ.get("KIS_KEY", ""))))
-kis_sec = st.secrets.get("KIS_APP_SECRET", st.secrets.get("KIS_SECRET", os.environ.get("KIS_APP_SECRET", os.environ.get("KIS_SECRET", ""))))
+# KIS API Key 정보 - st.secrets를 try/except로 안전하게 접근
+def _get_secret(key, fallback=""):
+    """st.secrets → 환경변수 순으로 값을 안전하게 읽어오는 헬퍼 함수"""
+    try:
+        v = st.secrets.get(key, "")
+        if v:
+            return v
+    except Exception:
+        pass
+    return os.environ.get(key, fallback)
+
+kis_key = _get_secret("KIS_APP_KEY") or _get_secret("KIS_KEY")
+kis_sec = _get_secret("KIS_APP_SECRET") or _get_secret("KIS_SECRET")
 
 # 텔레그램 알림 키 (secrets.toml 또는 환경변수에서 로드, 미설정 시 안전 기본값)
-tg_token   = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", ""))
-tg_chat_id = st.secrets.get("TELEGRAM_CHAT_ID",   os.environ.get("TELEGRAM_CHAT_ID",   ""))
+tg_token   = _get_secret("TELEGRAM_BOT_TOKEN")
+tg_chat_id = _get_secret("TELEGRAM_CHAT_ID")
 if not tg_token:
     tg_token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
     tg_chat_id = "1131551088"
@@ -4054,127 +4103,7 @@ try:
 except Exception as _bg_err:
     print(f"DEBUG: 백그라운드 스캐너 기동 실패: {_bg_err}")
 
-# ── [텔레그램 지연 브리핑] Streamlit Cloud 슬립으로 모닝/마감 브리핑을 놓쳤을 때 자동 보상 발송 ──
-try:
-    _now_kst_tg = datetime.now(_KST)
-    _hm_tg = _now_kst_tg.hour * 100 + _now_kst_tg.minute
-    _is_weekday_tg = _now_kst_tg.weekday() < 5
-    _today_tg = _now_kst_tg.strftime('%Y-%m-%d')
-    # 장중(09:00 이후)인데 모닝 브리핑이 미발송된 경우 → 지연 발송
-    if _is_weekday_tg and _hm_tg >= 900 and not _morning_briefing_sent and _briefing_sent_date == _today_tg:
-        if tg_token and tg_chat_id:
-            try:
-                from telegram_notifier import notify_morning_briefing
-                # ── 간밤 뉴욕 증시 매크로 조회 ──
-                import requests as req
-                h_headers = {'User-Agent': 'Mozilla/5.0'}
-                us_idx_lines = []
-                sox_chg = 0.0
-                nasdaq_chg = 0.0
-                for sym, name in [('.IXIC', '나스닥'), ('.SOX', '필라델피아 반도체'), ('.INX', 'S&P500'), ('.DJI', '다우존스')]:
-                    try:
-                        r_u = req.get(f'https://api.stock.naver.com/index/{sym}/basic', headers=h_headers, timeout=3)
-                        if r_u.status_code == 200:
-                            d_u = r_u.json()
-                            c_p = d_u.get('closePrice', '-')
-                            c_r_str = str(d_u.get('fluctuationsRatio', '0')).replace('%', '').strip()
-                            c_r = float(c_r_str)
-                            if sym == '.SOX': sox_chg = c_r
-                            if sym == '.IXIC': nasdaq_chg = c_r
-                            sign = "+" if c_r >= 0 else ""
-                            bold = "<b>" if sym in ['.IXIC', '.SOX'] else ""
-                            bold_e = "</b>" if sym in ['.IXIC', '.SOX'] else ""
-                            us_idx_lines.append(f"├ {bold}{name}{bold_e}: {c_p} ({sign}{c_r:.2f}%)")
-                    except Exception:
-                        pass
-
-                us_stk_lines = []
-                nvda_chg = 0.0
-                tsla_chg = 0.0
-                mu_chg = 0.0
-                for sym, name in [('NVDA.O', '엔비디아'), ('MU.O', '마이크론'), ('TSLA.O', '테슬라'), ('AAPL.O', '애플'), ('MSFT.O', '마이크로소프트')]:
-                    try:
-                        r_s = req.get(f'https://api.stock.naver.com/stock/{sym}/basic', headers=h_headers, timeout=3)
-                        if r_s.status_code == 200:
-                            d_s = r_s.json()
-                            c_p = d_s.get('closePrice', '-')
-                            c_r_str = str(d_s.get('fluctuationsRatio', '0')).replace('%', '').strip()
-                            c_r = float(c_r_str)
-                            if 'NVDA' in sym: nvda_chg = c_r
-                            if 'MU' in sym: mu_chg = c_r
-                            if 'TSLA' in sym: tsla_chg = c_r
-                            sign = "+" if c_r >= 0 else ""
-                            us_stk_lines.append(f"{name} {sign}{c_r:.2f}%")
-                    except Exception:
-                        pass
-
-                us_mkt_text = "\n".join(us_idx_lines) if us_idx_lines else "├ 나스닥: 26,306.29 (-0.36%) | 필라델피아 반도체: 11,546.68 (+0.67%)"
-                if us_stk_lines:
-                    us_mkt_text += f"\n└ <b>빅테크</b>: {', '.join(us_stk_lines)}"
-
-                kr_beneficiaries = []
-                kr_cautions = []
-                if sox_chg > 0.3 or nvda_chg > 0.5 or mu_chg > 0.5:
-                    semi_reasons = []
-                    if nvda_chg > 0: semi_reasons.append(f"엔비디아 +{nvda_chg:.1f}%")
-                    if mu_chg > 0: semi_reasons.append(f"마이크론 +{mu_chg:.1f}%")
-                    reason_str = f" ({'/'.join(semi_reasons)} 훈풍 ➔ SK하이닉스·삼성전자 갭상승 견인 유력)" if semi_reasons else " (필라델피아 반도체 훈풍 ➔ 삼전/닉스 갭상승 유력)"
-                    kr_beneficiaries.append(f"<b>반도체/HBM·AI 메모리</b>{reason_str}")
-                else:
-                    kr_cautions.append("<b>반도체 대형주</b> (미 반도체 조정에 따른 외국인 차익 매물 경계)")
-
-                if tsla_chg > 1.5:
-                    kr_beneficiaries.append(f"<b>2차전지/전기차</b> (테슬라 +{tsla_chg:.1f}% 급등 연동 반등 탄력 기대)")
-                elif tsla_chg < -1.5:
-                    kr_cautions.append("<b>2차전지/배터리</b> (테슬라 약세로 단기 투심 위축)")
-
-                if nasdaq_chg > 0.5:
-                    kr_open_forecast = "미 증시 강세 훈풍으로 <b>코스피/코스닥 전반 갭상승 출발 유력</b>"
-                elif nasdaq_chg < -0.5:
-                    kr_open_forecast = "미 증시 기술주 조정 영향으로 <b>시초가 보수적/갭하락 방어 국면 예상</b>"
-                else:
-                    kr_open_forecast = "미 증시 혼조세로 <b>반도체/2차전지 등 개별 주도 섹터 중심 차별화 장세 유력</b>"
-
-                kr_sec_text = (
-                    f"🔺 <b>오늘 상승 유력 섹터</b>: {', '.join(kr_beneficiaries) if kr_beneficiaries else '방어주/고배당(금융/통신)'}\n"
-                    f"🔻 <b>오늘 조정 경계 섹터</b>: {', '.join(kr_cautions) if kr_cautions else '고밸류 적자 성장주'}\n"
-                    f"🧭 <b>오늘 국장 시초가 전망</b>: {kr_open_forecast}"
-                )
-
-                try:
-                    from telegram_notifier import build_dynamic_portfolio_morning_guide
-                    df_m_for_port_del = _sync_and_load_csv_raw('df_full_market.csv')
-                    port_del_data = _load_portfolio_raw() or {}
-                    port_morning_text = build_dynamic_portfolio_morning_guide(port_del_data, df_m_for_port_del)
-                except Exception:
-                    port_morning_text = ""
-
-                ks_c, ks_m, _ = get_kospi_ma20()
-                regime = "상승/횡보 국면" if ks_c >= ks_m else "약세/보수 국면"
-                c_rat = 20.0 if ks_c >= ks_m else 70.0
-                s_rat = 80.0 if ks_c >= ks_m else 30.0
-                b_data = get_bollinger_market_energy() or {}
-                b_ma5 = b_data.get('ma5', 0)
-                b_st = b_data.get('energy_status', '보통')
-                top_names = []
-                df_q_raw_tg = _sync_and_load_csv_raw('df_quant_final.csv')
-                if not df_q_raw_tg.empty and 'Name' in df_q_raw_tg.columns:
-                    top_names = df_q_raw_tg.head(4)['Name'].tolist()
-                notify_morning_briefing(
-                    token=tg_token, chat_id=tg_chat_id,
-                    market_regime=regime, cash_ratio=c_rat, stock_ratio=s_rat,
-                    bollinger_ma5=b_ma5, bollinger_status=b_st,
-                    top_quant_names=top_names,
-                    us_market_text=us_mkt_text,
-                    kr_impact_text=kr_sec_text,
-                    portfolio_morning_text=port_morning_text
-                )
-                _morning_briefing_sent = True
-                print(f"DEBUG: 지연 모닝 브리핑 발송 완료 ({_now_kst_tg.strftime('%H:%M')})")
-            except Exception as delayed_m_err:
-                print(f"DEBUG: 지연 모닝 브리핑 실패: {delayed_m_err}")
-except Exception as _tg_delayed_err:
-    print(f"DEBUG: 텔레그램 지연 브리핑 체크 실패: {_tg_delayed_err}")
+# ── [안내] 모닝 브리핑은 매일 아침 07:50(KST) GitHub Actions 전용 스케줄러에서 100% 정시 발송되며, 장중(08:00 이후) 지연 발송은 원천 차단됩니다. ──
 
 # ── URL 쿼리 파라미터에서 refresh_gemini 감지 및 강제 갱신 처리 ──
 try:
@@ -5620,11 +5549,10 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
 
     st.markdown(f"### 📈 {name_disp} ({code_disp}) 일봉 차트")
 
-    # ── 세션 스테이트 캐시 키 생성 (종목코드 + 2분 단위 시간 버킷) ──
-    # 같은 종목을 2분 내에 재클릭하면 API 호출 없이 즉각 반응
-    from datetime import timezone, timedelta as _td
-    _now_bucket = datetime.now(timezone(timedelta(hours=9))).strftime('%Y%m%d%H%M')[:-1]  # 분 끝자리 제거 → 2분 버킷
-    _cache_key = f"_signal_cache_{code_disp}_{_now_bucket}"
+    # ── 세션 스테이트 캐시 키 생성 (종목코드 + 30초 단위 실시간 버킷) ──
+    # 30초 단위로 자동 만료되어 장중 실시간 호가/체결가가 즉각 반영되도록 최적화
+    _bucket_30s = int(time.time() // 30)
+    _cache_key = f"_signal_cache_{code_disp}_{_bucket_30s}"
 
     # ── 포트폴리오 보유 단가 조회 (로컬 파일 읽기) — if/else 블록 전에 반드시 정의 ──
     # Python 스코핑 규칙: 함수 내 어디서든 대입되는 변수는 함수 전체에서 로컬 취급됨
@@ -5753,7 +5681,24 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
     # -------------------------------------------------------------
 
     if df_candle.empty:
-        st.warning('⚠️ 차트 데이터를 불러올 수 없습니다.')
+        # ── 신규상장 종목 여부를 판단하여 더 친화적인 안내 메시지 표시 ──
+        # _get_stock_history_raw는 이미 내부에서 예외를 잡아 빈 DF를 반환하므로 재호출 부담 없음
+        _is_ipo_stock = False
+        try:
+            _raw_check = _get_stock_history_raw(code_disp)
+            if _raw_check is None or _raw_check.empty or len(_raw_check) < 60:
+                _is_ipo_stock = True
+        except Exception:
+            _is_ipo_stock = True  # 조회 자체 실패 → 신규상장 또는 데이터 없음으로 간주
+
+        if _is_ipo_stock:
+            st.warning(
+                f'📋 **{name_disp}({code_disp})** 종목은 신규 상장 후 '
+                '충분한 거래 이력(약 3개월)이 쌓이지 않아 일봉 차트를 표시할 수 없습니다.\n\n'
+                '⚠️ 상장 초기 종목은 주가 변동성이 매우 크므로 퀀트 분석 대상에서도 제외됩니다.'
+            )
+        else:
+            st.warning('⚠️ 차트 데이터를 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.')
     else:
         # MA 계산
         df_candle['MA5']  = df_candle['Close'].rolling(5).mean()

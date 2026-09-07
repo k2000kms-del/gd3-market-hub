@@ -25,7 +25,10 @@ import pandas as pd
 import numpy as np
 import time
 import FinanceDataReader as fdr
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# ── 한국 표준시(KST) 강제 타임존 정의 (GitHub Actions 미국/UTC 서버 시간 오차 원천 차단) ──
+KST = timezone(timedelta(hours=9))
 
 # ── TA-Lib 임포트 및 예외 처리 (하이브리드 구조) ─────────────────
 HAS_TALIB = False
@@ -73,8 +76,8 @@ def get_access_token():
 
 
 def is_market_open():
-    """한국 주식시장 개장 여부 확인 (09:00~15:30 평일)"""
-    now = datetime.now()
+    """한국 주식시장 개장 여부 확인 (09:00~15:30 평일 KST 기준)"""
+    now = datetime.now(KST)
     if now.weekday() >= 5:  # 토/일
         return False
     h, m = now.hour, now.minute
@@ -188,9 +191,10 @@ def fetch_market_investor(token, market_div='J'):
             'appsecret': APP_SECRET,
             'tr_id': 'FHPTJ04400000',
         }
+        now_k = datetime.now(KST)
         params = {
             'FID_COND_MRKT_DIV_CODE': market_div,
-            'FID_INPUT_DATE_1': (datetime.now() - timedelta(days=max(0, datetime.now().weekday() - 4))).strftime('%Y%m%d'),
+            'FID_INPUT_DATE_1': (now_k - timedelta(days=max(0, now_k.weekday() - 4))).strftime('%Y%m%d'),
         }
         res = requests.get(
             f'{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor',
@@ -203,11 +207,20 @@ def fetch_market_investor(token, market_div='J'):
 
 # ── 로컬 CSV 저장 ────────────────────────────────────────────────
 def save_df_to_local(df, filename):
-    """DataFrame을 레포지토리 data/ 폴더에 CSV로 저장"""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    filepath = os.path.join(DATA_DIR, filename)
-    df.to_csv(filepath, index=False, encoding='utf-8-sig')
-    print(f'  ✅ {filename} → data/ 저장 완료 ({len(df)}행)')
+    """DataFrame을 data/ 및 streamlit_app/data/ 폴더에 동시 저장 (클라우드/로컬 일치화)"""
+    base_proj_dir = os.path.dirname(os.path.abspath(__file__))
+    dirs_to_save = [
+        DATA_DIR,
+        os.path.join(base_proj_dir, 'streamlit_app', 'data')
+    ]
+    for d in dirs_to_save:
+        try:
+            os.makedirs(d, exist_ok=True)
+            filepath = os.path.join(d, filename)
+            df.to_csv(filepath, index=False, encoding='utf-8-sig')
+        except Exception as e:
+            print(f"  ⚠️ {filename} 저장 실패 in {d}: {e}")
+    print(f'  ✅ {filename} → data/ 및 streamlit_app/data/ 동시 저장 완료 ({len(df)}행)')
 
 
 # ── 데이터 수집 함수들 ───────────────────────────────────────────
@@ -753,7 +766,7 @@ def collect_quant_final(token, df_hd, df_full):
     oil_surge = False
 
     try:
-        start_mkt = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
+        start_mkt = (datetime.now(KST) - timedelta(days=20)).strftime('%Y-%m-%d')
         df_ks  = fdr.DataReader('KS11', start_mkt)
         df_kq  = fdr.DataReader('KQ11', start_mkt)
         df_usd = fdr.DataReader('USD/KRW', start_mkt)
@@ -876,7 +889,7 @@ def collect_quant_final(token, df_hd, df_full):
 
     rows = []
     # 60일선(MA60) 및 가격 이력을 충분히 조회하기 위해 시작 날짜 계산 (안전하게 100일 전으로 설정)
-    start_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
+    start_date = (datetime.now(KST) - timedelta(days=100)).strftime('%Y-%m-%d')
 
     for _, row in df_hd.iterrows():
         code = str(row.get('Code', '')).zfill(6)
@@ -946,6 +959,15 @@ def collect_quant_final(token, df_hd, df_full):
         # fdr을 통한 일봉 데이터 조회 (MA 및 캔들, 거래대금 증가율 계산용)
         try:
             df_hist = fdr.DataReader(code, start_date)
+
+            # ── [신규상장 종목 제외] 상장 후 약 3개월(60영업일) 미만 종목은 퀀트 유니버스에서 제외 ──
+            # 상장 초기에는 주가 급등락이 빈번하고 기준 이평선/거래대금 비교값이 왜곡되어 퀀트 신뢰도 저하
+            # FDR 데이터가 없거나 60행 미만이면 신규 상장 종목으로 판단
+            IPO_MIN_DAYS = 60  # 최소 60영업일(약 3개월) 거래 이력 요구
+            if df_hist is None or df_hist.empty or len(df_hist) < IPO_MIN_DAYS:
+                print(f'  ⏭️ [{name}({code})] 신규상장 종목 제외 (데이터 {len(df_hist) if df_hist is not None and not df_hist.empty else 0}일, 최소 {IPO_MIN_DAYS}일 필요)')
+                continue
+
             if not df_hist.empty and len(df_hist) >= 5:
                 # 3. 거래대금 증가율 점수 (최대 20점) [개선: 절대 거래대금 최소 허들 적용]
                 # 거래대금 = 종가 * 거래량
@@ -1274,7 +1296,7 @@ def collect_market_summary(token, df_intraday):
     # FinanceDataReader로 지수 조회
     try:
         # 최근 7일치 데이터를 불러와 마지막 데이터(최신 종가)를 사용
-        start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        start_date = (datetime.now(KST) - timedelta(days=7)).strftime('%Y-%m-%d')
         df_ks = fdr.DataReader('KS11', start_date)
         df_kq = fdr.DataReader('KQ11', start_date)
         df_usd = fdr.DataReader('USD/KRW', start_date)
@@ -1305,8 +1327,22 @@ def collect_market_summary(token, df_intraday):
         def trend(v):
             return '▲' if v > 0 else ('▼' if v < 0 else '-')
 
-        # 수급 데이터 (intraday 마지막 값)
+        # 수급 데이터 (네이버 실시간 API 1순위 -> intraday 마지막 값 폴백)
         def get_supply(market):
+            try:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                ep = 'KOSPI' if market == '코스피' else 'KOSDAQ'
+                r = requests.get(f'https://m.stock.naver.com/api/index/{ep}/trend', headers=headers, timeout=2.0)
+                if r.status_code == 200:
+                    d = r.json()
+                    fgn = int(str(d.get('foreignValue', '0')).replace(',', '').replace('+', ''))
+                    psn = int(str(d.get('personalValue', '0')).replace(',', '').replace('+', ''))
+                    org = int(str(d.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
+                    if fgn != 0 or psn != 0 or org != 0:
+                        return fgn, psn, org
+            except Exception as e:
+                print(f'DEBUG naver trend fetch error for {market}: {e}')
+
             if df_intraday.empty or 'Market' not in df_intraday.columns:
                 return 0, 0, 0
             df_m = df_intraday[df_intraday['Market'] == market]
@@ -1383,19 +1419,31 @@ def collect_supply_intraday(token):
     today_str = now.strftime('%Y%m%d')
     h_m = now.hour * 100 + now.minute
 
-    # 장외 시간이면 기존 파일 유지 후 반환 (장 마감 후 GitHub Actions가 실행될 때)
-    if not ((900 <= h_m <= 1530)):
-        print(f'  ⚠️ 장외 시간({now_str}) - 수급 스냅샷 수집 생략')
-        existing_path = os.path.join(DATA_DIR, 'df_supply_intraday.csv')
-        if os.path.exists(existing_path):
-            try:
-                df_existing = pd.read_csv(existing_path, encoding='utf-8-sig')
-                if 'Date' in df_existing.columns:
-                    df_existing = df_existing[df_existing['Date'].astype(str) == today_str]
-                    return df_existing
-            except Exception:
-                pass
-        return pd.DataFrame(columns=['Date', 'Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+    # 장외 시간이면:
+    # 단, 장 마감(15:30) 이후인데 오늘자 15:30 최종 종가 수급 데이터가 아직 수집되지 않았다면,
+    # 1회에 한해 네이버에서 최종 마감 수급 스냅샷을 가져와 '15:30'으로 완결짓는다!
+    is_after_market = h_m > 1530
+    existing_path = os.path.join(DATA_DIR, 'df_supply_intraday.csv')
+    df_existing = pd.DataFrame(columns=['Date', 'Time', 'Market', 'Foreign_Net', 'Individual_Net', 'Institutional_Net'])
+    
+    if os.path.exists(existing_path):
+        try:
+            _d_loaded = pd.read_csv(existing_path, encoding='utf-8-sig')
+            if 'Date' in _d_loaded.columns:
+                df_existing = _d_loaded[_d_loaded['Date'].astype(str) == today_str].copy()
+        except Exception:
+            pass
+
+    # 장 시작 전(09:00 이전)이거나, 이미 15:30 마감 데이터가 들어있는 장 마감 후라면 생략
+    has_closing_point = not df_existing.empty and (df_existing['Time'] == '15:30').any()
+    if h_m < 900 or (is_after_market and has_closing_point):
+        print(f'  ⚠️ 수급 스냅샷 수집 생략 (현재시각: {now_str}, 마감데이터보유: {has_closing_point})')
+        return df_existing
+
+    # 장 마감 후 최초 1회 실행인 경우 타임스탬프를 '15:30'으로 고정
+    if is_after_market and not has_closing_point:
+        print(f'  🌙 장마감(15:30) 최종 수급 스냅샷 누락 감지 → 최종 마감값으로 15:30 완결 기록')
+        now_str = '15:30'
 
     def _parse_naver_supply(val_str):
         """'+5,254' 형태의 네이버 수급 문자열을 억원 정수로 변환"""
@@ -1502,7 +1550,7 @@ def collect_supply_intraday(token):
 # ── 메인 실행 ────────────────────────────────────────────────────
 def main():
     print('=' * 50)
-    print(f'🚀 GD 3.0 데이터 수집 시작: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    print(f'🚀 GD 3.0 데이터 수집 시작: {datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")} KST')
     print('=' * 50)
 
     if not APP_KEY or not APP_SECRET:
@@ -1521,9 +1569,8 @@ def main():
         print('  ✅ 토큰 발급 완료')
 
     print('데이터 수집 시작...')
-    # GitHub Actions는 UTC 환경 → KST(UTC+9)로 변환하여 시장 시간 판단
-    from datetime import timezone
-    now_kst = datetime.now(tz=timezone.utc) + timedelta(hours=9)
+    # 한국 표준시(KST)로 정확한 장중/장외 판단
+    now_kst = datetime.now(KST)
     kst_h_m = now_kst.hour * 100 + now_kst.minute
     print(f'현재 KST: {now_kst.strftime("%Y-%m-%d %H:%M")} ({"장중" if 900 <= kst_h_m <= 1530 else "장외"})')
 
@@ -1553,7 +1600,7 @@ def main():
             print(f'  ❌ {fname} 저장 실패: {e}')
 
     print('\n' + '=' * 50)
-    print(f'✅ 수집 완료: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    print(f'✅ 수집 완료: {datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")} KST')
     print('=' * 50)
 
 

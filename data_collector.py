@@ -25,7 +25,10 @@ import pandas as pd
 import numpy as np
 import time
 import FinanceDataReader as fdr
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# ── 한국 표준시(KST) 강제 타임존 정의 (GitHub Actions 미국/UTC 서버 시간 오차 원천 차단) ──
+KST = timezone(timedelta(hours=9))
 
 # ── TA-Lib 임포트 및 예외 처리 (하이브리드 구조) ─────────────────
 HAS_TALIB = False
@@ -73,8 +76,8 @@ def get_access_token():
 
 
 def is_market_open():
-    """한국 주식시장 개장 여부 확인 (09:00~15:30 평일)"""
-    now = datetime.now()
+    """한국 주식시장 개장 여부 확인 (09:00~15:30 평일 KST 기준)"""
+    now = datetime.now(KST)
     if now.weekday() >= 5:  # 토/일
         return False
     h, m = now.hour, now.minute
@@ -188,9 +191,10 @@ def fetch_market_investor(token, market_div='J'):
             'appsecret': APP_SECRET,
             'tr_id': 'FHPTJ04400000',
         }
+        now_k = datetime.now(KST)
         params = {
             'FID_COND_MRKT_DIV_CODE': market_div,
-            'FID_INPUT_DATE_1': (datetime.now() - timedelta(days=max(0, datetime.now().weekday() - 4))).strftime('%Y%m%d'),
+            'FID_INPUT_DATE_1': (now_k - timedelta(days=max(0, now_k.weekday() - 4))).strftime('%Y%m%d'),
         }
         res = requests.get(
             f'{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor',
@@ -762,7 +766,7 @@ def collect_quant_final(token, df_hd, df_full):
     oil_surge = False
 
     try:
-        start_mkt = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
+        start_mkt = (datetime.now(KST) - timedelta(days=20)).strftime('%Y-%m-%d')
         df_ks  = fdr.DataReader('KS11', start_mkt)
         df_kq  = fdr.DataReader('KQ11', start_mkt)
         df_usd = fdr.DataReader('USD/KRW', start_mkt)
@@ -885,7 +889,7 @@ def collect_quant_final(token, df_hd, df_full):
 
     rows = []
     # 60일선(MA60) 및 가격 이력을 충분히 조회하기 위해 시작 날짜 계산 (안전하게 100일 전으로 설정)
-    start_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
+    start_date = (datetime.now(KST) - timedelta(days=100)).strftime('%Y-%m-%d')
 
     for _, row in df_hd.iterrows():
         code = str(row.get('Code', '')).zfill(6)
@@ -955,6 +959,15 @@ def collect_quant_final(token, df_hd, df_full):
         # fdr을 통한 일봉 데이터 조회 (MA 및 캔들, 거래대금 증가율 계산용)
         try:
             df_hist = fdr.DataReader(code, start_date)
+
+            # ── [신규상장 종목 제외] 상장 후 약 3개월(60영업일) 미만 종목은 퀀트 유니버스에서 제외 ──
+            # 상장 초기에는 주가 급등락이 빈번하고 기준 이평선/거래대금 비교값이 왜곡되어 퀀트 신뢰도 저하
+            # FDR 데이터가 없거나 60행 미만이면 신규 상장 종목으로 판단
+            IPO_MIN_DAYS = 60  # 최소 60영업일(약 3개월) 거래 이력 요구
+            if df_hist is None or df_hist.empty or len(df_hist) < IPO_MIN_DAYS:
+                print(f'  ⏭️ [{name}({code})] 신규상장 종목 제외 (데이터 {len(df_hist) if df_hist is not None and not df_hist.empty else 0}일, 최소 {IPO_MIN_DAYS}일 필요)')
+                continue
+
             if not df_hist.empty and len(df_hist) >= 5:
                 # 3. 거래대금 증가율 점수 (최대 20점) [개선: 절대 거래대금 최소 허들 적용]
                 # 거래대금 = 종가 * 거래량
@@ -1283,7 +1296,7 @@ def collect_market_summary(token, df_intraday):
     # FinanceDataReader로 지수 조회
     try:
         # 최근 7일치 데이터를 불러와 마지막 데이터(최신 종가)를 사용
-        start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        start_date = (datetime.now(KST) - timedelta(days=7)).strftime('%Y-%m-%d')
         df_ks = fdr.DataReader('KS11', start_date)
         df_kq = fdr.DataReader('KQ11', start_date)
         df_usd = fdr.DataReader('USD/KRW', start_date)
@@ -1537,7 +1550,7 @@ def collect_supply_intraday(token):
 # ── 메인 실행 ────────────────────────────────────────────────────
 def main():
     print('=' * 50)
-    print(f'🚀 GD 3.0 데이터 수집 시작: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    print(f'🚀 GD 3.0 데이터 수집 시작: {datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")} KST')
     print('=' * 50)
 
     if not APP_KEY or not APP_SECRET:
@@ -1556,9 +1569,8 @@ def main():
         print('  ✅ 토큰 발급 완료')
 
     print('데이터 수집 시작...')
-    # GitHub Actions는 UTC 환경 → KST(UTC+9)로 변환하여 시장 시간 판단
-    from datetime import timezone
-    now_kst = datetime.now(tz=timezone.utc) + timedelta(hours=9)
+    # 한국 표준시(KST)로 정확한 장중/장외 판단
+    now_kst = datetime.now(KST)
     kst_h_m = now_kst.hour * 100 + now_kst.minute
     print(f'현재 KST: {now_kst.strftime("%Y-%m-%d %H:%M")} ({"장중" if 900 <= kst_h_m <= 1530 else "장외"})')
 
@@ -1588,7 +1600,7 @@ def main():
             print(f'  ❌ {fname} 저장 실패: {e}')
 
     print('\n' + '=' * 50)
-    print(f'✅ 수집 완료: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    print(f'✅ 수집 완료: {datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")} KST')
     print('=' * 50)
 
 

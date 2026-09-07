@@ -49,6 +49,9 @@ if not token or not chat_id:
             except Exception:
                 pass
 
+token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
+chat_id = chat_id or "8056247738"
+
 import telegram_notifier as tn
 
 # ── 브리핑 발송 상태 관리 (중복 방지 및 큐 지연 완벽 대응) ──
@@ -69,11 +72,11 @@ def _save_state():
     except Exception as err:
         print(f"DEBUG: 상태 파일 저장 실패: {err}")
 
-# 2. ☀️ 아침 출근 모닝 브리핑 (07:00 ~ 11:30 KST 사이 당일 최초 1회 무조건 발송)
+# 2. ☀️ 아침 출근 모닝 브리핑 (07:30 ~ 08:00 KST 사이 NXT 프리마켓 개장 전 정시 발송, 08:00 이후 발송 절대 차단)
 last_morning = briefing_state.get('last_morning_date')
-if now_weekday < 5 and 700 <= now_hm <= 1130:
+if now_weekday < 5 and 730 <= now_hm <= 800:
     if last_morning != today_str:
-        print(f"☀️ 장전 브리핑 발송 시도 ({today_str})...")
+        print(f"☀️ [NXT 프리마켓 전 07:50 정시 발송] 장전 브리핑 발송 시도 ({today_str}, now_hm={now_hm})...")
         briefing_state['sent_jumping_codes'] = []  # 당일 점핑 양봉 알림 목록 초기화
         try:
             import requests as req

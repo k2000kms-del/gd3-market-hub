@@ -74,6 +74,8 @@ def make_stock_action_keyboard(code: str, name: str = "") -> dict:
 
 def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
     """Telegram Bot API 호출 공통 헬퍼 (원터치 키보드 버튼 기본 탑재)"""
+    token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
+    chat_id = chat_id or "8056247738"
     if not token or not chat_id:
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
@@ -104,6 +106,8 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
 
 def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "", parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
     """Telegram Bot API sendPhoto 호출 공통 헬퍼 (차트 이미지 전송)"""
+    token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
+    chat_id = chat_id or "8056247738"
     if not token or not chat_id:
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
@@ -778,6 +782,8 @@ def fetch_channel_intelligence_briefing() -> str:
     import requests
     from bs4 import BeautifulSoup
 
+    from concurrent.futures import ThreadPoolExecutor
+
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     bad_keywords = [
         'youtu.be', 'youtube.com', 'shorts', 'tiktok', 'vimeo',
@@ -789,75 +795,58 @@ def fetch_channel_intelligence_briefing() -> str:
 
     all_texts = []
 
-    # 1. 가치재료연구소 (단테오동 네이버 프리미엄)
-    try:
-        r = requests.get('https://contents.premium.naver.com/jusikdante/danteodong', headers=headers, timeout=5)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            for it in soup.find_all('li', class_='channel_content_item')[:6]:
-                desc_el = it.find('p', class_='channel_content_desc')
-                if desc_el:
-                    t = re.sub(r'https?://\S+', '', desc_el.get_text().strip())
-                    if not any(b in t for b in bad_keywords):
-                        all_texts.append(t)
-    except Exception:
-        pass
+    # ── [타임아웃 안전망] 5개 채널을 병렬(ThreadPool)로 최대 1.5초만 시도 ──
+    # 지연되거나 차단되어도 08:00 프리마켓 이전 발송을 100% 보장하기 위함
+    def _fetch_sub_channel(ch_type, url):
+        texts = []
+        try:
+            r = requests.get(url, headers=headers, timeout=1.5)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, 'html.parser')
+                if ch_type == 'danteodong':
+                    for it in soup.find_all('li', class_='channel_content_item')[:6]:
+                        desc_el = it.find('p', class_='channel_content_desc')
+                        if desc_el:
+                            t = re.sub(r'https?://\S+', '', desc_el.get_text().strip())
+                            if not any(b in t for b in bad_keywords):
+                                texts.append(t)
+                elif ch_type == 'chesley':
+                    for it in soup.find_all('li', class_='channel_content_item')[:6]:
+                        title_el = it.find('strong', class_='channel_content_title')
+                        desc_el = it.find('p', class_='channel_content_desc')
+                        title = title_el.get_text().replace('NEW', '').strip() if title_el else ""
+                        desc = desc_el.get_text().strip() if desc_el else ""
+                        t = re.sub(r'https?://\S+', '', f"{title} {desc}").strip()
+                        if not any(b in t for b in bad_keywords):
+                            texts.append(t)
+                elif ch_type == 'telegram':
+                    for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-25:]):
+                        txt_el = m.find('div', class_='tgme_widget_message_text')
+                        if txt_el:
+                            t = re.sub(r'https?://\S+', '', txt_el.get_text('\n').strip())
+                            if not any(b in t for b in bad_keywords):
+                                texts.append(t)
+        except Exception:
+            pass
+        return texts
 
-    # 2. 체슬리AI (박세익 전무 네이버 프리미엄)
-    try:
-        r = requests.get('https://contents.premium.naver.com/chesleyqr/chesleyqr407', headers=headers, timeout=5)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            for it in soup.find_all('li', class_='channel_content_item')[:6]:
-                title_el = it.find('strong', class_='channel_content_title')
-                desc_el = it.find('p', class_='channel_content_desc')
-                title = title_el.get_text().replace('NEW', '').strip() if title_el else ""
-                desc = desc_el.get_text().strip() if desc_el else ""
-                t = re.sub(r'https?://\S+', '', f"{title} {desc}").strip()
-                if not any(b in t for b in bad_keywords):
-                    all_texts.append(t)
-    except Exception:
-        pass
+    channel_tasks = [
+        ('danteodong', 'https://contents.premium.naver.com/jusikdante/danteodong'),
+        ('chesley',    'https://contents.premium.naver.com/chesleyqr/chesleyqr407'),
+        ('telegram',   'https://t.me/s/no1_dante'),
+        ('telegram',   'https://t.me/s/elite_instructor'),
+        ('telegram',   'https://t.me/s/trading_spin'),
+    ]
 
-    # 3. 주식단테 텔레그램 (no1_dante)
     try:
-        r = requests.get('https://t.me/s/no1_dante', headers=headers, timeout=5)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-25:]):
-                txt_el = m.find('div', class_='tgme_widget_message_text')
-                if txt_el:
-                    t = re.sub(r'https?://\S+', '', txt_el.get_text('\n').strip())
-                    if not any(b in t for b in bad_keywords):
-                        all_texts.append(t)
-    except Exception:
-        pass
-
-    # 4. 엘리트강사 텔레그램
-    try:
-        r = requests.get('https://t.me/s/elite_instructor', headers=headers, timeout=5)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-25:]):
-                txt_el = m.find('div', class_='tgme_widget_message_text')
-                if txt_el:
-                    t = re.sub(r'https?://\S+', '', txt_el.get_text('\n').strip())
-                    if not any(b in t for b in bad_keywords):
-                        all_texts.append(t)
-    except Exception:
-        pass
-
-    # 5. 정우영 트레이딩스핀 텔레그램
-    try:
-        r = requests.get('https://t.me/s/trading_spin', headers=headers, timeout=5)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-25:]):
-                txt_el = m.find('div', class_='tgme_widget_message_text')
-                if txt_el:
-                    t = re.sub(r'https?://\S+', '', txt_el.get_text('\n').strip())
-                    if not any(b in t for b in bad_keywords):
-                        all_texts.append(t)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(_fetch_sub_channel, ch_type, url) for ch_type, url in channel_tasks]
+            for fut in futures:
+                try:
+                    res_texts = fut.result(timeout=1.8)
+                    all_texts.extend(res_texts)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -1860,14 +1849,50 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
                             df_m_fb['Code'] = df_m_fb['Code'].astype(str).str.zfill(6)
                             df_q_fb = df_q_fb.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
                             df_q_fb = df_q_fb.merge(df_m_fb[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
-                        top_sub = df_q_fb.sort_values(['Total_Score_Adj', 'Amount'], ascending=[False, False]).head(3)
-                        for _, r in top_sub.iterrows():
+
+                        # ── [신규 상장주 퀀트 제외] 상장 60영업일(약 3개월) 미만 종목 배제 ──
+                        valid_rows = []
+                        import FinanceDataReader as _fdr
+                        for _, r in df_q_fb.sort_values(['Total_Score_Adj', 'Amount'], ascending=[False, False]).iterrows():
+                            c_code = str(r['Code']).zfill(6)
+                            try:
+                                # FDR 이력 60건 미만이면 신규상장주로 간주하고 제외
+                                df_h_check = _fdr.DataReader(c_code)
+                                if len(df_h_check) < 60:
+                                    continue
+                            except Exception:
+                                pass
+                            valid_rows.append(r)
+                            if len(valid_rows) >= 3:
+                                break
+
+                        import requests as _req
+                        _h = {'User-Agent': 'Mozilla/5.0'}
+                        for r in valid_rows:
+                            c_code = str(r['Code']).zfill(6)
+                            c_name = str(r.get('Name', ''))
+                            c_score = float(r.get('Total_Score_Adj', r.get('Total_Score', 0)))
+                            c_price = float(r.get('Close', 0))
+                            c_chg = float(r.get('ChagesRatio', 0))
+
+                            # ── [실시간 체결가 갱신] 네이버 모바일 API로 현재 실시간 가격 즉시 조회 ──
+                            try:
+                                r_n = _req.get(f'https://m.stock.naver.com/api/stock/{c_code}/basic', headers=_h, timeout=1.5)
+                                if r_n.status_code == 200:
+                                    d_n = r_n.json()
+                                    p_str = str(d_n.get('closePrice', '')).replace(',', '').strip()
+                                    chg_str = str(d_n.get('fluctuationsRatio', '')).replace('%', '').strip()
+                                    if p_str: c_price = float(p_str)
+                                    if chg_str: c_chg = float(chg_str)
+                            except Exception:
+                                pass
+
                             top_stocks.append({
-                                'code': str(r['Code']).zfill(6),
-                                'name': str(r.get('Name', '')),
-                                'score': float(r.get('Total_Score_Adj', r.get('Total_Score', 0))),
-                                'price': float(r.get('Close', 0)),
-                                'chg': float(r.get('ChagesRatio', 0))
+                                'code': c_code,
+                                'name': c_name,
+                                'score': c_score,
+                                'price': c_price,
+                                'chg': c_chg
                             })
             except Exception as _fb_err:
                 print(f"DEBUG: quant_top fallback error: {_fb_err}")

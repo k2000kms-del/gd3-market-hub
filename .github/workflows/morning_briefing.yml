@@ -1,0 +1,45 @@
+﻿name: ☀️ GD 3.0 Morning Briefing (07:50 KST Sharp)
+
+on:
+  schedule:
+    # 한국 시간 평일 아침 07:45, 07:50 (UTC 22:45, 22:50, 일~목)
+    # NXT 프리마켓(08:00) 개장 10분 전 정확히 도착하도록 2회 트리거 (먼저 성공하면 당일 자동 중복 방지)
+    - cron: '45 22 * * 0-4'
+    - cron: '50 22 * * 0-4'
+  workflow_dispatch:
+
+jobs:
+  morning-briefing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send Morning Briefing Before 08:00 NXT Market
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+        run: python send_morning_briefing.py
+
+      - name: Commit and push briefing state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/last_briefing_state.json
+          git diff --staged --quiet || git commit -m "chore: 모닝 브리핑 발송 상태 기록"
+          git push || true
