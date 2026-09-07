@@ -483,6 +483,7 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
 _EXTERNAL_CHANNELS = [
     ('elite_instructor', 'https://t.me/s/elite_instructor', 'last_elite_post_id'),
     ('trading_spin',     'https://t.me/s/trading_spin',     'last_spin_post_id'),
+    ('SAJAnote',         'https://t.me/s/SAJAnote',         'last_saja_post_id'),
 ]
 
 try:

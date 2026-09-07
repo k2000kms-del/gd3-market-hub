@@ -743,7 +743,7 @@ def fetch_realtime_lead_indicators() -> str:
 
     # 3. 채널에서 야간선물 언급 추출
     night_fut_text = ""
-    for ch in ['elite_instructor', 'trading_spin']:
+    for ch in ['elite_instructor', 'trading_spin', 'SAJAnote']:
         try:
             r = requests.get(f'https://t.me/s/{ch}', headers=headers, timeout=4)
             if r.status_code == 200:
@@ -887,10 +887,11 @@ def fetch_channel_intelligence_briefing() -> str:
         ('telegram',   'https://t.me/s/no1_dante'),
         ('telegram',   'https://t.me/s/elite_instructor'),
         ('telegram',   'https://t.me/s/trading_spin'),
+        ('telegram',   'https://t.me/s/SAJAnote'),
     ]
 
     try:
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             futures = [executor.submit(_fetch_sub_channel, ch_type, url) for ch_type, url in channel_tasks]
             for fut in futures:
                 try:
@@ -2223,13 +2224,21 @@ def notify_external_channel_alert(
 
     # 2. 메시지 원문 정리 (너무 길면 일부 축약)
     clean_raw = raw_message.strip()
-    if len(clean_raw) > 500:
-        clean_raw = clean_raw[:500] + "\n...(중략)..."
+    if len(clean_raw) > 700:
+        clean_raw = clean_raw[:700] + "\n...(중략)..."
+
+    ch_map = {
+        'elite_instructor': '엘리트강사 단타',
+        'trading_spin': '트레이딩 스핀',
+        'SAJAnote': '사자노트 (SAJAnote)',
+        'no1_dante': '주식단테'
+    }
+    ch_display = ch_map.get(channel_name, channel_name)
 
     text = (
         f"🚨 <b>[실시간 외부 단타/속보 채널 포착 알림]</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"📢 <b>출처</b>: <b>{channel_name}</b> (실시간)\n"
+        f"📢 <b>출처</b>: <b>{ch_display}</b> (실시간)\n"
         f"📝 <b>원문 내용</b>:\n"
         f"<i>{clean_raw}</i>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
