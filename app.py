@@ -6720,13 +6720,15 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             try:
                 j_info = detect_jumping_candle(df_candle)
                 if j_info.get('is_jumping') or (len(df_candle) > 0 and df_candle['Open'].iloc[-1] > df_candle['Close'].iloc[-2] * 1.025):
-                    s_open = j_info.get('open_price') or df_candle['Open'].iloc[-1]
-                    fig_c.add_hline(
-                        y=s_open, line_dash='dash', line_color='#2ecc71', line_width=2,
-                        annotation_text=f"🟢 세력 절대 방어선 (시초가: {s_open:,.0f}원)",
-                        annotation_position="bottom right",
-                        annotation_font=dict(color="#2ecc71", size=11, family="malgun gothic")
-                    )
+                    s_open = float(j_info.get('open_price') or df_candle['Open'].iloc[-1])
+                    fig_c.add_trace(go.Scattergl(
+                        x=date_str_list,
+                        y=[s_open] * len(date_str_list),
+                        name=f'세력 절대 방어선 ({s_open:,.0f}원)',
+                        mode='lines',
+                        line=dict(color='#2ecc71', width=2, dash='dash'),
+                        hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {s_open:,.0f}원<extra></extra>"
+                    ), row=1, col=1)
             except Exception as _je:
                 pass
 
