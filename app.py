@@ -6716,22 +6716,6 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 hovertemplate="<b>📅 일자: %{x}</b><br>🔓 <b>시가</b>: %{open:,d}원<br>🔺 <b>고가</b>: %{high:,d}원<br>🔻 <b>저가</b>: %{low:,d}원<br>🔒 <b>종가</b>: %{close:,d}원<extra></extra>"
             ), row=1, col=1)
 
-                        # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 ──
-            try:
-                j_info = detect_jumping_candle(df_candle)
-                if j_info.get('is_jumping') or (len(df_candle) > 0 and df_candle['Open'].iloc[-1] > df_candle['Close'].iloc[-2] * 1.025):
-                    s_open = float(j_info.get('open_price') or df_candle['Open'].iloc[-1])
-                    fig_c.add_trace(go.Scattergl(
-                        x=date_str_list,
-                        y=[s_open] * len(date_str_list),
-                        name=f'세력 절대 방어선 ({s_open:,.0f}원)',
-                        mode='lines',
-                        line=dict(color='#2ecc71', width=2, dash='dash'),
-                        hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {s_open:,.0f}원<extra></extra>"
-                    ), row=1, col=1)
-            except Exception as _je:
-                pass
-
             # MA5
             fig_c.add_trace(go.Scattergl(
                 x=date_str_list, y=df_candle['MA5'],
@@ -6885,6 +6869,23 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     line=dict(color='#ffd700', width=2.0, dash='dashdot')
                 ), row=1, col=1)
 
+            # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 (범례 순서: 나의 매수단가 뒤) ──
+            s_open = None
+            try:
+                j_info = detect_jumping_candle(df_candle)
+                if j_info.get('is_jumping') or (len(df_candle) > 0 and df_candle['Open'].iloc[-1] > df_candle['Close'].iloc[-2] * 1.025):
+                    s_open = float(j_info.get('open_price') or df_candle['Open'].iloc[-1])
+                    fig_c.add_trace(go.Scattergl(
+                        x=date_str_list,
+                        y=[s_open] * len(date_str_list),
+                        name=f'세력 절대 방어선 ({s_open:,.0f}원)',
+                        mode='lines',
+                        line=dict(color='#2ecc71', width=2, dash='dash'),
+                        hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {s_open:,.0f}원<extra></extra>"
+                    ), row=1, col=1)
+            except Exception as _je:
+                pass
+
             # 일봉 차트의 가격 범위(y_range)를 완벽히 동기화하기 위한 수동 계산
             try:
                 min_val = df_candle[['High', 'Low', 'Close', 'Open']].min().min()
@@ -6896,6 +6897,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 if my_entry_price > 0:
                     min_val = min(min_val, my_entry_price)
                     max_val = max(max_val, my_entry_price)
+                if s_open is not None and s_open > 0:
+                    min_val = min(min_val, s_open)
+                    max_val = max(max_val, s_open)
                 margin_bottom = (max_val - min_val) * 0.05 if max_val > min_val else 1000
                 margin_top = (max_val - min_val) * 0.25 if max_val > min_val else 2000
                 y_range = [min_val - margin_bottom, max_val + margin_top]
