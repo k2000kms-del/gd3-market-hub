@@ -4033,7 +4033,7 @@ with col_btn2:
     else:
         portfolio_sidebar_container.button("🗑️ 삭제", width='stretch', disabled=True, key=f"btn_port_del_dis_{_target_code}")
 st.sidebar.markdown('---')
-st.sidebar.markdown('### 🤖 Gemini AI 실시간 투자 & 헬프 어드바이저')
+st.sidebar.markdown('### 🤖 Gemini Flash 3.8 실시간 투자 & 헬프 어드바이저')
 st.sidebar.caption('대시보드 질문뿐만 아니라 **"현재 종목을 사야 할지, 팔아야 할지, 목표가는 얼마인지"** 실시간으로 자유롭게 질문하세요.')
 
 # 1. API Key 불러오기 및 입력창
@@ -4065,7 +4065,7 @@ with st.sidebar.expander("🔑 Gemini API Key 설정 / 변경", expanded=(not _c
         "Google AI Studio API Key",
         type="password",
         value=st.session_state.get('user_gemini_key', ''),
-        placeholder="AIzaSy... (새 키 입력 시 즉시 적용)",
+        placeholder="AQ... 또는 AIzaSy... (새 키 입력 시 즉시 적용)",
         help="Google AI Studio (https://aistudio.google.com/app/apikey)에서 무료로 발급받으신 API Key를 입력하세요."
     )
     col_k1, col_k2 = st.columns([1, 1])
@@ -4109,13 +4109,13 @@ gemini_prompt = st.sidebar.text_area(
     label_visibility="collapsed"
 )
 
-if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
+if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
     if not gemini_api_key:
         st.sidebar.error("🔑 API Key를 먼저 입력해 주세요.")
     elif not gemini_prompt.strip():
         st.sidebar.warning("✏️ 질문을 입력해 주세요.")
     else:
-        with st.sidebar.spinner("🤖 Gemini 3.7 AI가 실시간 분석 답변을 생성하는 중..."):
+        with st.sidebar.spinner("🤖 Gemini Flash 3.8 AI가 실시간 분석 답변을 생성하는 중..."):
             diag_info = ""
             if attach_status:
                 cur_code = st.session_state.get('sel_code', '005930')
@@ -4177,12 +4177,8 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
 """
 
             models_to_try = [
-                "gemini-2.5-flash",
-                "gemini-2.0-flash",
-                "gemini-1.5-flash",
-                "gemini-1.5-pro",
-                "gemini-3.7-flash",
-                "gemini-3-flash-preview"
+                "gemini-3.8-flash",
+                "gemini-3.7-flash"
             ]
 
             headers = {"Content-Type": "application/json"}
@@ -4204,10 +4200,10 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
                 try:
-                    r = requests.post(url, json=payload, headers=headers, timeout=20)
+                    r = requests.post(url, json=payload, headers=headers, timeout=30)
                     if r.status_code == 200:
                         ans = r.json()['candidates'][0]['content']['parts'][0]['text']
-                        st.sidebar.success("🤖 Gemini 실시간 투자 어드바이저 답변:")
+                        st.sidebar.success(f"🤖 {model_name} 투자 어드바이저 답변:")
                         st.sidebar.markdown(ans)
                         success = True
                         break
