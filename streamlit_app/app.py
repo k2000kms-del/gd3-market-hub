@@ -4041,11 +4041,14 @@ import os
 
 # secrets.toml → 환경변수 → 사용자 직접 입력 순으로 탐색 (st.secrets는 try/except로 안전하게 접근)
 def _load_gemini_api_key():
-    # 1순위: 환경변수
+    # 1순위: 세션 상태에 임시 입력된 키
+    if 'user_gemini_key' in st.session_state and st.session_state['user_gemini_key']:
+        return st.session_state['user_gemini_key']
+    # 2순위: 환경변수
     k = os.environ.get("GEMINI_API_KEY", "")
     if k:
         return k
-    # 2순위: st.secrets (secrets.toml / Streamlit Cloud Secrets)
+    # 3순위: st.secrets (secrets.toml / Streamlit Cloud Secrets)
     try:
         k = st.secrets.get("GEMINI_API_KEY", "") or st.secrets["GEMINI_API_KEY"]
         if k:
@@ -4054,14 +4057,47 @@ def _load_gemini_api_key():
         pass
     return ""
 
-gemini_api_key = _load_gemini_api_key()
-if not gemini_api_key:
-    gemini_api_key = st.sidebar.text_input(
-        "Gemini API Key 입력",
+_current_gemini_key = _load_gemini_api_key()
+
+# 사이드바 API Key 설정 섹션 (언제든 새 키로 교체/저장 가능)
+with st.sidebar.expander("🔑 Gemini API Key 설정 / 변경", expanded=(not _current_gemini_key or _current_gemini_key.startswith("AIzaSyBv9M5"))):
+    new_gemini_input = st.text_input(
+        "Google AI Studio API Key",
         type="password",
-        placeholder="AIzaSy...",
-        help="Google AI Studio에서 발급받은 API Key를 입력하세요."
+        value=st.session_state.get('user_gemini_key', ''),
+        placeholder="AIzaSy... (새 키 입력 시 즉시 적용)",
+        help="Google AI Studio (https://aistudio.google.com/app/apikey)에서 무료로 발급받으신 API Key를 입력하세요."
     )
+    col_k1, col_k2 = st.columns([1, 1])
+    with col_k1:
+        if st.button("💾 영구 저장", key="btn_save_gemini_key", use_container_width=True):
+            if new_gemini_input.strip():
+                st.session_state['user_gemini_key'] = new_gemini_input.strip()
+                # secrets.toml 파일에 영구 반영
+                try:
+                    sec_path = os.path.join(os.path.dirname(__file__), "..", ".streamlit", "secrets.toml")
+                    if not os.path.exists(sec_path):
+                        sec_path = os.path.join(os.path.dirname(__file__), ".streamlit", "secrets.toml")
+                    if os.path.exists(sec_path):
+                        with open(sec_path, "r", encoding="utf-8") as f:
+                            sec_content = f.read()
+                        import re
+                        if 'GEMINI_API_KEY' in sec_content:
+                            sec_content = re.sub(r'GEMINI_API_KEY\s*=\s*"[^"]*"', f'GEMINI_API_KEY = "{new_gemini_input.strip()}"', sec_content)
+                        else:
+                            sec_content += f'\nGEMINI_API_KEY = "{new_gemini_input.strip()}"\n'
+                        with open(sec_path, "w", encoding="utf-8") as f:
+                            f.write(sec_content)
+                except Exception:
+                    pass
+                st.success("✅ 새 Gemini Key가 저장되었습니다!")
+                st.rerun()
+            else:
+                st.warning("키를 입력해주세요.")
+    with col_k2:
+        st.markdown("[🔗 새 키 무료 발급](https://aistudio.google.com/app/apikey)")
+
+gemini_api_key = new_gemini_input.strip() if new_gemini_input.strip() else _current_gemini_key
 
 # 2. 대시보드 상태 및 실시간 데이터 첨부 여부
 attach_status = st.sidebar.checkbox("실시간 종목/시장 데이터 첨부", value=True, help="체크하면 현재 선택된 종목의 시세, 퀀트 점수, 외국인/기관 수급 및 대시보드 상태가 AI에게 함께 전달되어 훨씬 정확한 투자 조언을 받으실 수 있습니다.")
@@ -4141,11 +4177,11 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
 """
 
             models_to_try = [
+                "gemini-2.5-flash",
+                "gemini-2.0-flash",
+                "gemini-1.5-flash",
+                "gemini-1.5-pro",
                 "gemini-3.7-flash",
-                "gemini-3.6-flash",
-                "gemini-3.5-flash",
-                "gemini-flash-lite-latest",
-                "gemini-3.1-flash-lite",
                 "gemini-3-flash-preview"
             ]
 
@@ -4164,18 +4200,22 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
 
             success = False
             last_err = None
+            is_leaked = False
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
                 try:
                     r = requests.post(url, json=payload, headers=headers, timeout=20)
                     if r.status_code == 200:
                         ans = r.json()['candidates'][0]['content']['parts'][0]['text']
-                        st.sidebar.success("🤖 Gemini 3.7 투자 어드바이저 답변:")
+                        st.sidebar.success("🤖 Gemini 실시간 투자 어드바이저 답변:")
                         st.sidebar.markdown(ans)
                         success = True
                         break
                     else:
                         last_err = f"API 에러 (코드 {r.status_code}): {r.text[:200]}"
+                        if "leaked" in r.text.lower() or (r.status_code == 403 and "PERMISSION_DENIED" in r.text):
+                            is_leaked = True
+                            break
                         if r.status_code in [404, 429, 503]:
                             continue
                 except Exception as ex:
@@ -4183,7 +4223,17 @@ if st.sidebar.button("Gemini 3.7에게 질문하기", width='stretch'):
                 time.sleep(0.5)
 
             if not success:
-                st.sidebar.error(f"❌ Gemini 답변 생성 실패: {last_err}")
+                if is_leaked or (last_err and "leaked" in last_err.lower()):
+                    st.sidebar.error("❌ **Gemini API Key 차단됨 (Google 보안 감지)**")
+                    st.sidebar.warning(
+                        "⚠️ 현재 등록된 Gemini API Key가 Google에 의해 **외부 유출(Leaked)**로 감지되어 영구 차단되었습니다.\n\n"
+                        "🔑 **해결 방법 (1분 소요 - 완전 무료)**:\n"
+                        "1. [Google AI Studio (클릭)](https://aistudio.google.com/app/apikey)에 접속합니다.\n"
+                        "2. **'Create API key'** 버튼을 눌러 새 키를 생성합니다.\n"
+                        "3. 바로 위 **'🔑 Gemini API Key 설정 / 변경'**에 새 키를 넣고 **[💾 영구 저장]**을 누르면 즉시 정상 작동합니다."
+                    )
+                else:
+                    st.sidebar.error(f"❌ Gemini 답변 생성 실패: {last_err}")
 
 
 # KIS API Key 정보 - st.secrets를 try/except로 안전하게 접근
