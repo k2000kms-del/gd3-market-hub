@@ -58,11 +58,7 @@ if not token or not chat_id:
                 pass
 
 token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-chat_id = chat_id or "8056247738"
-
-if not token or not chat_id:
-    token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-    chat_id = "1131551088"
+chat_id = chat_id or "1131551088"
 
 # 3. 중복 발송 방지 확인
 state_file = os.path.join(base_dir, 'data', 'last_briefing_state.json')

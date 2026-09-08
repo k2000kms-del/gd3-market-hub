@@ -59,7 +59,7 @@ if not token or not chat_id:
                 pass
 
 token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-chat_id = chat_id or "8056247738"
+chat_id = chat_id or "1131551088"
 
 import telegram_notifier as tn
 
