@@ -7365,16 +7365,23 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                             showlegend=False
                         ), row=1, col=1)
 
-                # 나의 매수단가선 그리기
+                # 5분봉 캔들 가격 범위 확인 (괴리 여부 판단용)
+                candle_min_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].min().min()
+                candle_max_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].max().max()
+
+                # 나의 매수단가선 그리기 (단타/스캘핑 5분봉에서 현재 주가와 괴리가 4% 초과 시 캔들 압축 방지를 위해 미표시)
                 portfolio_cached = portfolio if 'portfolio' in locals() and portfolio else load_portfolio()
                 my_entry_price = 0
+                show_entry_5m = False
                 if code_disp in portfolio_cached:
                     my_entry_price = portfolio_cached[code_disp]["entry_price"]
-                    fig_5m.add_trace(go.Scattergl(
-                        x=tick_vals_5m, y=[my_entry_price] * len(tick_vals_5m),
-                        name='나의 매수단가', mode='lines',
-                        line=dict(color='#ffd700', width=2.0, dash='dashdot')
-                    ), row=1, col=1)
+                    if my_entry_price > 0 and (candle_min_5m * 0.96 <= my_entry_price <= candle_max_5m * 1.04):
+                        show_entry_5m = True
+                        fig_5m.add_trace(go.Scattergl(
+                            x=tick_vals_5m, y=[my_entry_price] * len(tick_vals_5m),
+                            name='나의 매수단가', mode='lines',
+                            line=dict(color='#ffd700', width=2.0, dash='dashdot')
+                        ), row=1, col=1)
 
                 # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 (범례 순서: 나의 매수단가 뒤) ──
                 if jumping_defense_price is not None and jumping_defense_price > 0:
@@ -7399,18 +7406,19 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
 
                 # 5분봉 가격 범위(y_range) 수동 계산
                 try:
-                    min_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].min().min()
-                    max_val_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].max().max()
+                    min_val_5m = candle_min_5m
+                    max_val_5m = candle_max_5m
                     for col in ['MA5', 'MA20', 'Stop_Loss']:
                         if col in df_5min_tail.columns:
                             min_val_5m = min(min_val_5m, df_5min_tail[col].min(skipna=True))
                             max_val_5m = max(max_val_5m, df_5min_tail[col].max(skipna=True))
-                    if my_entry_price > 0:
+                    if show_entry_5m:
                         min_val_5m = min(min_val_5m, my_entry_price)
                         max_val_5m = max(max_val_5m, my_entry_price)
                     if jumping_defense_price is not None and jumping_defense_price > 0:
-                        min_val_5m = min(min_val_5m, jumping_defense_price)
-                        max_val_5m = max(max_val_5m, jumping_defense_price)
+                        if candle_min_5m * 0.85 <= jumping_defense_price <= candle_max_5m * 1.15:
+                            min_val_5m = min(min_val_5m, jumping_defense_price)
+                            max_val_5m = max(max_val_5m, jumping_defense_price)
                     margin_5m = (max_val_5m - min_val_5m) * 0.05 if max_val_5m > min_val_5m else 100
                     y_range_5m = [min_val_5m - margin_5m, max_val_5m + margin_5m]
                 except Exception:
@@ -7685,16 +7693,23 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                             showlegend=False
                         ), row=1, col=1)
 
-                # 나의 매수단가선 그리기
+                # 1분봉 캔들 가격 범위 확인 (괴리 여부 판단용)
+                candle_min_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].min().min()
+                candle_max_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].max().max()
+
+                # 나의 매수단가선 그리기 (단타/스캘핑 1분봉에서 현재 주가와 괴리가 4% 초과 시 캔들 압축 방지를 위해 미표시)
                 portfolio_cached = portfolio if 'portfolio' in locals() and portfolio else load_portfolio()
                 my_entry_price = 0
+                show_entry_1m = False
                 if code_disp in portfolio_cached:
                     my_entry_price = portfolio_cached[code_disp]["entry_price"]
-                    fig_1m.add_trace(go.Scattergl(
-                        x=tick_vals_1m, y=[my_entry_price] * len(tick_vals_1m),
-                        name='나의 매수단가', mode='lines',
-                        line=dict(color='#ffd700', width=2.0, dash='dashdot')
-                    ), row=1, col=1)
+                    if my_entry_price > 0 and (candle_min_1m * 0.96 <= my_entry_price <= candle_max_1m * 1.04):
+                        show_entry_1m = True
+                        fig_1m.add_trace(go.Scattergl(
+                            x=tick_vals_1m, y=[my_entry_price] * len(tick_vals_1m),
+                            name='나의 매수단가', mode='lines',
+                            line=dict(color='#ffd700', width=2.0, dash='dashdot')
+                        ), row=1, col=1)
 
                 # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 (범례 순서: 나의 매수단가 뒤) ──
                 if jumping_defense_price is not None and jumping_defense_price > 0:
@@ -7719,18 +7734,19 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
 
                 # 1분봉 가격 범위(y_range) 수동 계산
                 try:
-                    min_val_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].min().min()
-                    max_val_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].max().max()
+                    min_val_1m = candle_min_1m
+                    max_val_1m = candle_max_1m
                     for col in ['MA5', 'MA20', 'Stop_Loss']:
                         if col in df_1min_tail.columns:
                             min_val_1m = min(min_val_1m, df_1min_tail[col].min(skipna=True))
                             max_val_1m = max(max_val_1m, df_1min_tail[col].max(skipna=True))
-                    if my_entry_price > 0:
+                    if show_entry_1m:
                         min_val_1m = min(min_val_1m, my_entry_price)
                         max_val_1m = max(max_val_1m, my_entry_price)
                     if jumping_defense_price is not None and jumping_defense_price > 0:
-                        min_val_1m = min(min_val_1m, jumping_defense_price)
-                        max_val_1m = max(max_val_1m, jumping_defense_price)
+                        if candle_min_1m * 0.85 <= jumping_defense_price <= candle_max_1m * 1.15:
+                            min_val_1m = min(min_val_1m, jumping_defense_price)
+                            max_val_1m = max(max_val_1m, jumping_defense_price)
                     margin_1m = (max_val_1m - min_val_1m) * 0.05 if max_val_1m > min_val_1m else 100
                     y_range_1m = [min_val_1m - margin_1m, max_val_1m + margin_1m]
                 except Exception:
