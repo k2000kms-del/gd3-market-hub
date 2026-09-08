@@ -6852,11 +6852,27 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
 
 
         # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 가격 사전 계산 (일봉/5분봉/1분봉 공통) ──
+        # 당일 캔들뿐만 아니라 최근 25거래일 역순 탐색하여 가장 최근 발생한 점핑 양봉 시초가를 방어선으로 지속 유지
         jumping_defense_price = None
         try:
-            j_info = detect_jumping_candle(df_candle)
-            if j_info.get('is_jumping') or (len(df_candle) > 0 and df_candle['Open'].iloc[-1] > df_candle['Close'].iloc[-2] * 1.025):
-                jumping_defense_price = float(j_info.get('open_price') or df_candle['Open'].iloc[-1])
+            n_lookback = min(25, len(df_candle))
+            for i in range(len(df_candle) - 1, max(0, len(df_candle) - n_lookback) - 1, -1):
+                sub_df = df_candle.iloc[:i+1]
+                j_info = detect_jumping_candle(sub_df)
+                if j_info.get('is_jumping'):
+                    jumping_defense_price = float(j_info.get('open_price') or sub_df['Open'].iloc[-1])
+                    break
+                if i >= 1:
+                    row_cur = df_candle.iloc[i]
+                    row_prev = df_candle.iloc[i-1]
+                    o_p = float(row_cur['Open'])
+                    c_prev = float(row_prev['Close'])
+                    c_cur = float(row_cur['Close'])
+                    l_cur = float(row_cur['Low'])
+                    if c_prev > 0 and (o_p >= c_prev * 1.020):
+                        if c_cur >= o_p * 0.985 and l_cur >= o_p * 0.975:
+                            jumping_defense_price = o_p
+                            break
         except Exception:
             jumping_defense_price = None
 
