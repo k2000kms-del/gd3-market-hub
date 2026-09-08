@@ -7095,9 +7095,15 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     if col in df_candle.columns:
                         min_val = min(min_val, df_candle[col].min(skipna=True))
                         max_val = max(max_val, df_candle[col].max(skipna=True))
+                # ── [일봉 Y축 왜곡 방지] 매수단가가 캔들 범위에서 ±20% 이상 벗어날 때 Y축 계산 제외 ──
+                # 1분봉/5분봉의 ±4% 기준과 동일한 원리이나, 일봉은 중장기 차트이므로 ±20%로 완화 적용
+                # (선 자체는 차트에 계속 표시되지만, Y축 범위가 심각하게 늘어나는 것만 방지)
                 if my_entry_price > 0:
-                    min_val = min(min_val, my_entry_price)
-                    max_val = max(max_val, my_entry_price)
+                    candle_mid = (min_val + max_val) / 2
+                    if candle_mid * 0.80 <= my_entry_price <= candle_mid * 1.20:
+                        min_val = min(min_val, my_entry_price)
+                        max_val = max(max_val, my_entry_price)
+                    # 20% 초과 괴리: Y축 계산 제외 (캔들이 납작해지는 현상 방지)
                 if jumping_defense_price is not None and jumping_defense_price > 0:
                     min_val = min(min_val, jumping_defense_price)
                     max_val = max(max_val, jumping_defense_price)
