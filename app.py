@@ -7070,9 +7070,10 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             my_entry_price = 0
             if code_disp in portfolio_cached:
                 my_entry_price = portfolio_cached[code_disp]["entry_price"]
+                entry_label_c = f'나의 매수단가 ({my_entry_price:,.0f}원)' if my_entry_price >= 100 else f'나의 매수단가 ({my_entry_price:,.2f})'
                 fig_c.add_trace(go.Scattergl(
                     x=date_str_list, y=[my_entry_price] * len(date_str_list),
-                    name='나의 매수단가', mode='lines',
+                    name=entry_label_c, mode='lines',
                     line=dict(color='#ffd700', width=2.0, dash='dashdot')
                 ), row=1, col=1)
 
@@ -7388,30 +7389,55 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 candle_min_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].min().min()
                 candle_max_5m = df_5min_tail[['High', 'Low', 'Close', 'Open']].max().max()
 
-                # 나의 매수단가선 그리기 (단타/스캘핑 5분봉에서 현재 주가와 괴리가 4% 초과 시 캔들 압축 방지를 위해 미표시)
+                # 나의 매수단가: 상단 범례는 항상 표시하되, 차트 내부 수평선은 괴리 ±4% 이내일 때만 렌더링 (캔들 압축 방지)
                 portfolio_cached = portfolio if 'portfolio' in locals() and portfolio else load_portfolio()
                 my_entry_price = 0
                 show_entry_5m = False
                 if code_disp in portfolio_cached:
                     my_entry_price = portfolio_cached[code_disp]["entry_price"]
-                    if my_entry_price > 0 and (candle_min_5m * 0.96 <= my_entry_price <= candle_max_5m * 1.04):
-                        show_entry_5m = True
+                    if my_entry_price > 0:
+                        entry_label_5m = f'나의 매수단가 ({my_entry_price:,.0f}원)' if my_entry_price >= 100 else f'나의 매수단가 ({my_entry_price:,.2f})'
+                        # 상단 범례 표시용 더미 트레이스 (항상 유지)
                         fig_5m.add_trace(go.Scattergl(
-                            x=tick_vals_5m, y=[my_entry_price] * len(tick_vals_5m),
-                            name='나의 매수단가', mode='lines',
-                            line=dict(color='#ffd700', width=2.0, dash='dashdot')
+                            x=[None], y=[None],
+                            name=entry_label_5m, mode='lines',
+                            line=dict(color='#ffd700', width=2.0, dash='dashdot'),
+                            showlegend=True
                         ), row=1, col=1)
+                        # 주가와 근접(±4% 이내) 시에만 실제 차트 수평선 렌더링
+                        if candle_min_5m * 0.96 <= my_entry_price <= candle_max_5m * 1.04:
+                            show_entry_5m = True
+                            fig_5m.add_trace(go.Scattergl(
+                                x=tick_vals_5m, y=[my_entry_price] * len(tick_vals_5m),
+                                name=entry_label_5m, mode='lines',
+                                line=dict(color='#ffd700', width=2.0, dash='dashdot'),
+                                showlegend=False,
+                                hovertemplate=f"🟡 <b>나의 매수단가</b>: {my_entry_price:,.0f}원<extra></extra>"
+                            ), row=1, col=1)
 
-                # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 (범례 순서: 나의 매수단가 뒤) ──
+                # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선: 범례는 유지하되 괴리 ±5% 초과 시 차트 선 숨김 (캔들 압축 방지) ──
+                show_defense_5m = False
                 if jumping_defense_price is not None and jumping_defense_price > 0:
+                    defense_label_5m = f'세력 절대 방어선 ({jumping_defense_price:,.0f}원)'
+                    # 상단 범례 표시용 더미 트레이스 (항상 유지)
                     fig_5m.add_trace(go.Scattergl(
-                        x=tick_vals_5m,
-                        y=[jumping_defense_price] * len(tick_vals_5m),
-                        name=f'세력 절대 방어선 ({jumping_defense_price:,.0f}원)',
-                        mode='lines',
+                        x=[None], y=[None],
+                        name=defense_label_5m, mode='lines',
                         line=dict(color='#2ecc71', width=2, dash='dash'),
-                        hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {jumping_defense_price:,.0f}원<extra></extra>"
+                        showlegend=True
                     ), row=1, col=1)
+                    # 5분봉 캔들과 근접(±5% 이내) 시에만 실제 차트 수평선 렌더링 (괴리 시 캔들 찌그러짐 원천 차단)
+                    if candle_min_5m * 0.95 <= jumping_defense_price <= candle_max_5m * 1.05:
+                        show_defense_5m = True
+                        fig_5m.add_trace(go.Scattergl(
+                            x=tick_vals_5m,
+                            y=[jumping_defense_price] * len(tick_vals_5m),
+                            name=defense_label_5m,
+                            mode='lines',
+                            line=dict(color='#2ecc71', width=2, dash='dash'),
+                            showlegend=False,
+                            hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {jumping_defense_price:,.0f}원<extra></extra>"
+                        ), row=1, col=1)
                     
                 vol_colors_5m = [
                     '#ff6b6b' if c >= o else '#4e9ff5'
@@ -7434,10 +7460,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     if show_entry_5m:
                         min_val_5m = min(min_val_5m, my_entry_price)
                         max_val_5m = max(max_val_5m, my_entry_price)
-                    if jumping_defense_price is not None and jumping_defense_price > 0:
-                        if candle_min_5m * 0.85 <= jumping_defense_price <= candle_max_5m * 1.15:
-                            min_val_5m = min(min_val_5m, jumping_defense_price)
-                            max_val_5m = max(max_val_5m, jumping_defense_price)
+                    if show_defense_5m:
+                        min_val_5m = min(min_val_5m, jumping_defense_price)
+                        max_val_5m = max(max_val_5m, jumping_defense_price)
                     margin_5m = (max_val_5m - min_val_5m) * 0.05 if max_val_5m > min_val_5m else 100
                     y_range_5m = [min_val_5m - margin_5m, max_val_5m + margin_5m]
                 except Exception:
@@ -7716,30 +7741,55 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                 candle_min_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].min().min()
                 candle_max_1m = df_1min_tail[['High', 'Low', 'Close', 'Open']].max().max()
 
-                # 나의 매수단가선 그리기 (단타/스캘핑 1분봉에서 현재 주가와 괴리가 4% 초과 시 캔들 압축 방지를 위해 미표시)
+                # 나의 매수단가: 상단 범례는 항상 표시하되, 차트 내부 수평선은 괴리 ±4% 이내일 때만 렌더링 (캔들 압축 방지)
                 portfolio_cached = portfolio if 'portfolio' in locals() and portfolio else load_portfolio()
                 my_entry_price = 0
                 show_entry_1m = False
                 if code_disp in portfolio_cached:
                     my_entry_price = portfolio_cached[code_disp]["entry_price"]
-                    if my_entry_price > 0 and (candle_min_1m * 0.96 <= my_entry_price <= candle_max_1m * 1.04):
-                        show_entry_1m = True
+                    if my_entry_price > 0:
+                        entry_label_1m = f'나의 매수단가 ({my_entry_price:,.0f}원)' if my_entry_price >= 100 else f'나의 매수단가 ({my_entry_price:,.2f})'
+                        # 상단 범례 표시용 더미 트레이스 (항상 유지)
                         fig_1m.add_trace(go.Scattergl(
-                            x=tick_vals_1m, y=[my_entry_price] * len(tick_vals_1m),
-                            name='나의 매수단가', mode='lines',
-                            line=dict(color='#ffd700', width=2.0, dash='dashdot')
+                            x=[None], y=[None],
+                            name=entry_label_1m, mode='lines',
+                            line=dict(color='#ffd700', width=2.0, dash='dashdot'),
+                            showlegend=True
                         ), row=1, col=1)
+                        # 주가와 근접(±4% 이내) 시에만 실제 차트 수평선 렌더링
+                        if candle_min_1m * 0.96 <= my_entry_price <= candle_max_1m * 1.04:
+                            show_entry_1m = True
+                            fig_1m.add_trace(go.Scattergl(
+                                x=tick_vals_1m, y=[my_entry_price] * len(tick_vals_1m),
+                                name=entry_label_1m, mode='lines',
+                                line=dict(color='#ffd700', width=2.0, dash='dashdot'),
+                                showlegend=False,
+                                hovertemplate=f"🟡 <b>나의 매수단가</b>: {my_entry_price:,.0f}원<extra></extra>"
+                            ), row=1, col=1)
 
-                # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선 시각화 (범례 순서: 나의 매수단가 뒤) ──
+                # ── [정우영식] 점핑 양봉 시초가 세력 절대 방어선: 범례는 유지하되 괴리 ±5% 초과 시 차트 선 숨김 (캔들 압축 방지) ──
+                show_defense_1m = False
                 if jumping_defense_price is not None and jumping_defense_price > 0:
+                    defense_label_1m = f'세력 절대 방어선 ({jumping_defense_price:,.0f}원)'
+                    # 상단 범례 표시용 더미 트레이스 (항상 유지)
                     fig_1m.add_trace(go.Scattergl(
-                        x=tick_vals_1m,
-                        y=[jumping_defense_price] * len(tick_vals_1m),
-                        name=f'세력 절대 방어선 ({jumping_defense_price:,.0f}원)',
-                        mode='lines',
+                        x=[None], y=[None],
+                        name=defense_label_1m, mode='lines',
                         line=dict(color='#2ecc71', width=2, dash='dash'),
-                        hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {jumping_defense_price:,.0f}원<extra></extra>"
+                        showlegend=True
                     ), row=1, col=1)
+                    # 1분봉 캔들과 근접(±5% 이내) 시에만 실제 차트 수평선 렌더링 (괴리 시 캔들 찌그러짐 원천 차단)
+                    if candle_min_1m * 0.95 <= jumping_defense_price <= candle_max_1m * 1.05:
+                        show_defense_1m = True
+                        fig_1m.add_trace(go.Scattergl(
+                            x=tick_vals_1m,
+                            y=[jumping_defense_price] * len(tick_vals_1m),
+                            name=defense_label_1m,
+                            mode='lines',
+                            line=dict(color='#2ecc71', width=2, dash='dash'),
+                            showlegend=False,
+                            hovertemplate=f"🟢 <b>세력 절대 방어선</b>: {jumping_defense_price:,.0f}원<extra></extra>"
+                        ), row=1, col=1)
                     
                 vol_colors_1m = [
                     '#ff6b6b' if c >= o else '#4e9ff5'
@@ -7762,10 +7812,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     if show_entry_1m:
                         min_val_1m = min(min_val_1m, my_entry_price)
                         max_val_1m = max(max_val_1m, my_entry_price)
-                    if jumping_defense_price is not None and jumping_defense_price > 0:
-                        if candle_min_1m * 0.85 <= jumping_defense_price <= candle_max_1m * 1.15:
-                            min_val_1m = min(min_val_1m, jumping_defense_price)
-                            max_val_1m = max(max_val_1m, jumping_defense_price)
+                    if show_defense_1m:
+                        min_val_1m = min(min_val_1m, jumping_defense_price)
+                        max_val_1m = max(max_val_1m, jumping_defense_price)
                     margin_1m = (max_val_1m - min_val_1m) * 0.05 if max_val_1m > min_val_1m else 100
                     y_range_1m = [min_val_1m - margin_1m, max_val_1m + margin_1m]
                 except Exception:
