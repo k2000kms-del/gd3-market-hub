@@ -131,7 +131,8 @@ GITHUB_RAW_BASE = "https://raw.githubusercontent.com/k2000kms-del/gd3-market-hub
 
 EXCLUDE_KEYWORDS = [
     'KODEX', 'TIGER', 'ACE', 'KBSTAR', 'SOL', 'ARIRANG', 'HANARO', 'KOSEF', 'PLUS',
-    'TIMEFOLIO', '스팩', 'ETN', '선물', '인버스', '레버리지', '2X', '3X', 'RISE', 'BNK',
+    'TIMEFOLIO', '스팩', 'ETN', 'ETF', '선물', '인버스', '레버리지', '2X', '3X', 'RISE', 'BNK',
+    'WOORI', '파워', '마이티', '히어로즈', 'KOACT', 'UNLIMITED', '1Q', 'CD금리', '액티브', '합성',
     '대신34호스팩', '하나32호스팩', '신한제13호스팩', 'KB제28호스팩', '유진스팩10호'
 ]
 
@@ -246,14 +247,40 @@ def fetch_naver_realtime_supply():
 @st.cache_data(ttl=30)
 def fetch_naver_realtime_indices():
     headers = {"User-Agent": "Mozilla/5.0"}
+    res = {}
     try:
         url = "https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI,KOSDAQ"
         r = requests.get(url, headers=headers, timeout=2.0)
         if r.status_code == 200:
-            return r.json()
+            d = r.json()
+            for item in d.get('datas', []):
+                code = item.get('itemCode', '')  # 'KOSPI' or 'KOSDAQ'
+                p_str = str(item.get('closePrice', '')).replace(',', '')
+                chg_str = str(item.get('fluctuationsRatio', '0')).replace(',', '')
+                try:
+                    p_val = float(p_str)
+                except Exception:
+                    p_val = 0.0
+                try:
+                    chg_val = float(chg_str)
+                except Exception:
+                    chg_val = 0.0
+                
+                info = {
+                    'price': p_val,
+                    'price_str': f"{p_val:,.2f}",
+                    'chg': chg_val,
+                    'change_str': f"{chg_val:+.2f}%",
+                    'trend': '▲' if chg_val > 0 else ('▼' if chg_val < 0 else '-')
+                }
+                res[code] = info
+                if code == 'KOSPI':
+                    res['코스피'] = info
+                elif code == 'KOSDAQ':
+                    res['코스닥'] = info
     except Exception as e:
         print(f"DEBUG: fetch_naver_realtime_indices failed: {e}")
-    return {}
+    return res
 
 @st.cache_data(ttl=30)
 def fetch_naver_index_minute_candles(market_code: str = 'KOSPI'):
@@ -2446,12 +2473,10 @@ def fetch_live_stock_listing():
         """ETF/스팩/파생상품 종목을 반환 전 제거 (EXCLUDE_KEYWORDS 기반 벡터 필터)"""
         if df.empty or 'Name' not in df.columns:
             return df
-        name_lower = df['Name'].fillna('').astype(str).str.lower()
         _etf_pat = '|'.join(re.escape(kw) for kw in EXCLUDE_KEYWORDS)
-        is_fund = name_lower.str.contains(_etf_pat, regex=True, na=False)
+        is_fund = df['Name'].fillna('').astype(str).str.contains(_etf_pat, case=False, regex=True, na=False)
         if 'Sector' in df.columns:
-            sector_lower = df['Sector'].fillna('').astype(str).str.lower()
-            is_fund = is_fund | sector_lower.str.contains(r'etf|수익증권', regex=True, na=False)
+            is_fund = is_fund | df['Sector'].fillna('').astype(str).str.contains(r'etf|수익증권', case=False, regex=True, na=False)
         return df[~is_fund].reset_index(drop=True)
 
     # 1순위: FDR 시도 (로컬에서는 정상 동작)
@@ -3345,13 +3370,11 @@ def _apply_etf_filter(df):
     if df is None or df.empty:
         return df if df is not None else pd.DataFrame()
     df_out = df.copy()
-    name_lower = df_out['Name'].fillna('').astype(str).str.lower()
-    # [성능 최적화] apply(lambda+any) → str.contains 정규식 벡터 연산으로 교체 (수십 배 빠름)
+    # [성능 최적화] apply(lambda+any) → str.contains 정규식 벡터 연산으로 교체 (수십 배 빠름, case=False 필수)
     _etf_pattern = '|'.join(re.escape(kw) for kw in EXCLUDE_KEYWORDS)
-    is_fund = name_lower.str.contains(_etf_pattern, regex=True, na=False)
+    is_fund = df_out['Name'].fillna('').astype(str).str.contains(_etf_pattern, case=False, regex=True, na=False)
     if 'Sector' in df_out.columns:
-        sector_lower = df_out['Sector'].fillna('').astype(str).str.lower()
-        is_fund = is_fund | sector_lower.str.contains(r'etf|수익증권', regex=True, na=False)
+        is_fund = is_fund | df_out['Sector'].fillna('').astype(str).str.contains(r'etf|수익증권', case=False, regex=True, na=False)
     return df_out[~is_fund]
 
 # 사전 필터링된 전역 DataFrame (각 패널에서 직접 재사용)
@@ -5142,13 +5165,15 @@ with col_left:
     
     # ── 실시간 시장 수급 및 지수 오버레이 (0.05초 즉시 반영) ──
     live_market_sup = fetch_naver_realtime_supply()
+    live_indices = fetch_naver_realtime_indices()
     if not df_summary.empty:
         df_sum_render = df_summary.copy()
-        if live_market_sup:
-            for idx, row in df_sum_render.iterrows():
-                m_name = str(row.get('종목/종류', ''))
-                for target_m in ['코스피', '코스닥']:
-                    if target_m in m_name and target_m in live_market_sup:
+        for idx, row in df_sum_render.iterrows():
+            m_name = str(row.get('종목/종류', ''))
+            for target_m in ['코스피', '코스닥']:
+                if target_m in m_name:
+                    # 1. 실시간 수급 덮어쓰기
+                    if live_market_sup and target_m in live_market_sup:
                         s_info = live_market_sup[target_m]
                         if '외국인(억)' in df_sum_render.columns:
                             df_sum_render.at[idx, '외국인(억)'] = f"{s_info['foreign']:+,}"
@@ -5156,6 +5181,15 @@ with col_left:
                             df_sum_render.at[idx, '개인(억)'] = f"{s_info['personal']:+,}"
                         if '기관(억)' in df_sum_render.columns:
                             df_sum_render.at[idx, '기관(억)'] = f"{s_info['institutional']:+,}"
+                    # 2. 당일 실시간 지수 및 등락률 덮어쓰기 (FDR 지연/어제 데이터 오류 완벽 방지)
+                    if live_indices and target_m in live_indices:
+                        i_info = live_indices[target_m]
+                        if '지수' in df_sum_render.columns:
+                            df_sum_render.at[idx, '지수'] = i_info['price_str']
+                        if '등락률' in df_sum_render.columns:
+                            df_sum_render.at[idx, '등락률'] = i_info['change_str']
+                        if '추이' in df_sum_render.columns:
+                            df_sum_render.at[idx, '추이'] = i_info['trend']
         df_summary = df_sum_render
         def get_color(v):
             try:

@@ -1355,8 +1355,35 @@ def collect_market_summary(token, df_intraday):
                 int(last_row.get('Institutional_Net', 0))
             )
 
-        ks_chg = chg(df_ks)
-        kq_chg = chg(df_kq)
+        # 네이버 실시간 지수 API 1순위 조회 (FDR 당일 장마감 후 지연/누락 방지)
+        naver_indices = {}
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            r_nv = requests.get('https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI,KOSDAQ', headers=headers, timeout=2.5)
+            if r_nv.status_code == 200:
+                for item in r_nv.json().get('datas', []):
+                    k = '코스피' if item.get('itemCode') == 'KOSPI' else '코스닥'
+                    p_val = float(str(item.get('closePrice', '')).replace(',', ''))
+                    chg_val = float(str(item.get('fluctuationsRatio', '0')).replace(',', ''))
+                    naver_indices[k] = {
+                        'price': f"{p_val:,.2f}",
+                        'chg': chg_val,
+                        'chg_str': f"{chg_val:+.2f}%",
+                        'trend': '▲' if chg_val > 0 else ('▼' if chg_val < 0 else '-')
+                    }
+        except Exception as e:
+            print(f'DEBUG naver real-time index fetch error: {e}')
+
+        ks_p = naver_indices.get('코스피', {}).get('price', f'{last(df_ks):,.2f}')
+        ks_chg = naver_indices.get('코스피', {}).get('chg', chg(df_ks))
+        ks_chg_str = naver_indices.get('코스피', {}).get('chg_str', f'{ks_chg:+.2f}%')
+        ks_trend = naver_indices.get('코스피', {}).get('trend', trend(ks_chg))
+
+        kq_p = naver_indices.get('코스닥', {}).get('price', f'{last(df_kq):,.2f}')
+        kq_chg = naver_indices.get('코스닥', {}).get('chg', chg(df_kq))
+        kq_chg_str = naver_indices.get('코스닥', {}).get('chg_str', f'{kq_chg:+.2f}%')
+        kq_trend = naver_indices.get('코스닥', {}).get('trend', trend(kq_chg))
+
         usd_chg = chg(df_usd)
 
         fgn_ks, ind_ks, inst_ks = get_supply('코스피')
@@ -1365,18 +1392,18 @@ def collect_market_summary(token, df_intraday):
         rows = [
             {
                 '종목/종류': '코스피',
-                '지수': f'{last(df_ks):,.2f}',
-                '등락률': f'{ks_chg:+.2f}%',
-                '추이': trend(ks_chg),
+                '지수': ks_p,
+                '등락률': ks_chg_str,
+                '추이': ks_trend,
                 '외국인(억)': str(fgn_ks),
                 '개인(억)': str(ind_ks),
                 '기관(억)': str(inst_ks),
             },
             {
                 '종목/종류': '코스닥',
-                '지수': f'{last(df_kq):,.2f}',
-                '등락률': f'{kq_chg:+.2f}%',
-                '추이': trend(kq_chg),
+                '지수': kq_p,
+                '등락률': kq_chg_str,
+                '추이': kq_trend,
                 '외국인(억)': str(fgn_kq),
                 '개인(억)': str(ind_kq),
                 '기관(억)': str(inst_kq),
