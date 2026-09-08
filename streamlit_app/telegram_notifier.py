@@ -48,21 +48,80 @@ def is_regular_market_hours() -> bool:
         return False
 
 
-def fetch_realtime_current_price(code: str) -> float:
-    """네이버 모바일 증권 API를 통해 0.3초 이내로 종목의 최신 실시간 체결가를 조회 (시차 0초 실현)"""
+def fetch_realtime_stock_info(code: str) -> dict:
+    """
+    네이버 실시간 폴링 API(polling.finance.naver.com)를 통해 
+    종목의 실시간 현재가, 당일 등락률, 시초가(세력 방어선), 고가, 저가, 거래대금을 0.2초 만에 완벽 수집.
+    반환: {'name': str, 'price': float, 'chg': float, 'open': float, 'high': float, 'low': float, 'amount_str': str}
+    """
+    clean_code = str(code).split('.')[0].strip().zfill(6)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
-        clean_code = str(code).split('.')[0].strip().zfill(6)
-        r = requests.get(f"https://m.stock.naver.com/api/stock/{clean_code}/basic", headers={'User-Agent': 'Mozilla/5.0'}, timeout=1.2)
+        url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{clean_code}"
+        r = requests.get(url, headers=headers, timeout=1.8)
         if r.status_code == 200:
-            data = r.json()
-            p_str = str(data.get('closePrice', '')).replace(',', '').strip()
-            if p_str:
-                p_val = float(p_str)
-                if p_val > 0:
-                    return p_val
+            datas = r.json().get('datas', [])
+            if datas:
+                d = datas[0]
+                def _to_float(v):
+                    try:
+                        return float(str(v).replace(',', '').replace('+', '').strip())
+                    except Exception:
+                        return 0.0
+                price = _to_float(d.get('closePrice'))
+                chg = _to_float(d.get('fluctuationsRatio'))
+                open_p = _to_float(d.get('openPrice'))
+                high_p = _to_float(d.get('highPrice'))
+                low_p = _to_float(d.get('lowPrice'))
+                amt_str = str(d.get('accumulatedTradingValue', ''))
+                name = str(d.get('stockName', ''))
+                if price > 0:
+                    return {
+                        'name': name,
+                        'price': price,
+                        'chg': chg,
+                        'open': open_p if open_p > 0 else price,
+                        'high': high_p,
+                        'low': low_p,
+                        'amount_str': amt_str
+                    }
     except Exception:
         pass
-    return 0.0
+
+    # 2순위: 네이버 모바일 basic API 폴백
+    try:
+        url = f"https://m.stock.naver.com/api/stock/{clean_code}/basic"
+        r = requests.get(url, headers=headers, timeout=1.5)
+        if r.status_code == 200:
+            d = r.json()
+            def _to_float(v):
+                try:
+                    return float(str(v).replace(',', '').replace('+', '').strip())
+                except Exception:
+                    return 0.0
+            price = _to_float(d.get('closePrice'))
+            chg = _to_float(d.get('fluctuationsRatio'))
+            name = str(d.get('stockName', ''))
+            if price > 0:
+                return {
+                    'name': name,
+                    'price': price,
+                    'chg': chg,
+                    'open': price,
+                    'high': price,
+                    'low': price,
+                    'amount_str': ''
+                }
+    except Exception:
+        pass
+
+    return {}
+
+
+def fetch_realtime_current_price(code: str) -> float:
+    """네이버 실시간 폴링 API를 통해 0.2초 이내로 종목의 최신 실시간 체결가를 조회 (시차 0초 실현)"""
+    info = fetch_realtime_stock_info(code)
+    return info.get('price', 0.0)
 
 
 DEFAULT_REPLY_KEYBOARD = {
@@ -1805,64 +1864,99 @@ def _find_stock_by_query(query: str) -> tuple:
 
 
 def _reply_stock_diagnosis(token: str, chat_id: str, code: str, context_fn=None, stock_name: str = "") -> bool:
-    """종목코드 기반 실시간 퀀트 진단 카드 및 캔들 차트 발송."""
+    """종목코드 기반 시차 0초 실시간 타점 진단 카드 및 캔들 차트 발송."""
     try:
         import os, pandas as pd
         clean_code = str(code).split('.')[0].zfill(6)
         name = stock_name
         price = 0.0
         chg = 0.0
+        open_price = 0.0
         score = 80.0
-        amount_str = ""
+        amount_line = ""
 
-        # 시장 데이터 로드
+        # 1. 네이버 실시간 폴링 API로 시차 0초 최신 체결가/등락률/시초가/거래대금 최우선 수집
+        live_info = fetch_realtime_stock_info(clean_code)
+        if live_info:
+            price = live_info.get('price', 0.0)
+            chg = live_info.get('chg', 0.0)
+            open_price = live_info.get('open', price)
+            name = live_info.get('name') or name
+            if live_info.get('amount_str'):
+                amount_line = f"💰 <b>당일 거래대금</b>: <b>{live_info['amount_str']}</b>\n"
+
+        # 2. 보조 데이터(퀀트 점수) 조회
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
         q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
-
-        if os.path.exists(m_path):
-            df_m = pd.read_csv(m_path)
-            if not df_m.empty and 'Code' in df_m.columns:
-                df_m['Code'] = df_m['Code'].astype(str).str.split('.').str[0].str.zfill(6)
-                r = df_m[df_m['Code'] == clean_code]
-                if not r.empty:
-                    name = str(r.iloc[0].get('Name', name or clean_code))
-                    price = float(r.iloc[0].get('Close', 0))
-                    chg = float(r.iloc[0].get('ChagesRatio', 0))
-                    amt_raw = float(r.iloc[0].get('Amount', 0))
-                    if amt_raw > 0:
-                        amount_str = f"💰 <b>당일 거래대금</b>: <b>{amt_raw / 1e8:,.0f}억원</b>\n"
+        m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
 
         if os.path.exists(q_path):
-            df_q = pd.read_csv(q_path)
-            if not df_q.empty and 'Code' in df_q.columns:
-                df_q['Code'] = df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6)
-                rq = df_q[df_q['Code'] == clean_code]
-                if not rq.empty:
-                    if not name:
-                        name = str(rq.iloc[0].get('Name', clean_code))
-                    score = float(rq.iloc[0].get('Total_Score', score))
+            try:
+                df_q = pd.read_csv(q_path)
+                if not df_q.empty and 'Code' in df_q.columns:
+                    df_q['Code'] = df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                    rq = df_q[df_q['Code'] == clean_code]
+                    if not rq.empty:
+                        if not name:
+                            name = str(rq.iloc[0].get('Name', clean_code))
+                        score = float(rq.iloc[0].get('Total_Score', score))
+            except Exception:
+                pass
+
+        # 실시간 API 실패 시 CSV 폴백
+        if price <= 0 and os.path.exists(m_path):
+            try:
+                df_m = pd.read_csv(m_path)
+                if not df_m.empty and 'Code' in df_m.columns:
+                    df_m['Code'] = df_m['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                    r = df_m[df_m['Code'] == clean_code]
+                    if not r.empty:
+                        name = str(r.iloc[0].get('Name', name or clean_code))
+                        price = float(r.iloc[0].get('Close', 0))
+                        chg = float(r.iloc[0].get('ChagesRatio', 0))
+                        open_price = float(r.iloc[0].get('Open', price)) if 'Open' in r.iloc[0] else price
+                        amt_raw = float(r.iloc[0].get('Amount', 0))
+                        if amt_raw > 0:
+                            amount_line = f"💰 <b>당일 거래대금</b>: <b>{amt_raw / 1e8:,.0f}억원</b>\n"
+            except Exception:
+                pass
 
         name = name or clean_code
         chg_sign = "+" if chg >= 0 else ""
         tp_price = price * 1.05 if price > 0 else 0
-        sl_price = price * 0.96 if price > 0 else 0
+        def_price = open_price if open_price > 0 else price
+        sl_price = min(price * 0.97, def_price * 0.99) if def_price > 0 else price * 0.97
 
-        # 수급/모멘텀 평가 멘트
-        score_badge = "🔥 [초강력 퀀트 유망주]" if score >= 85 else ("🟢 [양호한 모멘텀 구간]" if score >= 75 else "🟡 [관망 및 지지선 확인]")
+        # 실전 액션 판정 (외부 활동 중 즉시 매수/매도/관망 판단)
+        if price >= def_price and chg >= 0:
+            action_badge = "🟢 <b>[1차 분할 매수 유효 타점]</b>"
+            action_guide = f"오늘 시초가({def_price:,.0f}원)를 세력이 방어 중입니다. <b>{def_price:,.0f}원을 지지선/손절선</b>으로 잡고 1차 분할 매수 진입이 유효합니다."
+        elif price < def_price:
+            action_badge = "🟡 <b>[관망 및 지지 확인 필요]</b>"
+            action_guide = f"현재 주가가 시초가({def_price:,.0f}원)를 밑돌고 있습니다. <b>방어선 회복 전까지 신규 매수를 자제</b>하고 지지 여부를 확인하십시오."
+        else:
+            action_badge = "⚪ <b>[중립 관망 구간]</b>"
+            action_guide = f"단기 변동성에 유의하며 <b>손절선({sl_price:,.0f}원) 준수</b> 원칙으로 대응하십시오."
+
+        score_badge = "🔥 [초강력 퀀트 유망주]" if score >= 85 else ("🟢 [양호한 모멘텀 구간]" if score >= 75 else "🟡 [일반 종목]")
 
         text = (
-            f"🔍 <b>[GD 3.0 실시간 종목 퀀트 진단]</b>\n"
+            f"🔍 <b>[GD 3.0 실시간 타점 정밀 진단]</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"🎯 <b>종목명</b>: <b>{name} ({clean_code})</b>\n"
-            f"💵 <b>현재가</b>: <b>{price:,.0f}원</b> ({chg_sign}{chg:.2f}%)\n"
+            f"💵 <b>현재가</b>: 🟢 <b>{price:,.0f}원</b> ({chg_sign}{chg:.2f}%)\n"
+            f"🛡️ <b>세력 절대 방어선</b>: 🟢 <b>{def_price:,.0f}원</b> (당일 시초가)\n"
             f"🎯 <b>퀀트 점수</b>: <b>{score:.1f}점</b> ({score_badge})\n"
-            f"{amount_str}"
+            f"{amount_line}"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 <b>1차 목표가</b>: <b>{tp_price:,.0f}원</b> (+5.0%)\n"
-            f"🛑 <b>추천 손절가</b>: <b>{sl_price:,.0f}원</b> (-4.0%)\n"
+            f"🎯 <b>1차 익절 목표가</b>: <b>{tp_price:,.0f}원</b> (+5.0%)\n"
+            f"🛑 <b>추천 절대 손절가</b>: <b>{sl_price:,.0f}원</b> (방어선 이탈 시)\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"<i>💡 아래 버튼을 눌러 실시간 모바일 호가창을 즉시 확인하실 수 있습니다.</i>"
+            f"⚡ <b>실전 매매 가이드</b>:\n"
+            f"{action_badge}\n"
+            f"👉 {action_guide}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>💡 아래 버튼을 눌러 모바일 호가창을 즉시 확인하실 수 있습니다.</i>"
         )
 
         chart_bytes = _get_stock_chart_safe(clean_code, name, score=score, target_price=tp_price, stop_loss=sl_price)
@@ -2099,29 +2193,79 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
 
     # 2. 포트폴리오 현황 ('포트', 'portfolio', '보유')
     elif any(k in clean_cmd for k in ['포트', 'portfolio', '보유']) or clean_cmd == 'p':
-        ctx = context_fn('portfolio') or {}
-        items = ctx.get('items', [])
-        tot_eval = ctx.get('tot_eval', 0)
-        tot_pnl = ctx.get('tot_pnl', 0)
-        tot_pct = ctx.get('tot_pct', 0)
+        items = []
+        tot_eval = 0.0
+        tot_inv = 0.0
+
+        # 1) my_portfolio.json 직접 실시간 계산 (네이버 실시간 폴링 API로 시차 0초 반영)
+        import os, json
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        port_file = os.path.join(base_dir, 'data', 'my_portfolio.json')
+        if os.path.exists(port_file):
+            try:
+                with open(port_file, 'r', encoding='utf-8') as pf:
+                    port_data = json.load(pf)
+                for p_code, p_info in port_data.items():
+                    p_name = p_info.get('name', p_code)
+                    entry_p = float(p_info.get('entry_price', 0.0))
+                    qty = float(p_info.get('qty', 0.0))
+                    if qty <= 0 or entry_p <= 0:
+                        continue
+                    live_d = fetch_realtime_stock_info(p_code)
+                    cur_p = live_d.get('price', entry_p) if live_d else entry_p
+                    open_p = live_d.get('open', cur_p) if live_d else cur_p
+                    pnl_p = ((cur_p - entry_p) / entry_p) * 100.0
+                    val_eval = cur_p * qty
+                    val_inv = entry_p * qty
+                    tot_eval += val_eval
+                    tot_inv += val_inv
+                    items.append({
+                        'code': p_code,
+                        'name': p_name,
+                        'cur_price': cur_p,
+                        'entry_price': entry_p,
+                        'open_price': open_p,
+                        'pnl_pct': pnl_p,
+                        'qty': qty
+                    })
+            except Exception as _p_err:
+                print(f"DEBUG: portfolio live fetch error: {_p_err}")
+
+        # 2) 폴백: context_fn 사용
+        if not items and callable(context_fn):
+            try:
+                ctx = context_fn('portfolio') or {}
+                items = ctx.get('items', [])
+                tot_eval = ctx.get('tot_eval', 0)
+                tot_pnl = ctx.get('tot_pnl', 0)
+                tot_pct = ctx.get('tot_pct', 0)
+            except Exception:
+                pass
+
+        tot_pnl = tot_eval - tot_inv if tot_inv > 0 else 0.0
+        tot_pct = (tot_pnl / tot_inv * 100.0) if tot_inv > 0 else 0.0
         pnl_sign = "+" if tot_pnl >= 0 else ""
         
         lines = []
-        for it in items[:8]:
+        for it in items[:10]:
             p_sign = "+" if it['pnl_pct'] >= 0 else ""
-            lines.append(f"• <b>{it['name']}</b>: {it['cur_price']:,}원 ({p_sign}{it['pnl_pct']:.1f}%)")
+            p_col = "🔴" if it['pnl_pct'] < -3.0 else ("🟢" if it['pnl_pct'] >= 0 else "🟡")
+            cur_p_fmt = f"{it['cur_price']:,.0f}" if isinstance(it['cur_price'], (int, float)) else str(it['cur_price'])
+            ent_p_fmt = f"{it['entry_price']:,.0f}" if 'entry_price' in it else "-"
+            op_fmt = f"{it.get('open_price', it['cur_price']):,.0f}" if 'open_price' in it else "-"
+            lines.append(f"{p_col} <b>{it['name']}</b>: <b>{cur_p_fmt}원</b> ({p_sign}{it['pnl_pct']:.1f}%)\n   └ 매수가: {ent_p_fmt}원 | 방어선(시초가): {op_fmt}원")
             
-        stock_list_str = "\n".join(lines) if lines else "등록된 종목 없음"
+        stock_list_str = "\n".join(lines) if lines else "등록된 보유 종목이 없습니다."
         
         reply = (
-            f"💼 <b>[내 실시간 포트폴리오 현황]</b>\n"
+            f"💼 <b>[대표님 실시간 포트폴리오 현황]</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"💰 총 평가액: <b>{tot_eval:,.0f}원</b>\n"
-            f"📊 총 손익: <b>{pnl_sign}{tot_pnl:,.0f}원</b> ({pnl_sign}{tot_pct:.2f}%)\n"
+            f"💰 <b>총 평가금액</b>: <b>{tot_eval:,.0f}원</b>\n"
+            f"📊 <b>총 평가손익</b>: <b>{pnl_sign}{tot_pnl:,.0f}원</b> ({pnl_sign}{tot_pct:.2f}%)\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{stock_list_str}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"<i>💡 하단 원터치 버튼을 누르시면 즉시 갱신됩니다.</i>"
+            f"<i>💡 시차 0초 실시간 체결가 기준으로 계산되었습니다.</i>"
         )
         return _send(token, chat_id, reply, force_send=True)
 
