@@ -1307,9 +1307,15 @@ def calculate_intraday_signals(df, my_entry_price=0.0, timeframe='1min', code=No
                 pnl_pct = (close_val - entry_price) / entry_price * 100 if entry_price > 0 else 0
 
                 # ── [방안 A & D 적용] 스마트 추가 매수(ADD) 조건 검사 ──
-                # RSI 과매도 반등(fall_rsi_limit 이하→초과) AND VWAP 돌파 AND 거래량 서지 모두 충족 시
-                cond_add_indicator = (not pd.isna(prev_rsi) and prev_rsi <= fall_rsi_limit and curr_rsi > fall_rsi_limit) and \
-                                     (close_val > df['VWAP'].iloc[i] and df['Vol_Surge'].iloc[i])
+                # 기본: RSI 과매도 반등 AND VWAP 돌파 AND 거래량 서지 모두 충족
+                cond_add_rsi_exit   = (not pd.isna(prev_rsi) and prev_rsi <= fall_rsi_limit and curr_rsi > fall_rsi_limit)
+                cond_add_vwap_surge = (close_val > df['VWAP'].iloc[i] and df['Vol_Surge'].iloc[i])
+                
+                if is_portfolio:
+                    # 포트폴리오 보유 종목은 완화: RSI 탈출 OR (VWAP+거래량서지) 중 하나만 충족해도 허용
+                    cond_add_indicator = cond_add_rsi_exit or cond_add_vwap_surge
+                else:
+                    cond_add_indicator = cond_add_rsi_exit and cond_add_vwap_surge
                 
                 # [방안 E 적용] ATR 기반 동적 추가 매수 기준선 설정 (ATR의 2.0배 수준을 비율%로 환산)
                 # 단, 안전을 위해 최소 -1.5% ~ 최대 -5.0% 사이로 범위 클램핑
@@ -6033,6 +6039,9 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             
             max_price_since_entry = entry_price
             current_sl = np.nan
+            # 낙폭과대 신호 쿨다운: 최소 5거래일(영업일) 간격으로만 재발화 (연속 발화 방지)
+            FALL_COOLDOWN_DAYS = 5
+            last_fall_idx = -FALL_COOLDOWN_DAYS
             
             for i in range(len(df_candle)):
                 close_val = df_candle['Close'].iloc[i]
@@ -6127,7 +6136,10 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     cond_fall_ma  = (close_val < ma20_val and close_val > ma5_val and not pd.isna(prev_close) and prev_close <= ma5_val and close_val >= open_val)
                     cond_fall_indicator = cond_fall_rsi or cond_fall_bb or cond_fall_ma
                     
-                    if cond_fall_indicator:
+                    # ── [쿨다운 필터] 최소 5거래일 간격으로만 낙폭과대 신호 재발화 (연속 발화 방지) ──
+                    fall_cooldown_ok = (i - last_fall_idx) >= FALL_COOLDOWN_DAYS
+                    
+                    if cond_fall_indicator and fall_cooldown_ok:
                         fall_signal_list.append(True)
                         buy_signal_list.append(False)
                         in_position = True
@@ -6135,6 +6147,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         max_price_since_entry = close_val
                         current_sl = raw_sl
                         add_count = 0
+                        last_fall_idx = i  # 쿨다운 타이머 리셋
                     # 일반 매수 판단: 상승 추세(MA5 및 MA20 상회) 진입 시 매수
                     elif close_val > ma5_val and close_val > ma20_val:
                         buy_signal_list.append(True)
