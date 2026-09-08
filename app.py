@@ -2416,9 +2416,9 @@ def fetch_naver_realtime_sector_prices(stock_names: tuple) -> dict:
     result = {}
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
-        # 코스피/코스닥 시가총액 상위 300개 종목 초고속 JSON 조회 (핵심 대형/중형 주도주 100% 포함)
+        # 코스피/코스닥 시가총액 상위 400개 종목 초고속 JSON 조회 (핵심 대형/중형 주도주 안정적 커버)
         for market in ['KOSPI', 'KOSDAQ']:
-            for page in [1, 2, 3]:
+            for page in [1, 2, 3, 4]:
                 try:
                     url = f"https://m.stock.naver.com/api/stocks/marketValue/{market}?page={page}&pageSize=50"
                     r = requests.get(url, headers=headers, timeout=2.5)
@@ -4527,17 +4527,21 @@ with title_col_right:
 @st.cache_data(ttl=60)
 def fetch_global_war_room_data():
     """야간 글로벌 매크로 지표(미 증시 4대 지수 + 원/달러 야간 환율) 실시간 수집"""
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     data = {}
     for sym, key, name in [('.IXIC', 'nasdaq', '나스닥 종합'), ('.SOX', 'sox', '필라델피아 반도체'), ('.INX', 'snp', 'S&P 500'), ('.DJI', 'dow', '다우 존스')]:
         try:
             r = requests.get(f"https://api.stock.naver.com/index/{sym}/basic", headers=headers, timeout=2.5)
             if r.status_code == 200:
                 d = r.json()
+                try:
+                    chg = float(str(d.get('fluctuationsRatio', 0.0)).replace(',', '').replace('+', ''))
+                except Exception:
+                    chg = 0.0
                 data[key] = {
                     'name': name,
                     'price': str(d.get('closePrice', '-')),
-                    'chg': float(d.get('fluctuationsRatio', 0.0))
+                    'chg': chg
                 }
         except Exception:
             pass
@@ -4545,10 +4549,14 @@ def fetch_global_war_room_data():
         r = requests.get("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW", headers=headers, timeout=2.5)
         if r.status_code == 200:
             d = r.json().get('exchangeInfo', {})
+            try:
+                chg_fx = float(str(d.get('fluctuationsRatio', 0.0)).replace(',', '').replace('+', ''))
+            except Exception:
+                chg_fx = 0.0
             data['usdkrw'] = {
                 'name': '원/달러 환율',
                 'price': str(d.get('closePrice', '1,358.60')),
-                'chg': float(d.get('fluctuationsRatio', 0.0))
+                'chg': chg_fx
             }
     except Exception:
         pass
