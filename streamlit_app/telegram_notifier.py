@@ -2071,16 +2071,18 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
         except Exception as _q_err:
             print(f"DEBUG: context_fn quant_top error: {_q_err}")
 
-        # 폴백: context_fn 실패 시 data/df_quant_final.csv 직접 조회
+        # 폴백: context_fn 실패 시 data/df_quant_final.csv 직접 조회 (대시보드와 100% 일원화)
         if not top_stocks:
             try:
-                import os, pandas as pd
+                import os, pandas as pd, numpy as np
                 base_dir = os.path.dirname(os.path.abspath(__file__))
                 q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
                 m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
+                hd_path = os.path.join(base_dir, 'data', 'df_high_density.csv')
                 if os.path.exists(q_path):
                     df_q_fb = pd.read_csv(q_path)
                     df_m_fb = pd.read_csv(m_path) if os.path.exists(m_path) else pd.DataFrame()
+                    df_hd_fb = pd.read_csv(hd_path) if os.path.exists(hd_path) else pd.DataFrame()
                     if not df_q_fb.empty and 'Total_Score' in df_q_fb.columns:
                         m_s = df_q_fb['Total_Score'].mean()
                         s_s = df_q_fb['Total_Score'].std()
@@ -2097,40 +2099,33 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
                             df_q_fb = df_q_fb.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
                             df_q_fb = df_q_fb.merge(df_m_fb[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
 
-                        # ── [신규 상장주 퀀트 제외] 상장 60영업일(약 3개월) 미만 종목 배제 ──
-                        valid_rows = []
-                        import FinanceDataReader as _fdr
-                        for _, r in df_q_fb.sort_values(['Total_Score_Adj', 'Amount'], ascending=[False, False]).iterrows():
-                            c_code = str(r['Code']).zfill(6)
-                            try:
-                                # FDR 이력 60건 미만이면 신규상장주로 간주하고 제외
-                                df_h_check = _fdr.DataReader(c_code)
-                                if len(df_h_check) < 60:
-                                    continue
-                            except Exception:
-                                pass
-                            valid_rows.append(r)
-                            if len(valid_rows) >= 3:
-                                break
+                        if not df_hd_fb.empty and 'Code' in df_hd_fb.columns:
+                            df_hd_fb['Code'] = df_hd_fb['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                            df_q_fb = df_q_fb.merge(df_hd_fb[['Code', 'Foreign_Net', 'Institutional_Net']], on='Code', how='left')
+                        else:
+                            df_q_fb['Foreign_Net'] = 0.0
+                            df_q_fb['Institutional_Net'] = 0.0
 
-                        import requests as _req
-                        _h = {'User-Agent': 'Mozilla/5.0'}
-                        for r in valid_rows:
+                        df_q_fb['Foreign_Net'] = pd.to_numeric(df_q_fb['Foreign_Net'], errors='coerce').fillna(0)
+                        df_q_fb['Institutional_Net'] = pd.to_numeric(df_q_fb['Institutional_Net'], errors='coerce').fillna(0)
+                        df_q_fb['Is_Bull_Trap'] = (df_q_fb['Foreign_Net'] < 0) & (df_q_fb['Institutional_Net'] < 0) & (pd.to_numeric(df_q_fb['ChagesRatio'], errors='coerce').fillna(0) > 1.5)
+                        if 'Total_Score_Adj' in df_q_fb.columns:
+                            df_q_fb['Total_Score_Adj'] = np.where(df_q_fb['Is_Bull_Trap'], np.maximum(30.0, df_q_fb['Total_Score_Adj'] - 15.0), df_q_fb['Total_Score_Adj'])
+
+                        top_fb = df_q_fb.sort_values(['Total_Score_Adj', 'Amount'], ascending=[False, False]).head(3)
+                        for _, r in top_fb.iterrows():
                             c_code = str(r['Code']).zfill(6)
                             c_name = str(r.get('Name', ''))
                             c_score = float(r.get('Total_Score_Adj', r.get('Total_Score', 0)))
                             c_price = float(r.get('Close', 0))
                             c_chg = float(r.get('ChagesRatio', 0))
 
-                            # ── [실시간 체결가 갱신] 네이버 모바일 API로 현재 실시간 가격 즉시 조회 ──
+                            # 네이버 실시간 체결가 보강 (실패 시 CSV 기본값)
                             try:
-                                r_n = _req.get(f'https://m.stock.naver.com/api/stock/{c_code}/basic', headers=_h, timeout=1.5)
-                                if r_n.status_code == 200:
-                                    d_n = r_n.json()
-                                    p_str = str(d_n.get('closePrice', '')).replace(',', '').strip()
-                                    chg_str = str(d_n.get('fluctuationsRatio', '')).replace('%', '').strip()
-                                    if p_str: c_price = float(p_str)
-                                    if chg_str: c_chg = float(chg_str)
+                                live_info = fetch_realtime_stock_info(c_code)
+                                if live_info and live_info.get('price', 0) > 0:
+                                    c_price = float(live_info['price'])
+                                    c_chg = float(live_info.get('chg', c_chg))
                             except Exception:
                                 pass
 

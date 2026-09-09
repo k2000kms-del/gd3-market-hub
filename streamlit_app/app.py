@@ -321,6 +321,8 @@ def fetch_stock_realtime_investors(code_list):
     if not code_list:
         return res
     headers = {"User-Agent": "Mozilla/5.0"}
+    from datetime import datetime, timezone, timedelta
+    _kst_today = datetime.now(timezone(timedelta(hours=9))).strftime('%Y%m%d')
 
     def _fetch_one(code):
         try:
@@ -330,11 +332,15 @@ def fetch_stock_realtime_investors(code_list):
                 data = r.json()
                 if data and len(data) > 0:
                     item = data[0]
+                    item_bizdate = str(item.get("bizdate", "")).replace('-', '').strip()
+                    is_today = (item_bizdate == _kst_today)
                     fgn = str(item.get("foreignerPureBuyQuant", "0")).replace(',', '').replace('+', '')
                     org = str(item.get("organPureBuyQuant", "0")).replace(',', '').replace('+', '')
                     return code, {
                         "foreign": int(fgn) if fgn.replace('-', '').isdigit() else 0,
-                        "institutional": int(org) if org.replace('-', '').isdigit() else 0
+                        "institutional": int(org) if org.replace('-', '').isdigit() else 0,
+                        "is_today": is_today,
+                        "bizdate": item_bizdate
                     }
         except Exception:
             pass
@@ -1539,6 +1545,7 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
             elif query_type == 'quant_top':
                 df_q = _sync_and_load_csv_raw('df_quant_final.csv')
                 df_m = _sync_and_load_csv_raw('df_full_market.csv')
+                df_hd = _sync_and_load_csv_raw('df_high_density.csv')
                 if df_q.empty:
                     return []
                 
@@ -1562,15 +1569,39 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
                     df_q = df_q.drop(columns=['Close', 'ChagesRatio', 'Amount'], errors='ignore')
                     df_q = df_q.merge(df_m[['Code', 'Close', 'ChagesRatio', 'Amount']], on='Code', how='left')
 
+                if not df_hd.empty and 'Code' in df_hd.columns:
+                    hd_sub = df_hd[['Code', 'Foreign_Net', 'Institutional_Net']].copy()
+                    hd_sub['Code'] = hd_sub['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                    df_q = df_q.merge(hd_sub, on='Code', how='left')
+                else:
+                    df_q['Foreign_Net'] = 0.0
+                    df_q['Institutional_Net'] = 0.0
+
+                df_q['Foreign_Net'] = pd.to_numeric(df_q['Foreign_Net'], errors='coerce').fillna(0)
+                df_q['Institutional_Net'] = pd.to_numeric(df_q['Institutional_Net'], errors='coerce').fillna(0)
+                df_q['Is_Bull_Trap'] = (df_q['Foreign_Net'] < 0) & (df_q['Institutional_Net'] < 0) & (pd.to_numeric(df_q['ChagesRatio'], errors='coerce').fillna(0) > 1.5)
+                if 'Total_Score_Adj' in df_q.columns:
+                    df_q['Total_Score_Adj'] = np.where(df_q['Is_Bull_Trap'], np.maximum(30.0, df_q['Total_Score_Adj'] - 15.0), df_q['Total_Score_Adj'])
+
                 top = df_q.sort_values(['Total_Score_Adj', 'Amount'], ascending=[False, False]).head(3)
                 results = []
                 for _, r in top.iterrows():
+                    c_code = str(r['Code']).zfill(6)
+                    c_price = float(r.get('Close', 0))
+                    c_chg = float(r.get('ChagesRatio', 0))
+                    try:
+                        live_info = fetch_realtime_stock_info(c_code)
+                        if live_info and live_info.get('price', 0) > 0:
+                            c_price = float(live_info['price'])
+                            c_chg = float(live_info.get('chg', c_chg))
+                    except Exception:
+                        pass
                     results.append({
-                        'code': str(r['Code']).zfill(6),
+                        'code': c_code,
                         'name': str(r.get('Name', '')),
                         'score': float(r.get('Total_Score_Adj', r.get('Total_Score', 0))),
-                        'price': float(r.get('Close', 0)),
-                        'chg': float(r.get('ChagesRatio', 0))
+                        'price': c_price,
+                        'chg': c_chg
                     })
                 return results
 
@@ -4814,7 +4845,6 @@ col_left, col_mid, col_right = st.columns(3)
 
 # ── [Panel 1] 실시간 수급 (Treemap) ─────────────────────────
 with col_mid:
-    st.markdown("##### 📊 실시간 수급 (외/기/프)")
     if not df_hd_filtered.empty and 'Total_Combined_Net' in df_hd_filtered.columns:
         df_hd_clean = df_hd_filtered.copy()
         
@@ -4826,6 +4856,11 @@ with col_mid:
         # 실시간 외국인/기관 수급 조회 (tuple로 변환하여 캐시 키 안정화)
         realtime_sup = fetch_stock_realtime_investors(tuple(sorted(df1['Code'].tolist())))
         
+        # 당일 수급 가집계 여부 판별 (네이버 일별 API는 장 마감 후 집계되므로 장중엔 전일 확정치 표시)
+        has_today_sup = any(v.get('is_today', False) for v in realtime_sup.values()) if realtime_sup else False
+        sup_status_badge = "<span style='font-size:11px;color:#4ade80;'> (당일 가집계)</span>" if has_today_sup else "<span style='font-size:11px;color:#94a3b8;'> (전일 확정집계)</span>"
+        st.markdown(f"##### 📊 수급 포착 (외/기/프){sup_status_badge}", unsafe_allow_html=True)
+
         # 실시간 시세 반영을 위해 기존 df_hd에 들어있던 시세 관련 과거 컬럼 제거
         df1 = df1.drop(columns=['ChagesRatio', 'Current_Price', 'Close', 'Price', 'Volume', 'Trade_Volume'], errors='ignore')
         if not df_m.empty and 'Code' in df_m.columns:
@@ -4878,8 +4913,9 @@ with col_mid:
             for v in df1_sorted['Total_Combined_Net']
         ]
 
+        tag_suffix = "" if has_today_sup else " (전일)"
         text_labels_sorted = df1_sorted['Total_Combined_Net'].apply(
-            lambda x: f" {x/10000:.1f}만주" if abs(x) >= 10000 else f" {int(x):+,}주"
+            lambda x: f" {x/10000:.1f}만주{tag_suffix}" if abs(x) >= 10000 else f" {int(x):+,}주{tag_suffix}"
         )
 
         custom_data_values = df1_sorted[['Code', 'Close', 'ChagesRatio', 'Total_Combined_Net', 'Foreign_Net', 'Institutional_Net']].values
@@ -5320,10 +5356,8 @@ with col_left:
         if _valid_dates:
             latest_data_date = _valid_dates[-1]
 
-    # 정규장 중(평일 09:00~15:40)이고 오늘자 데이터가 수집되었으면 오늘 날짜, 그 외(야간, 장전, 주말)는 데이터 최신일자 사용
-    is_regular_trading_now = (
-        _now_kst.weekday() < 5 and (900 <= now_hm <= 1540) and (cal_today_str in _valid_dates)
-    )
+    # 정규장 중 여부: 평일 09:00~15:40 (오늘 데이터 수집 여부와 무관하게 장중이면 무조건 오늘 기준으로 처리)
+    is_regular_trading_now = (_now_kst.weekday() < 5 and 900 <= now_hm <= 1540)
     today_date_str = cal_today_str if is_regular_trading_now else latest_data_date
 
     # ── 1. 수급 데이터 전처리 ──
@@ -5331,16 +5365,16 @@ with col_left:
     if df_intraday is not None and not df_intraday.empty:
         df_tmp = df_intraday.copy()
         if 'Date' in df_tmp.columns:
-            df_target_date = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
-            if df_target_date.empty:
-                _max_d = str(df_tmp['Date'].dropna().max())
-                df_tmp = df_tmp[df_tmp['Date'].astype(str) == _max_d]
-                today_date_str = _max_d
+            # 장중일 때는 무조건 오늘 날짜 데이터만 필터링 (과거 어제 데이터 절대 혼입 방지)
+            if is_regular_trading_now:
+                df_tmp = df_tmp[df_tmp['Date'].astype(str) == cal_today_str]
             else:
-                df_tmp = df_target_date
-        df_line = df_tmp[df_tmp['Market'] == target_market].copy()
-        df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
+                df_tmp = df_tmp[df_tmp['Date'].astype(str) == today_date_str]
+        if not df_tmp.empty:
+            df_line = df_tmp[df_tmp['Market'] == target_market].copy()
+            df_line = df_line[df_line['Time'].str.match(r'^(09|10|11|12|13|14|15):[0-5][0-9]$') == True]
 
+    # 당일 실시간 세션 누적 적재 결합
     accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
     if not accum_df.empty and is_regular_trading_now:
         accum_sub = accum_df[accum_df['Market'] == target_market].copy()
@@ -5349,16 +5383,39 @@ with col_left:
             if not df_line.empty:
                 df_line = pd.concat([df_line, accum_sub], ignore_index=True)
             else:
-                df_line = accum_sub
+                df_line = accum_sub.copy()
 
-    # 폴백: 여전히 비어있다면 마켓 데이터 전체에서 필터
-    if df_line.empty and df_intraday is not None and not df_intraday.empty:
+    # 장중인데 아직 CSV와 세션 모두 비어있는 극초반(09:00~09:15)인 경우:
+    # 실시간 네이버 수급 스냅샷으로 09:00 시초점과 현재 틱 즉시 자동 생성
+    if df_line.empty and is_regular_trading_now:
+        try:
+            nv_live = fetch_naver_realtime_supply()
+            if nv_live and target_market in nv_live:
+                m_sup = nv_live[target_market]
+                now_str = _now_kst.strftime('%H:%M')
+                df_line = pd.DataFrame([
+                    {'Date': cal_today_str, 'Time': '09:00', 'Market': target_market, 'Foreign_Net': 0.0, 'Individual_Net': 0.0, 'Institutional_Net': 0.0},
+                    {'Date': cal_today_str, 'Time': now_str, 'Market': target_market, 
+                     'Foreign_Net': _clean_sup(m_sup.get('외국인', 0)),
+                     'Individual_Net': _clean_sup(m_sup.get('개인', 0)),
+                     'Institutional_Net': _clean_sup(m_sup.get('기관', 0))}
+                ])
+        except Exception:
+            pass
+
+    # 장외(야간, 주말, 장전)이고 df_line이 비어있다면 최신일자 마감 데이터로 폴백
+    if df_line.empty and not is_regular_trading_now and df_intraday is not None and not df_intraday.empty:
         df_line = df_intraday[df_intraday['Market'] == target_market].copy()
         if 'Date' in df_line.columns and not df_line.empty:
             today_date_str = str(df_line['Date'].dropna().max())
             df_line = df_line[df_line['Date'].astype(str) == today_date_str]
 
     if not df_line.empty:
+        # 장중에는 현재 시각 이후의 미래 시간대나 과거 15:30 마감치 강제 제거 (현재 시각까지만 누적 표시)
+        if is_regular_trading_now:
+            now_time_str = _now_kst.strftime('%H:%M')
+            df_line = df_line[df_line['Time'] <= now_time_str]
+
         df_line = df_line.drop_duplicates(subset=['Time'], keep='last').sort_values('Time')
 
         # 시작점 보정 (09:00 시초 0 보장)
@@ -5370,7 +5427,7 @@ with col_left:
             first_row['Institutional_Net'] = 0.0
             df_line = pd.concat([pd.DataFrame([first_row]), df_line], ignore_index=True)
 
-        # 장마감 보정 (15:30 종가 수급 보장)
+        # 장마감 보정 (15:30 종가 수급 보장) - 단, 정규장 종료 후(15:30 이후 또는 장외)에만 적용
         if (now_hm >= 1530 or not is_regular_trading_now) and '15:30' not in df_line['Time'].values:
             last_row = df_line.iloc[-1].copy()
             last_row['Time'] = '15:30'

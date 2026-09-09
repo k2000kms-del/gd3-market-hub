@@ -1550,8 +1550,19 @@ def collect_supply_intraday(token):
         ]
 
     df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    
+    # ── [시초 0 기준선 보장] 09:00 틱이 누적 데이터에 없다면 자동으로 추가 ──
+    for m_name in ['코스피', '코스닥']:
+        has_9am = not df_combined.empty and ((df_combined['Market'] == m_name) & (df_combined['Time'] == '09:00')).any()
+        if not has_9am:
+            seed_row = pd.DataFrame([{
+                'Date': today_str, 'Time': '09:00', 'Market': m_name,
+                'Foreign_Net': 0, 'Individual_Net': 0, 'Institutional_Net': 0
+            }])
+            df_combined = pd.concat([seed_row, df_combined], ignore_index=True)
+
     # 시간 순 정렬
-    df_combined = df_combined.sort_values(['Market', 'Time']).reset_index(drop=True)
+    df_combined = df_combined.drop_duplicates(subset=['Date', 'Time', 'Market'], keep='last').sort_values(['Market', 'Time']).reset_index(drop=True)
 
     # 4. Supabase DB에 실시간 스냅샷 upsert
     if supabase and not df_new.empty:
