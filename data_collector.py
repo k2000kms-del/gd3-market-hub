@@ -93,6 +93,7 @@ def fetch_stock_supply(token, stock_code):
             'appkey': APP_KEY,
             'appsecret': APP_SECRET,
             'tr_id': 'FHKST01010900',
+            'custtype': 'P',
         }
         params = {
             'FID_COND_MRKT_DIV_CODE': 'J',
@@ -104,14 +105,6 @@ def fetch_stock_supply(token, stock_code):
         )
         res_json = res.json()
         output = res_json.get('output', [])
-        
-        # output이 리스트 형식인 경우 첫 번째 아이템(최신 영업일) 파싱
-        if isinstance(output, list) and len(output) > 0:
-            target_data = output[0]
-        elif isinstance(output, dict):
-            target_data = output
-        else:
-            target_data = {}
 
         def _safe_int(val):
             try:
@@ -123,6 +116,19 @@ def fetch_stock_supply(token, stock_code):
                 return int(val_str)
             except Exception:
                 return 0
+
+        # [수정] 장중에는 당일(output[0]) 수급이 빈 문자열로 반환됨 (KRX 잠정치 미집계)
+        # frgn_ntby_qty 또는 orgn_ntby_qty에 실제 값이 있는 최근 영업일 항목을 순서대로 탐색
+        target_data = {}
+        if isinstance(output, list):
+            for row in output:
+                frgn_val = str(row.get('frgn_ntby_qty', '')).strip()
+                orgn_val = str(row.get('orgn_ntby_qty', '')).strip()
+                if frgn_val or orgn_val:
+                    target_data = row
+                    break
+        elif isinstance(output, dict):
+            target_data = output
 
         return {
             'Foreign_Net':       _safe_int(target_data.get('frgn_ntby_qty', 0)),
