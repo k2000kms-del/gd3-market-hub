@@ -421,9 +421,23 @@ def collect_high_density(token, df_full):
     except Exception as e:
         print(f'  ⚠️ Pool B 선행 포착 조회 실패: {e}')
 
-    # ── 두 풀 합산 및 중복 제거 ──
-    top_stocks = pd.concat([pool_a, pool_b]).drop_duplicates(subset=['Code']).reset_index(drop=True)
-    print(f'  → Pool A: {len(pool_a)}개, Pool B: {len(pool_b)}개, 합산: {len(top_stocks)}개 종목 대상')
+    # ── Pool C: 사용자 보유 포트폴리오 종목 (상시 필수 수급 감시군) ──
+    pool_c = pd.DataFrame()
+    try:
+        port_file = os.path.join(DATA_DIR, 'my_portfolio.json')
+        if os.path.exists(port_file):
+            with open(port_file, 'r', encoding='utf-8') as pf:
+                port_dict = json.load(pf)
+            port_codes = [str(c).zfill(6) for c in port_dict.keys()]
+            if 'Code' in df_full.columns:
+                pool_c = df_full[df_full['Code'].astype(str).str.zfill(6).isin(port_codes)].copy()
+                print(f'  → Pool C (보유 포트폴리오): {len(pool_c)}개 종목 상시 포함')
+    except Exception as e:
+        print(f'  ⚠️ Pool C (포트폴리오) 로드 실패: {e}')
+
+    # ── 세 풀 합산 및 중복 제거 ──
+    top_stocks = pd.concat([pool_a, pool_b, pool_c]).drop_duplicates(subset=['Code']).reset_index(drop=True)
+    print(f'  → Pool A: {len(pool_a)}개, Pool B: {len(pool_b)}개, Pool C(포트폴리오): {len(pool_c)}개, 최종 합산: {len(top_stocks)}개 종목 대상')
 
     rows = []
     for _, row in top_stocks.iterrows():
