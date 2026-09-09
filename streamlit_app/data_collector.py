@@ -93,6 +93,7 @@ def fetch_stock_supply(token, stock_code):
             'appkey': APP_KEY,
             'appsecret': APP_SECRET,
             'tr_id': 'FHKST01010900',
+            'custtype': 'P',
         }
         params = {
             'FID_COND_MRKT_DIV_CODE': 'J',
@@ -104,14 +105,6 @@ def fetch_stock_supply(token, stock_code):
         )
         res_json = res.json()
         output = res_json.get('output', [])
-        
-        # output이 리스트 형식인 경우 첫 번째 아이템(최신 영업일) 파싱
-        if isinstance(output, list) and len(output) > 0:
-            target_data = output[0]
-        elif isinstance(output, dict):
-            target_data = output
-        else:
-            target_data = {}
 
         def _safe_int(val):
             try:
@@ -123,6 +116,19 @@ def fetch_stock_supply(token, stock_code):
                 return int(val_str)
             except Exception:
                 return 0
+
+        # [수정] 장중에는 당일(output[0]) 수급이 빈 문자열로 반환됨 (KRX 잠정치 미집계)
+        # frgn_ntby_qty 또는 orgn_ntby_qty에 실제 값이 있는 최근 영업일 항목을 순서대로 탐색
+        target_data = {}
+        if isinstance(output, list):
+            for row in output:
+                frgn_val = str(row.get('frgn_ntby_qty', '')).strip()
+                orgn_val = str(row.get('orgn_ntby_qty', '')).strip()
+                if frgn_val or orgn_val:
+                    target_data = row
+                    break
+        elif isinstance(output, dict):
+            target_data = output
 
         return {
             'Foreign_Net':       _safe_int(target_data.get('frgn_ntby_qty', 0)),
@@ -1355,8 +1361,35 @@ def collect_market_summary(token, df_intraday):
                 int(last_row.get('Institutional_Net', 0))
             )
 
-        ks_chg = chg(df_ks)
-        kq_chg = chg(df_kq)
+        # 네이버 실시간 지수 API 1순위 조회 (FDR 당일 장마감 후 지연/누락 방지)
+        naver_indices = {}
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            r_nv = requests.get('https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI,KOSDAQ', headers=headers, timeout=2.5)
+            if r_nv.status_code == 200:
+                for item in r_nv.json().get('datas', []):
+                    k = '코스피' if item.get('itemCode') == 'KOSPI' else '코스닥'
+                    p_val = float(str(item.get('closePrice', '')).replace(',', ''))
+                    chg_val = float(str(item.get('fluctuationsRatio', '0')).replace(',', ''))
+                    naver_indices[k] = {
+                        'price': f"{p_val:,.2f}",
+                        'chg': chg_val,
+                        'chg_str': f"{chg_val:+.2f}%",
+                        'trend': '▲' if chg_val > 0 else ('▼' if chg_val < 0 else '-')
+                    }
+        except Exception as e:
+            print(f'DEBUG naver real-time index fetch error: {e}')
+
+        ks_p = naver_indices.get('코스피', {}).get('price', f'{last(df_ks):,.2f}')
+        ks_chg = naver_indices.get('코스피', {}).get('chg', chg(df_ks))
+        ks_chg_str = naver_indices.get('코스피', {}).get('chg_str', f'{ks_chg:+.2f}%')
+        ks_trend = naver_indices.get('코스피', {}).get('trend', trend(ks_chg))
+
+        kq_p = naver_indices.get('코스닥', {}).get('price', f'{last(df_kq):,.2f}')
+        kq_chg = naver_indices.get('코스닥', {}).get('chg', chg(df_kq))
+        kq_chg_str = naver_indices.get('코스닥', {}).get('chg_str', f'{kq_chg:+.2f}%')
+        kq_trend = naver_indices.get('코스닥', {}).get('trend', trend(kq_chg))
+
         usd_chg = chg(df_usd)
 
         fgn_ks, ind_ks, inst_ks = get_supply('코스피')
@@ -1365,18 +1398,18 @@ def collect_market_summary(token, df_intraday):
         rows = [
             {
                 '종목/종류': '코스피',
-                '지수': f'{last(df_ks):,.2f}',
-                '등락률': f'{ks_chg:+.2f}%',
-                '추이': trend(ks_chg),
+                '지수': ks_p,
+                '등락률': ks_chg_str,
+                '추이': ks_trend,
                 '외국인(억)': str(fgn_ks),
                 '개인(억)': str(ind_ks),
                 '기관(억)': str(inst_ks),
             },
             {
                 '종목/종류': '코스닥',
-                '지수': f'{last(df_kq):,.2f}',
-                '등락률': f'{kq_chg:+.2f}%',
-                '추이': trend(kq_chg),
+                '지수': kq_p,
+                '등락률': kq_chg_str,
+                '추이': kq_trend,
                 '외국인(억)': str(fgn_kq),
                 '개인(억)': str(ind_kq),
                 '기관(억)': str(inst_kq),
@@ -1523,8 +1556,19 @@ def collect_supply_intraday(token):
         ]
 
     df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    
+    # ── [시초 0 기준선 보장] 09:00 틱이 누적 데이터에 없다면 자동으로 추가 ──
+    for m_name in ['코스피', '코스닥']:
+        has_9am = not df_combined.empty and ((df_combined['Market'] == m_name) & (df_combined['Time'] == '09:00')).any()
+        if not has_9am:
+            seed_row = pd.DataFrame([{
+                'Date': today_str, 'Time': '09:00', 'Market': m_name,
+                'Foreign_Net': 0, 'Individual_Net': 0, 'Institutional_Net': 0
+            }])
+            df_combined = pd.concat([seed_row, df_combined], ignore_index=True)
+
     # 시간 순 정렬
-    df_combined = df_combined.sort_values(['Market', 'Time']).reset_index(drop=True)
+    df_combined = df_combined.drop_duplicates(subset=['Date', 'Time', 'Market'], keep='last').sort_values(['Market', 'Time']).reset_index(drop=True)
 
     # 4. Supabase DB에 실시간 스냅샷 upsert
     if supabase and not df_new.empty:
