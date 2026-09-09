@@ -129,10 +129,16 @@ DATA_FILES = [
 ]
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/k2000kms-del/gd3-market-hub/main/data"
 
+# ── 일반 상장 기업이 ETF 브랜드명(파워, BNK, PLUS 등)과 겹쳐 오인 제거되는 것을 방지하는 보호 화이트리스트 ──
+WHITELIST_STOCK_NAMES = {
+    '지투파워', '파워로직스', '파워넷', '일진파워', '보성파워텍', '디와이파워', '뉴파워프라즈마', '금양그린파워',
+    'BNK금융지주', 'YG PLUS'
+}
+
 EXCLUDE_KEYWORDS = [
-    'KODEX', 'TIGER', 'ACE', 'KBSTAR', 'SOL', 'ARIRANG', 'HANARO', 'KOSEF', 'PLUS',
-    'TIMEFOLIO', '스팩', 'ETN', 'ETF', '선물', '인버스', '레버리지', '2X', '3X', 'RISE', 'BNK',
-    'WOORI', '파워', '마이티', '히어로즈', 'KOACT', 'UNLIMITED', '1Q', 'CD금리', '액티브', '합성',
+    'KODEX', 'TIGER', 'ACE', 'KBSTAR', 'SOL', 'ARIRANG', 'HANARO', 'KOSEF', 'PLUS ',
+    'TIMEFOLIO', '스팩', 'ETN', 'ETF', '선물', '인버스', '레버리지', '2X', '3X', 'RISE', 'BNK ',
+    'WOORI', '파워 ', '마이티', '히어로즈', 'KOACT', 'UNLIMITED', '1Q ', 'CD금리', '액티브', '합성',
     '대신34호스팩', '하나32호스팩', '신한제13호스팩', 'KB제28호스팩', '유진스팩10호'
 ]
 
@@ -2489,6 +2495,9 @@ def fetch_live_stock_listing():
         is_fund = df['Name'].fillna('').astype(str).str.contains(_etf_pat, case=False, regex=True, na=False)
         if 'Sector' in df.columns:
             is_fund = is_fund | df['Sector'].fillna('').astype(str).str.contains(r'etf|수익증권', case=False, regex=True, na=False)
+        # 일반 상장 종목(지투파워, BNK금융지주, YG PLUS 등)은 ETF 제외 대상에서 무조건 보호
+        is_wl = df['Name'].fillna('').astype(str).isin(WHITELIST_STOCK_NAMES)
+        is_fund = is_fund & (~is_wl)
         return df[~is_fund].reset_index(drop=True)
 
     # 1순위: FDR 시도 (로컬에서는 정상 동작)
@@ -3387,6 +3396,9 @@ def _apply_etf_filter(df):
     is_fund = df_out['Name'].fillna('').astype(str).str.contains(_etf_pattern, case=False, regex=True, na=False)
     if 'Sector' in df_out.columns:
         is_fund = is_fund | df_out['Sector'].fillna('').astype(str).str.contains(r'etf|수익증권', case=False, regex=True, na=False)
+    # 일반 상장 종목(지투파워, BNK금융지주, YG PLUS 등)은 ETF 제외 대상에서 무조건 보호
+    is_wl = df_out['Name'].fillna('').astype(str).isin(WHITELIST_STOCK_NAMES)
+    is_fund = is_fund & (~is_wl)
     return df_out[~is_fund]
 
 # 사전 필터링된 전역 DataFrame (각 패널에서 직접 재사용)
@@ -3978,6 +3990,12 @@ if _search_q:
             _search_pool['Code'].astype(str).str.contains(_sq, na=False)
         )
         _results = _search_pool[_mask].head(8)
+        if _results.empty and not df_m.empty and 'Name' in df_m.columns:
+            _m_mask = (
+                df_m['Name'].str.contains(_sq, na=False, case=False) |
+                df_m['Code'].astype(str).str.contains(_sq, na=False)
+            )
+            _results = df_m[_m_mask].head(8)
         if _results.empty:
             st.sidebar.caption('⚠️ 검색 결과가 없습니다.')
         for _, _r in _results.iterrows():
