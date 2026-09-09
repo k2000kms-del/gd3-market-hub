@@ -224,6 +224,25 @@ def _get_josa(word: str, josa_type: str = '을를') -> str:
             return '과' if has_batchim else '와'
     return ''
 
+def _clean_sup(val):
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).replace(',', '').replace('+', '').strip()
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
+
+def _format_sup(val):
+    num = _clean_sup(val)
+    if num > 0:
+        return f"+{int(num):,}"
+    elif num < 0:
+        return f"{int(num):,}"
+    return "0"
+
 @st.cache_data(ttl=30)
 def fetch_naver_realtime_supply():
     """네이버 실시간 코스피/코스닥 투자자별 수급(외인/개인/기관 억원 단위) 실시간 수집"""
@@ -233,18 +252,22 @@ def fetch_naver_realtime_supply():
         r_ks = requests.get("https://m.stock.naver.com/api/index/KOSPI/trend", headers=headers, timeout=2.0)
         if r_ks.status_code == 200:
             d_ks = r_ks.json()
+            f_ks = int(str(d_ks.get('foreignValue', '0')).replace(',', '').replace('+', ''))
+            p_ks = int(str(d_ks.get('personalValue', '0')).replace(',', '').replace('+', ''))
+            i_ks = int(str(d_ks.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
             res['코스피'] = {
-                'foreign': int(str(d_ks.get('foreignValue', '0')).replace(',', '').replace('+', '')),
-                'personal': int(str(d_ks.get('personalValue', '0')).replace(',', '').replace('+', '')),
-                'institutional': int(str(d_ks.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
+                'foreign': f_ks, 'personal': p_ks, 'institutional': i_ks,
+                '외국인': f_ks, '개인': p_ks, '기관': i_ks
             }
         r_kq = requests.get("https://m.stock.naver.com/api/index/KOSDAQ/trend", headers=headers, timeout=2.0)
         if r_kq.status_code == 200:
             d_kq = r_kq.json()
+            f_kq = int(str(d_kq.get('foreignValue', '0')).replace(',', '').replace('+', ''))
+            p_kq = int(str(d_kq.get('personalValue', '0')).replace(',', '').replace('+', ''))
+            i_kq = int(str(d_kq.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
             res['코스닥'] = {
-                'foreign': int(str(d_kq.get('foreignValue', '0')).replace(',', '').replace('+', '')),
-                'personal': int(str(d_kq.get('personalValue', '0')).replace(',', '').replace('+', '')),
-                'institutional': int(str(d_kq.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
+                'foreign': f_kq, 'personal': p_kq, 'institutional': i_kq,
+                '외국인': f_kq, '개인': p_kq, '기관': i_kq
             }
     except Exception as e:
         print(f"DEBUG: fetch_naver_realtime_supply error: {e}")
@@ -3573,9 +3596,9 @@ if df_m is not None and not df_m.empty:
                             for mkt_name in ['코스피', '코스닥']:
                                 if mkt_name in nv_supply:
                                     m_sup = nv_supply[mkt_name]
-                                    f_val = _clean_sup(m_sup.get('외국인', 0))
-                                    p_val = _clean_sup(m_sup.get('개인', 0))
-                                    i_val = _clean_sup(m_sup.get('기관', 0))
+                                    f_val = _clean_sup(m_sup.get('외국인', m_sup.get('foreign', 0)))
+                                    p_val = _clean_sup(m_sup.get('개인', m_sup.get('personal', 0)))
+                                    i_val = _clean_sup(m_sup.get('기관', m_sup.get('institutional', 0)))
 
                                     accum_df = st.session_state.get('df_intraday_accum', pd.DataFrame())
                                     if accum_df.empty or 'Time' not in accum_df.columns:
@@ -3587,7 +3610,8 @@ if df_m is not None and not df_m.empty:
                                         (accum_df['Time'] == now_time) & (accum_df['Market'] == mkt_name)
                                     ].empty
 
-                                    if not duplicate:
+                                    # 0값 비정상 틱 적재 차단 (외인/개인/기관이 모두 0인 왜곡 데이터 방지)
+                                    if not duplicate and (abs(f_val) + abs(p_val) + abs(i_val) > 0):
                                         new_row = pd.DataFrame([{
                                             'Time': now_time,
                                             'Market': mkt_name,
@@ -5351,7 +5375,7 @@ with col_left:
         st.session_state['p5_view_mode'] = "📈 지수선"
     p5_view = st.radio(
         "뷰 모드", 
-        ["⚡ 듀얼", "📈 지수선", "📊 수급선"], 
+        ["⚡ 듀얼", "📈 지수선", "📊 수급선", "🟢 네이버 공식 차트"], 
         horizontal=True, 
         label_visibility="collapsed", 
         key="p5_view_mode"
@@ -5434,6 +5458,13 @@ with col_left:
             now_time_str = _now_kst.strftime('%H:%M')
             df_line = df_line[df_line['Time'] <= now_time_str]
 
+        # 09:00 시초 틱을 제외하고, 외인/개인/기관이 모두 0인 비정상 왜곡 틱(V자 꺾임 유발) 필터링
+        df_line = df_line[
+            (df_line['Time'] == '09:00') | 
+            (pd.to_numeric(df_line['Foreign_Net'], errors='coerce').fillna(0).abs() + 
+             pd.to_numeric(df_line['Individual_Net'], errors='coerce').fillna(0).abs() + 
+             pd.to_numeric(df_line['Institutional_Net'], errors='coerce').fillna(0).abs() > 0)
+        ]
         df_line = df_line.drop_duplicates(subset=['Time'], keep='last').sort_values('Time')
 
         # 시작점 보정 (09:00 시초 0 보장)
@@ -5502,7 +5533,14 @@ with col_left:
             df_candle = df_candle.dropna(subset=['Datetime']).sort_values('Datetime')
 
     # ── 3. 선택된 모드에 따른 차트 렌더링 ──
-    if "듀얼" in str(p5_view):
+    if "네이버" in str(p5_view):
+        # 네이버 증권 공식 실시간 수급 차트 이미지 직결
+        import time as _t
+        _m_code_nv = 'KOSPI' if target_market == '코스피' else 'KOSDAQ'
+        _nv_chart_url = f"https://ssl.pstatic.net/imgfinance/chart/sise/siseMain{_m_code_nv}.png?t={int(_t.time())}"
+        st.markdown(f"##### 🟢 네이버 증권 공식 실시간 수급 차트 ({target_market})")
+        st.image(_nv_chart_url, use_container_width=True, caption=f"네이버 금융(finance.naver.com/sise/) 실시간 집계 차트")
+    elif "듀얼" in str(p5_view):
         fig_p5 = make_subplots(
             rows=2, cols=1,
             shared_xaxes=True,
