@@ -50,7 +50,7 @@ if not token or not chat_id:
                 pass
 
 token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-chat_id = chat_id or "8056247738"
+chat_id = chat_id or "1131551088"
 
 import telegram_notifier as tn
 
@@ -438,10 +438,13 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
             sent_jumping = briefing_state.get('sent_jumping_codes', [])
             
             if not df_m_tmp.empty and 'Code' in df_m_tmp.columns:
-                df_m_tmp['Code'] = df_m_tmp['Code'].astype(str).str.zfill(6)
-                # 거래대금 상위 20 종목 중 점핑 양봉 탐색
+                # 거래대금 상위 종목 중 점핑 양봉 탐색 (ETF/스팩/파생상품 완전 제외)
                 if 'Amount' in df_m_tmp.columns:
-                    top_cands = df_m_tmp.sort_values('Amount', ascending=False).head(20)
+                    etf_keywords = ['KODEX', 'TIGER', 'ACE', 'KBSTAR', 'SOL', 'ARIRANG', 'HANARO', 'KOSEF', 'PLUS', 'TIMEFOLIO', '스팩', 'ETN', '선물', '인버스', '레버리지', '2X', '3X']
+                    is_etf = df_m_tmp['Name'].fillna('').astype(str).str.contains('|'.join(etf_keywords), case=False, regex=True)
+                    df_pure = df_m_tmp[~is_etf].copy()
+                    df_pure['Code'] = df_pure['Code'].astype(str).str.zfill(6)
+                    top_cands = df_pure.sort_values('Amount', ascending=False).head(30)
                     for _, s_row in top_cands.iterrows():
                         c_code = s_row['Code']
                         if c_code in sent_jumping:

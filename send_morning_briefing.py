@@ -34,9 +34,10 @@ if now_weekday >= 5:
     print("  ⏭️ 주말이므로 모닝 브리핑을 건너뜁니다.")
     sys.exit(0)
 
-# 08:05 이후면 장전 브리핑으로 부적합하므로 차단
-if now_hm > 805:
-    print(f"  ⚠️ 현재 시각({now_hm})이 08:05를 초과하여 모닝 브리핑 발송을 안전하게 차단합니다.")
+# 09:00 이후면 정규장 시작이므로 차단 (단, FORCE_SEND=1 이면 수동 발송 허용)
+force_send = os.environ.get("FORCE_SEND") == "1"
+if now_hm > 900 and not force_send:
+    print(f"  ⚠️ 현재 시각({now_hm})이 09:00(개장)을 초과하여 장전 모닝 브리핑 발송을 안전하게 차단합니다.")
     sys.exit(0)
 
 base_dir = os.path.dirname(os.path.abspath(__file__))

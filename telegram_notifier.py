@@ -152,7 +152,7 @@ def make_stock_action_keyboard(code: str, name: str = "") -> dict:
 def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
     """Telegram Bot API 호출 공통 헬퍼 (원터치 키보드 버튼 기본 탑재)"""
     token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-    chat_id = chat_id or "8056247738"
+    chat_id = chat_id or "1131551088"
     if not token or not chat_id:
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
@@ -184,7 +184,7 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
 def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "", parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
     """Telegram Bot API sendPhoto 호출 공통 헬퍼 (차트 이미지 전송)"""
     token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-    chat_id = chat_id or "8056247738"
+    chat_id = chat_id or "1131551088"
     if not token or not chat_id:
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
