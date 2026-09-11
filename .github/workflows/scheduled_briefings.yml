@@ -1,0 +1,68 @@
+name: Scheduled Market Briefings (Morning & Closing)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '발송 모드 (auto, morning, closing)'
+        required: false
+        default: 'auto'
+  schedule:
+    # ── 1. ☀️ 아침 출근 모닝 브리핑 (목표 07:35~07:50 KST = UTC 22:35~22:55 일~목) ──
+    - cron: '35,45,55 22 * * 0-4'
+    - cron: '10,30 23 * * 0-4'
+    # ── 2. 🌙 장 마감 결산 브리핑 (목표 15:35~15:45 KST = UTC 06:35~06:45 월~금) ──
+    - cron: '35,40,50 6 * * 1-5'
+    - cron: '05,20 7 * * 1-5'
+
+jobs:
+  send-briefing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas numpy toml
+
+      - name: Run Dedicated Briefing Sender
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          MODE="${{ github.event.inputs.mode || 'auto' }}"
+          if [ "$MODE" = "morning" ]; then
+            python cloud_runner.py --force-morning --briefing-only
+          elif [ "$MODE" = "closing" ]; then
+            python cloud_runner.py --force-closing --briefing-only
+          else
+            python cloud_runner.py --briefing-only
+          fi
+
+      - name: Commit and push briefing state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/last_briefing_state.json streamlit_app/data/last_briefing_state.json || true
+          git diff --staged --quiet || git commit -m "chore: 브리핑 발송 상태 업데이트 $(date +'%Y-%m-%d %H:%M KST')"
+          git pull --rebase origin main || true
+          git push || true

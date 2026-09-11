@@ -72,11 +72,12 @@ def _save_state():
     except Exception as err:
         print(f"DEBUG: 상태 파일 저장 실패: {err}")
 
-# 2. ☀️ 아침 출근 모닝 브리핑 (07:30 ~ 08:00 KST 사이 NXT 프리마켓 개장 전 정시 발송, 08:00 이후 발송 절대 차단)
+# 2. ☀️ 아침 출근 모닝 브리핑 (목표 07:35~07:50, 지연되더라도 08:50 개장 전 당일 1회 보장)
 last_morning = briefing_state.get('last_morning_date')
-if now_weekday < 5 and 730 <= now_hm <= 800:
-    if last_morning != today_str:
-        print(f"☀️ [NXT 프리마켓 전 07:50 정시 발송] 장전 브리핑 발송 시도 ({today_str}, now_hm={now_hm})...")
+is_morning_time = (now_weekday < 5 and 715 <= now_hm <= 850)
+if is_morning_time or '--force-morning' in sys.argv:
+    if last_morning != today_str or '--force-morning' in sys.argv:
+        print(f"☀️ [장전 모닝 브리핑] 발송 시도 (today={today_str}, now_hm={now_hm})...")
         briefing_state['sent_jumping_codes'] = []  # 당일 점핑 양봉 알림 목록 초기화
         try:
             import requests as req
@@ -207,9 +208,10 @@ if now_weekday < 5 and 730 <= now_hm <= 800:
 
 # 3. 장마감 브리핑 (15:20 ~ 23:59 KST 사이 당일 최초 1회 무조건 발송)
 last_closing = briefing_state.get('last_closing_date')
-if now_weekday < 5 and 1520 <= now_hm <= 2359:
-    if last_closing != today_str:
-        print(f"🌙 장마감 브리핑 및 퀀트 TOP3 추천 발송 시도 ({today_str})...")
+is_closing_time = (now_weekday < 5 and 1520 <= now_hm <= 2359)
+if is_closing_time or '--force-closing' in sys.argv:
+    if last_closing != today_str or '--force-closing' in sys.argv:
+        print(f"🌙 [장마감 결산 브리핑] 발송 시도 (today={today_str}, now_hm={now_hm})...")
         try:
             # 포트폴리오 및 시세 로드하여 총 평가금액/손익 계산
             port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
@@ -392,6 +394,11 @@ if now_weekday < 5 and 1520 <= now_hm <= 2359:
             print(f"  ❌ 장마감 브리핑 오류: {e}")
     else:
         print(f"🌙 오늘({today_str}) 장마감 브리핑은 이미 발송 완료되었습니다.")
+
+# ── 브리핑 전용 모드(--briefing-only) 시 조기 종료 ──
+if '--briefing-only' in sys.argv:
+    print("🏁 [Cloud Runner] --briefing-only 완료: 정기 브리핑 처리 후 즉시 종료합니다.")
+    sys.exit(0)
 
 # 4. 장중 포트폴리오 실시간 감시 & 정우영식 점핑 양봉 실시간 스캔 (09:00 ~ 15:30 KST)
 if now_weekday < 5 and 900 <= now_hm <= 1530:
