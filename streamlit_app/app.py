@@ -4898,10 +4898,8 @@ with col_mid:
         # 실시간 외국인/기관 수급 조회 (tuple로 변환하여 캐시 키 안정화)
         realtime_sup = fetch_stock_realtime_investors(tuple(sorted(df1['Code'].tolist())))
         
-        # 당일 수급 가집계 여부 판별 (네이버 일별 API는 장 마감 후 집계되므로 장중엔 전일 확정치 표시)
-        has_today_sup = any(v.get('is_today', False) for v in realtime_sup.values()) if realtime_sup else False
-        sup_status_badge = "<span style='font-size:11px;color:#4ade80;'> (당일 가집계)</span>" if has_today_sup else "<span style='font-size:11px;color:#94a3b8;'> (전일 확정집계)</span>"
-        st.markdown(f"##### 📊 수급 포착 (외/기/프){sup_status_badge}", unsafe_allow_html=True)
+        # 수급 포착 타이틀 (최신 수급에 집중하여 깔끔하게 렌더링)
+        st.markdown("##### 📊 수급 포착 (외/기/프)")
 
         # 실시간 시세 반영을 위해 기존 df_hd에 들어있던 시세 관련 과거 컬럼 제거
         df1 = df1.drop(columns=['ChagesRatio', 'Current_Price', 'Close', 'Price', 'Volume', 'Trade_Volume'], errors='ignore')
@@ -4913,19 +4911,19 @@ with col_mid:
         df1['Current_Price_Val'] = pd.to_numeric(df1['Close'], errors='coerce').fillna(0)
         df1['Trade_Volume_Val']  = pd.to_numeric(df1['Volume'], errors='coerce').fillna(0)
         
-        # 실시간 수급 데이터 덮어쓰기 (네이버 API 실시간 가집계 반영)
+        # 최신 수급 데이터 반영 (네이버 실시간 우선 반영, 누락 시 기존 HD 수급 보존)
         fgn_list = []
         inst_list = []
-        for code in df1['Code']:
-            if code in realtime_sup:
+        for _, r_item in df1.iterrows():
+            code = str(r_item['Code']).zfill(6)
+            if code in realtime_sup and realtime_sup[code] is not None:
                 fgn_list.append(realtime_sup[code]["foreign"])
                 inst_list.append(realtime_sup[code]["institutional"])
             else:
-                fgn_list.append(0)
-                inst_list.append(0)
+                fgn_list.append(r_item.get('Foreign_Net', 0))
+                inst_list.append(r_item.get('Institutional_Net', 0))
         df1['Foreign_Net'] = fgn_list
         df1['Institutional_Net'] = inst_list
-        # ★ 실시간 수급 반영 후 Total_Combined_Net 재계산 (기존 CSV 값이 0이어도 네이버 실시간값 사용)
         df1['Total_Combined_Net'] = df1['Foreign_Net'] + df1['Institutional_Net']
 
         df1['Disp'] = df1['ChagesRatio'].apply(lambda x: f"{x:+.2f}%")
@@ -4955,9 +4953,9 @@ with col_mid:
             for v in df1_sorted['Total_Combined_Net']
         ]
 
-        tag_suffix = "" if has_today_sup else " (전일)"
+        # 막대 라벨 (불필요한 전일 꼬리표 없이 순수 수량만 깔끔하게 표시)
         text_labels_sorted = df1_sorted['Total_Combined_Net'].apply(
-            lambda x: f" {x/10000:.1f}만주{tag_suffix}" if abs(x) >= 10000 else f" {int(x):+,}주{tag_suffix}"
+            lambda x: f" {x/10000:.1f}만주" if abs(x) >= 10000 else f" {int(x):+,}주"
         )
 
         custom_data_values = df1_sorted[['Code', 'Close', 'ChagesRatio', 'Total_Combined_Net', 'Foreign_Net', 'Institutional_Net']].values
