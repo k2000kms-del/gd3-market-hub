@@ -5375,7 +5375,7 @@ with col_left:
         st.session_state['p5_view_mode'] = "📈 지수선"
     p5_view = st.radio(
         "뷰 모드", 
-        ["⚡ 듀얼", "📈 지수선", "📊 수급선", "🟢 네이버 공식 차트"], 
+        ["⚡ 듀얼", "📈 지수선", "📊 수급선"], 
         horizontal=True, 
         label_visibility="collapsed", 
         key="p5_view_mode"
@@ -5481,7 +5481,8 @@ with col_left:
             last_row = df_line.iloc[-1].copy()
             last_row['Time'] = '15:30'
             if df_summary is not None and not df_summary.empty:
-                m_match = df_summary[df_summary['종목/지수'].astype(str).str.contains(target_market, na=False)]
+                name_col = '종목/종류' if '종목/종류' in df_summary.columns else ('종목/지수' if '종목/지수' in df_summary.columns else df_summary.columns[0])
+                m_match = df_summary[df_summary[name_col].astype(str).str.contains(target_market, na=False)]
                 if not m_match.empty:
                     m_r = m_match.iloc[0]
                     try:
@@ -5533,14 +5534,7 @@ with col_left:
             df_candle = df_candle.dropna(subset=['Datetime']).sort_values('Datetime')
 
     # ── 3. 선택된 모드에 따른 차트 렌더링 ──
-    if "네이버" in str(p5_view):
-        # 네이버 증권 공식 실시간 수급 차트 이미지 직결
-        import time as _t
-        _m_code_nv = 'KOSPI' if target_market == '코스피' else 'KOSDAQ'
-        _nv_chart_url = f"https://ssl.pstatic.net/imgfinance/chart/sise/siseMain{_m_code_nv}.png?t={int(_t.time())}"
-        st.markdown(f"##### 🟢 네이버 증권 공식 실시간 수급 차트 ({target_market})")
-        st.image(_nv_chart_url, use_container_width=True, caption=f"네이버 금융(finance.naver.com/sise/) 실시간 집계 차트")
-    elif "듀얼" in str(p5_view):
+    if "듀얼" in str(p5_view):
         fig_p5 = make_subplots(
             rows=2, cols=1,
             shared_xaxes=True,
