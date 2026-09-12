@@ -39,10 +39,20 @@ try:
     from telegram_notifier import (
         notify_daily_buy_signal, notify_daily_sell_signal,
         notify_morning_briefing, notify_closing_briefing,
-        notify_quant_top_pick, process_incoming_command
+        notify_quant_top_pick, process_incoming_command,
+        format_supply_amount
     )
-except:
-    pass
+except Exception:
+    def format_supply_amount(val) -> str:
+        try:
+            if val is None or str(val).strip() in ('-', '', 'nan', 'None'):
+                return '-'
+            cleaned = str(val).replace(',', '').replace('억', '').replace('+', '').strip()
+            num = float(cleaned)
+            sign = "+" if num > 0 else ("-" if num < 0 else "")
+            return f"{sign}{abs(int(round(num))):,}억"
+        except Exception:
+            return str(val)
 
 import threading
 import os
@@ -2093,11 +2103,11 @@ def run_portfolio_background_scanner():
                             name = str(row.iloc[0])
                             idx_val = str(row.get('지수', ''))
                             chg_val = str(row.get('등락률', ''))
-                            f_net = str(row.get('외국인(억)', '-'))
-                            p_net = str(row.get('개인(억)', '-'))
-                            i_net = str(row.get('기관(억)', '-'))
+                            f_net = format_supply_amount(row.get('외국인(억)'))
+                            p_net = format_supply_amount(row.get('개인(억)'))
+                            i_net = format_supply_amount(row.get('기관(억)'))
                             if '코스피' in name or '코스닥' in name:
-                                mkt_lines.append(f"├ <b>{name}</b>: {idx_val} ({chg_val}) | 외인 <b>{f_net}억</b>, 기관 {i_net}억, 개인 {p_net}억")
+                                mkt_lines.append(f"├ <b>{name}</b>: {idx_val} ({chg_val}) | 외인 <b>{f_net}</b>, 기관 {i_net}, 개인 {p_net}")
                             elif 'USD' in name or '환율' in name:
                                 fx_val = f"{idx_val} ({chg_val})"
                     mkt_text = "\n".join(mkt_lines) if mkt_lines else "코스피/코스닥 정규장 마감 완료"

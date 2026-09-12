@@ -149,8 +149,28 @@ def make_stock_action_keyboard(code: str, name: str = "") -> dict:
     }
 
 
+def format_supply_amount(val) -> str:
+    """수급 금액을 천 단위 콤마 및 부호(+/-)가 포함된 깔끔한 억 단위 문자열로 변환 (예: 18675 -> '+18,675억', -22984 -> '-22,984억')"""
+    try:
+        if val is None or str(val).strip() in ('-', '', 'nan', 'None'):
+            return '-'
+        cleaned = str(val).replace(',', '').replace('억', '').replace('+', '').strip()
+        num = float(cleaned)
+        sign = "+" if num > 0 else ("-" if num < 0 else "")
+        return f"{sign}{abs(int(round(num))):,}억"
+    except Exception:
+        return str(val)
+
+
+def _strip_html_tags(text: str) -> str:
+    """HTML 태그 제거 헬퍼 (HTML 파싱 실패 시 일반 텍스트 폴백용)"""
+    import re
+    clean = re.sub(r'<[^>]+>', '', text)
+    return clean
+
+
 def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
-    """Telegram Bot API 호출 공통 헬퍼 (원터치 키보드 버튼 기본 탑재)"""
+    """Telegram Bot API 호출 공통 헬퍼 (HTML 파싱 에러 시 자동 일반텍스트 폴백 및 원터치 키보드 버튼 탑재)"""
     token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
     chat_id = chat_id or "1131551088"
     if not token or not chat_id:
@@ -174,6 +194,14 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
         if res.status_code == 200:
             return True
         else:
+            # HTML 파싱 에러(400 can't parse entities) 발생 시 일반 텍스트로 안전 재전송
+            if parse_mode and res.status_code == 400 and "can't parse entities" in res.text:
+                print(f"DEBUG: 텔레그램 HTML 파싱 오류 감지 -> 일반 텍스트로 안전 재전송 시도")
+                payload["parse_mode"] = None
+                payload["text"] = _strip_html_tags(text)
+                res_retry = requests.post(url, json=payload, timeout=5)
+                if res_retry.status_code == 200:
+                    return True
             print(f"DEBUG: 텔레그램 전송 실패 (status={res.status_code}): {res.text[:100]}")
             return False
     except Exception as e:
@@ -212,6 +240,13 @@ def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "",
         if res.status_code == 200:
             return True
         else:
+            if parse_mode and res.status_code == 400 and "can't parse entities" in res.text:
+                print(f"DEBUG: 텔레그램 사진 캡션 HTML 파싱 오류 감지 -> 일반 텍스트 재시도")
+                data["parse_mode"] = None
+                data["caption"] = _strip_html_tags(caption)[:1024]
+                res_retry = requests.post(url, data=data, files=files, timeout=10)
+                if res_retry.status_code == 200:
+                    return True
             print(f"DEBUG: 텔레그램 사진 전송 실패 (status={res.status_code}): {res.text[:100]}")
             return _send(token, chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup, force_send=force_send)
     except Exception as e:
@@ -459,14 +494,15 @@ def notify_quant_top_pick(
     target_price: float = None,
     stop_price: float = None,
     market_energy_status: str = "",  # ⚡ 시장 에너지 상태 (8개년 백테스트 기반 필터)
+    force_send: bool = False,         # 🚀 마감 브리핑/수동 발송 시 정규장 시간 제한 우회
 ) -> bool:
-    """당일 퀀트 80점 이상 강력 매수 종목 포착 알림 (정규장 09:00~15:30 전용).
+    """당일 퀀트 80점 이상 강력 매수 종목 포착 알림 (정규장 09:00~15:30 전용, force_send=True 시 마감 브리핑 추천 허용).
     
     ※ 8개년(2019~2026) 95,410건 백테스트 검증 결과:
        - 강세 에너지 구간 진입 시 승률 43.9% / PF 1.19
        - 위험 에너지 구간 진입 시 승률 35.1% / PF 0.80 (무시할 경우 손실 확률 65%)
     """
-    if not is_regular_market_hours():
+    if not force_send and not is_regular_market_hours():
         print(f"DEBUG: [{name or ticker}] 정규장 거래시간(평일 09:00~15:30) 외이므로 퀀트 매수 포착 알림 전송을 차단합니다.")
         return False
 
@@ -510,8 +546,8 @@ def notify_quant_top_pick(
     chart_bytes = _get_stock_chart_safe(ticker, name, score=score, target_price=tgt, stop_loss=stp)
     markup = make_stock_action_keyboard(ticker, name)
     if chart_bytes:
-        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup)
-    return _send(token, chat_id, text, reply_markup=markup)
+        return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup, force_send=force_send)
+    return _send(token, chat_id, text, reply_markup=markup, force_send=force_send)
 
 
 # ─────────────────────────────────────────────────────────────
