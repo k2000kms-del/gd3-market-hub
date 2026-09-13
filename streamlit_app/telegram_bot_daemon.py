@@ -23,18 +23,22 @@ from telegram_notifier import process_incoming_command, notify_external_channel_
 from chart_image_generator import fetch_stock_chart_df, generate_stock_chart_image
 
 def _load_secrets():
-    token = '8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM'
-    chat_id = '1131551088'
-    s_path = os.path.join(CURRENT_DIR, '.streamlit', 'secrets.toml')
-    if os.path.exists(s_path):
-        try:
-            import toml
-            s = toml.load(s_path)
-            token = s.get('TELEGRAM_BOT_TOKEN', token)
-            chat_id = s.get('TELEGRAM_CHAT_ID', chat_id)
-        except Exception:
-            pass
-    return token, chat_id
+    token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
+    for s_path in [
+        os.path.join(CURRENT_DIR, '.streamlit', 'secrets.toml'),
+        os.path.join(CURRENT_DIR, 'streamlit_app', '.streamlit', 'secrets.toml'),
+        os.path.join(os.path.dirname(CURRENT_DIR), '.streamlit', 'secrets.toml')
+    ]:
+        if os.path.exists(s_path):
+            try:
+                import toml
+                s = toml.load(s_path)
+                token = token or s.get('TELEGRAM_BOT_TOKEN', '')
+                chat_id = chat_id or s.get('TELEGRAM_CHAT_ID', '')
+            except Exception:
+                pass
+    return (token or "").strip(), str(chat_id or "").strip()
 
 def _load_csv_safely(fname: str) -> pd.DataFrame:
     p = os.path.join(CURRENT_DIR, 'data', fname)

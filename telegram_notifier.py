@@ -169,10 +169,34 @@ def _strip_html_tags(text: str) -> str:
     return clean
 
 
+def _get_default_credentials():
+    """환경변수 및 secrets.toml에서 안전하게 텔레그램 인증 정보를 로드 (하드코딩 배제)"""
+    import os
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        cur_d = os.path.dirname(os.path.abspath(__file__))
+        for s_path in [
+            os.path.join(cur_d, '.streamlit', 'secrets.toml'),
+            os.path.join(cur_d, 'streamlit_app', '.streamlit', 'secrets.toml'),
+            os.path.join(os.path.dirname(cur_d), '.streamlit', 'secrets.toml'),
+        ]:
+            if os.path.exists(s_path):
+                try:
+                    import toml
+                    s = toml.load(s_path)
+                    token = token or s.get('TELEGRAM_BOT_TOKEN')
+                    chat_id = chat_id or s.get('TELEGRAM_CHAT_ID')
+                except Exception:
+                    pass
+    return (token or "").strip(), str(chat_id or "").strip()
+
+
 def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
     """Telegram Bot API 호출 공통 헬퍼 (HTML 파싱 에러 시 자동 일반텍스트 폴백 및 원터치 키보드 버튼 탑재)"""
-    token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-    chat_id = chat_id or "1131551088"
+    def_tok, def_chat = _get_default_credentials()
+    token = token or def_tok
+    chat_id = chat_id or def_chat
     if not token or not chat_id:
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
@@ -211,8 +235,9 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
 
 def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "", parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
     """Telegram Bot API sendPhoto 호출 공통 헬퍼 (차트 이미지 전송)"""
-    token = token or "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-    chat_id = chat_id or "1131551088"
+    def_tok, def_chat = _get_default_credentials()
+    token = token or def_tok
+    chat_id = chat_id or def_chat
     if not token or not chat_id:
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False

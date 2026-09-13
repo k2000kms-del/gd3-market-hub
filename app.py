@@ -1754,8 +1754,8 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
                     pass
 
             if not tg_token:
-                tg_token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-                tg_chat_id = "1131551088"
+                time.sleep(3)
+                continue
 
             url = f"https://api.telegram.org/bot{tg_token}/getUpdates?offset={last_update_id + 1}&timeout=5"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -1855,8 +1855,8 @@ def run_portfolio_background_scanner():
                 pass
 
             if not (tg_token and tg_chat_id):
-                tg_token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-                tg_chat_id = "1131551088"
+                time.sleep(3)
+                continue
 
             try:
                 from telegram_notifier import (
@@ -3842,9 +3842,9 @@ def _get_active_telegram_credentials():
                 except Exception:
                     pass
     if not token:
-        token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-        chat_id = "1131551088"
-    return token, chat_id
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    return (token or "").strip(), str(chat_id or "").strip()
 
 if st.sidebar.button("🔄 최신 데이터 즉시 동기화", type="primary", use_container_width=True, help="클라우드 및 거래소 최신 데이터를 즉시 강제 다운로드하고 텔레그램과 동기화합니다."):
     st.cache_data.clear()
@@ -4350,12 +4350,10 @@ def _get_secret(key, fallback=""):
 kis_key = _get_secret("KIS_APP_KEY") or _get_secret("KIS_KEY")
 kis_sec = _get_secret("KIS_APP_SECRET") or _get_secret("KIS_SECRET")
 
-# 텔레그램 알림 키 (secrets.toml 또는 환경변수에서 로드, 미설정 시 안전 기본값)
-tg_token   = _get_secret("TELEGRAM_BOT_TOKEN")
-tg_chat_id = _get_secret("TELEGRAM_CHAT_ID")
-if not tg_token:
-    tg_token = "8648882409:AAGy9s1qRhRqi7dN5_X9HYSrfDaz7AdW5aM"
-    tg_chat_id = "1131551088"
+tg_token   = _get_secret("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+tg_chat_id = _get_secret("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID", "")
+tg_token = (tg_token or "").strip()
+tg_chat_id = str(tg_chat_id or "").strip()
 
 # ── 백그라운드 포트폴리오 스캐너 시작 ──
 # st.cache_resource에 의해 최초 1회만 구동됩니다.
