@@ -49,8 +49,62 @@ def _load_csv_safely(fname: str) -> pd.DataFrame:
             pass
     return pd.DataFrame()
 
+def _normalize_text_for_dedup(text: str) -> str:
+    """채널 접두어, 대괄호 태그, URL, 특수문자, 불필요한 공백을 제거하여 핵심 단어 위주로 정규화."""
+    import re
+    # 1. URL 제거
+    t = re.sub(r'https?://\S+', '', text)
+    # 2. 대괄호 태그 제거 ([속보], [단독], [엘리트], [스핀] 등)
+    t = re.sub(r'\[[^\]]*\]', '', t)
+    # 3. 해시태그 기호 제거 (#제주반도체 -> 제주반도체)
+    t = t.replace('#', '')
+    # 4. 특수문자 및 기호 제거
+    t = re.sub(r'[^\w\s가-힣a-zA-Z0-9]', ' ', t)
+    # 5. 연속 공백 압축
+    return re.sub(r'\s+', ' ', t).strip()
+
+def _is_duplicate_content(new_text: str, existing_texts: list, threshold: float = 0.55) -> bool:
+    """새로운 텍스트가 기존 텍스트 목록과 핵심 내용이 중복(유사도 threshold 이상)되는지 정밀 판별."""
+    norm_new = _normalize_text_for_dedup(new_text)
+    if len(norm_new) < 8:
+        return False
+    
+    words_new = set(w for w in norm_new.split() if len(w) >= 2)
+    if not words_new:
+        return False
+
+    prefix_new = norm_new[:30]
+
+    for ex in existing_texts:
+        if not ex:
+            continue
+        norm_ex = _normalize_text_for_dedup(ex)
+        if not norm_ex:
+            continue
+        
+        # 1) 앞부분 30자 일치 여부 (핵심 도입부 동일)
+        if len(norm_new) >= 20 and len(norm_ex) >= 20:
+            if prefix_new in norm_ex or norm_ex[:30] in norm_new:
+                return True
+
+        # 2) 단어 기반 자카드 유사도 (Jaccard similarity)
+        words_ex = set(w for w in norm_ex.split() if len(w) >= 2)
+        if not words_ex:
+            continue
+        
+        intersection = len(words_new & words_ex)
+        union = len(words_new | words_ex)
+        if union > 0 and (intersection / union) >= threshold:
+            return True
+                
+        # 3) 포함 관계 (신규 단어의 70% 이상이 기존 텍스트에 포함된 경우)
+        if len(words_new) >= 4 and (intersection / len(words_new)) >= 0.70:
+            return True
+
+    return False
+
 def _save_to_intelligence_pool(ch_name: str, raw_text: str, matched_dict: dict = None):
-    """외부 채널의 유익한 분석글/시황 정보를 모아 아침 및 마감 브리핑의 1급 자료로 활용할 수 있도록 적재."""
+    """외부 채널의 유익한 분석글/시황 정보를 모아 아침 및 마감 브리핑의 1급 자료로 활용할 수 있도록 적재 (중복 완벽 배제)."""
     pool_file = os.path.join(CURRENT_DIR, 'data', 'channel_intelligence_pool.json')
     try:
         items = []
@@ -67,16 +121,16 @@ def _save_to_intelligence_pool(ch_name: str, raw_text: str, matched_dict: dict =
         if len(clean_text) < 15:
             return
 
-        # 중복 방지 (앞 50자 기준)
-        snippet = clean_text[:50]
-        if any(it.get('snippet') == snippet for it in items):
+        # ── [중복 방지 (고도화: 접두어 정규화 및 단어 유사도 기반 100% 중복 차단)] ──
+        existing_texts = [it.get('text', '') for it in items if isinstance(it, dict)]
+        if _is_duplicate_content(clean_text, existing_texts):
             return
 
         new_entry = {
             "channel": ch_name,
             "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
             "text": clean_text[:600],
-            "snippet": snippet,
+            "snippet": clean_text[:50],
             "stock": matched_dict.get('name') if matched_dict else None
         }
         items.append(new_entry)
@@ -196,26 +250,55 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                         }
                                         break
 
-                        # ── [긴급 속보 필터링] ──
+                        # ── [긴급 속보 필터링 및 비증시 가십 제외] ──
                         # 주가에 즉각적인 파급력을 갖는 초특급 핵심 키워드가 포함된 경우에만 실시간 알림 발송!
                         URGENT_KEYWORDS = [
                             '속보', '[속보]', '긴급', '[긴급]', '단독', '[단독]', 
                             '공습', '피습', '미사일', '폭격', '교전', '비상계엄',
                             '품절주', '서킷브레이커', '사이드카', '거래정지'
                         ]
-                        is_urgent = any(k in raw_text for k in URGENT_KEYWORDS)
+                        # 비증시/사회/가십성 키워드 (실시간 알림에서 제외)
+                        EXCLUDE_KEYWORDS = [
+                            '교통사고', '음주운전', '마약', '열애', '이혼', '청문회', 
+                            '특검', '국회의원', '여당', '야당', '날씨', '단독포토', '포토', 
+                            '연예', '아이돌', '케이팝', '학폭', '사망사고'
+                        ]
+
+                        has_urgent_kw = any(k in raw_text for k in URGENT_KEYWORDS)
+                        has_exclude_kw = any(k in raw_text for k in EXCLUDE_KEYWORDS)
+                        
+                        is_urgent = has_urgent_kw and not has_exclude_kw
 
                         if is_urgent:
-                            notify_external_channel_alert(
-                                channel_name=ch_name,
-                                raw_message=raw_text,
-                                matched_stock=matched_dict,
-                                token=token,
-                                chat_id=chat_id
-                            )
-                            s_desc = matched_dict['name'] if matched_dict else '긴급속보'
-                            print(f"[{time.strftime('%H:%M:%S')}] 🚨 {ch_name} 실시간 긴급 속보 전송: [{p_id}] ({s_desc})")
-                            time.sleep(0.5)
+                            # ── [최근 30분 동일/유사 속보 중복 발송 방지 (Dedup)] ──
+                            now_ts = time.time()
+                            recent_urgent = briefing_state.get('recent_urgent_alerts', [])
+                            # 30분(1800초) 지난 기록 정리
+                            recent_urgent = [a for a in recent_urgent if isinstance(a, dict) and (now_ts - a.get('time', 0)) < 1800]
+                            
+                            existing_urgent_texts = [a.get('text', '') for a in recent_urgent]
+                            if _is_duplicate_content(raw_text, existing_urgent_texts, threshold=0.55):
+                                print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [중복 방지] {ch_name} 유사 속보 이미 발송됨 (30분 이내 중복 스킵): {raw_text[:40]}...")
+                                # 중복 알림은 스킵하고, 정보 풀에만 중복 검사 후 저장
+                                _save_to_intelligence_pool(ch_name, raw_text, matched_dict)
+                            else:
+                                notify_external_channel_alert(
+                                    channel_name=ch_name,
+                                    raw_message=raw_text,
+                                    matched_stock=matched_dict,
+                                    token=token,
+                                    chat_id=chat_id
+                                )
+                                s_desc = matched_dict['name'] if matched_dict else '긴급속보'
+                                print(f"[{time.strftime('%H:%M:%S')}] 🚨 {ch_name} 실시간 긴급 속보 전송: [{p_id}] ({s_desc})")
+                                recent_urgent.append({
+                                    'time': now_ts,
+                                    'text': raw_text[:300],
+                                    'channel': ch_name,
+                                    'stock': matched_dict.get('name') if matched_dict else None
+                                })
+                                briefing_state['recent_urgent_alerts'] = recent_urgent[-20:]
+                                time.sleep(0.5)
                         else:
                             # ── [아침/마감 브리핑 축적 자료실] ──
                             # 그대로 퍼나르지 않고 정보를 모아 아침 및 마감 브리핑의 1급 자료로 활용!

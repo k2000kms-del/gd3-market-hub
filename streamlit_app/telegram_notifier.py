@@ -943,6 +943,45 @@ def fetch_realtime_lead_indicators() -> str:
     )
     return lead_text
 
+def _normalize_text_for_dedup(text: str) -> str:
+    """채널 접두어, 대괄호 태그, URL, 특수문자, 불필요한 공백을 제거하여 핵심 단어 위주로 정규화."""
+    import re
+    t = re.sub(r'https?://\S+', '', text)
+    t = re.sub(r'\[[^\]]*\]', '', t)
+    t = t.replace('#', '')
+    t = re.sub(r'[^\w\s가-힣a-zA-Z0-9]', ' ', t)
+    return re.sub(r'\s+', ' ', t).strip()
+
+def _is_duplicate_content(new_text: str, existing_texts: list, threshold: float = 0.55) -> bool:
+    """새로운 텍스트가 기존 텍스트 목록과 핵심 내용이 중복(유사도 threshold 이상)되는지 정밀 판별."""
+    norm_new = _normalize_text_for_dedup(new_text)
+    if len(norm_new) < 8:
+        return False
+    words_new = set(w for w in norm_new.split() if len(w) >= 2)
+    if not words_new:
+        return False
+    prefix_new = norm_new[:30]
+
+    for ex in existing_texts:
+        if not ex:
+            continue
+        norm_ex = _normalize_text_for_dedup(ex)
+        if not norm_ex:
+            continue
+        if len(norm_new) >= 20 and len(norm_ex) >= 20:
+            if prefix_new in norm_ex or norm_ex[:30] in norm_new:
+                return True
+        words_ex = set(w for w in norm_ex.split() if len(w) >= 2)
+        if not words_ex:
+            continue
+        intersection = len(words_new & words_ex)
+        union = len(words_new | words_ex)
+        if union > 0 and (intersection / union) >= threshold:
+            return True
+        if len(words_new) >= 4 and (intersection / len(words_new)) >= 0.70:
+            return True
+    return False
+
 def fetch_channel_intelligence_briefing() -> str:
     """
     5대 핵심 채널(가치재료연구소, 체슬리AI, 주식단테, 엘리트강사, 트레이딩스핀)의 인텔리전스를
@@ -1039,6 +1078,13 @@ def fetch_channel_intelligence_briefing() -> str:
                         all_texts.append(txt)
         except Exception:
             pass
+
+    # ── [채널 간 중복 텍스트 정밀 필터링] ──
+    unique_texts = []
+    for t in all_texts:
+        if not _is_duplicate_content(t, unique_texts, threshold=0.55):
+            unique_texts.append(t)
+    all_texts = unique_texts
 
     full_corpus = " ".join(all_texts)
 
@@ -2490,7 +2536,33 @@ def notify_external_channel_alert(
     """
     외부 텔레그램 채널(예: elite_instructor)의 단타/속보 메시지를 포착하고
     GD 3.0 실시간 퀀트 및 점핑 양봉 수급 지표와 결합하여 전달하는 통합 브리핑.
+    (최근 30분 이내 동일/유사 속보 중복 발송 자동 차단)
     """
+    import os, json, time
+
+    # ── [30분 이내 동일/유사 속보 중복 발송 차단 2중 방어] ──
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    state_file = os.path.join(base_dir, 'data', 'last_briefing_state.json')
+    if not os.path.exists(state_file):
+        state_file = os.path.join(base_dir, 'streamlit_app', 'data', 'last_briefing_state.json')
+
+    now_ts = time.time()
+    b_state = {}
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r', encoding='utf-8') as f:
+                b_state = json.load(f)
+        except Exception:
+            b_state = {}
+
+    recent_urgent = b_state.get('recent_urgent_alerts', [])
+    recent_urgent = [a for a in recent_urgent if isinstance(a, dict) and (now_ts - a.get('time', 0)) < 1800]
+    existing_texts = [a.get('text', '') for a in recent_urgent]
+
+    if _is_duplicate_content(raw_message, existing_texts, threshold=0.55):
+        print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [중복 방지] {channel_name} 유사 속보 이미 발송됨 (30분 중복 스킵): {raw_message[:40]}...")
+        return False
+
     code = ""
     name = ""
     q_score = None
@@ -2554,11 +2626,29 @@ def notify_external_channel_alert(
         f"⚠️ <i>속보성 급등락에 뇌동매매를 금하며, 원칙 매매를 준수하십시오! 🚀</i>"
     )
     markup = make_stock_action_keyboard(code, name) if code else None
+    sent_ok = False
     if code:
         chart_bytes = _get_stock_chart_safe(code, name, score=q_score, stop_loss=support_p)
         if chart_bytes:
-            return _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup, force_send=True)
-    return _send(token, chat_id, text, reply_markup=markup, force_send=True)
+            sent_ok = _send_photo(token, chat_id, chart_bytes, caption=text, reply_markup=markup, force_send=True)
+    if not sent_ok:
+        sent_ok = _send(token, chat_id, text, reply_markup=markup, force_send=True)
+
+    if sent_ok:
+        recent_urgent.append({
+            'time': now_ts,
+            'text': raw_message[:300],
+            'channel': channel_name,
+            'stock': name if name else None
+        })
+        b_state['recent_urgent_alerts'] = recent_urgent[-20:]
+        try:
+            with open(state_file, 'w', encoding='utf-8') as f:
+                json.dump(b_state, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    return sent_ok
 
 
 
