@@ -49,6 +49,47 @@ def _load_csv_safely(fname: str) -> pd.DataFrame:
             pass
     return pd.DataFrame()
 
+def _save_to_intelligence_pool(ch_name: str, raw_text: str, matched_dict: dict = None):
+    """외부 채널의 유익한 분석글/시황 정보를 모아 아침 및 마감 브리핑의 1급 자료로 활용할 수 있도록 적재."""
+    pool_file = os.path.join(CURRENT_DIR, 'data', 'channel_intelligence_pool.json')
+    try:
+        items = []
+        if os.path.exists(pool_file):
+            try:
+                with open(pool_file, 'r', encoding='utf-8') as pf:
+                    items = json.load(pf)
+            except Exception:
+                items = []
+        if not isinstance(items, list):
+            items = []
+
+        clean_text = raw_text.strip()
+        if len(clean_text) < 15:
+            return
+
+        # 중복 방지 (앞 50자 기준)
+        snippet = clean_text[:50]
+        if any(it.get('snippet') == snippet for it in items):
+            return
+
+        new_entry = {
+            "channel": ch_name,
+            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+            "text": clean_text[:600],
+            "snippet": snippet,
+            "stock": matched_dict.get('name') if matched_dict else None
+        }
+        items.append(new_entry)
+        # 최신 50개 유지
+        if len(items) > 50:
+            items = items[-50:]
+
+        os.makedirs(os.path.dirname(pool_file), exist_ok=True)
+        with open(pool_file, 'w', encoding='utf-8') as pf:
+            json.dump(items, pf, ensure_ascii=False, indent=2)
+    except Exception as ex:
+        pass
+
 def _run_external_channels_scanner(token: str, chat_id: str):
     """외부 텔레그램 채널(엘리트강사/트레이딩스핀)을 60초마다 실시간 감시하여 단타 브리핑 즉시 포착."""
     state_file = os.path.join(CURRENT_DIR, 'data', 'last_briefing_state.json')
@@ -155,8 +196,16 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                         }
                                         break
 
-                        is_important = matched_dict is not None or any(k in raw_text for k in ['단타', 'top pick', '속보', '특징주', '점핑'])
-                        if is_important or len(raw_text) > 30:
+                        # ── [긴급 속보 필터링] ──
+                        # 주가에 즉각적인 파급력을 갖는 초특급 핵심 키워드가 포함된 경우에만 실시간 알림 발송!
+                        URGENT_KEYWORDS = [
+                            '속보', '[속보]', '긴급', '[긴급]', '단독', '[단독]', 
+                            '공습', '피습', '미사일', '폭격', '교전', '비상계엄',
+                            '품절주', '서킷브레이커', '사이드카', '거래정지'
+                        ]
+                        is_urgent = any(k in raw_text for k in URGENT_KEYWORDS)
+
+                        if is_urgent:
                             notify_external_channel_alert(
                                 channel_name=ch_name,
                                 raw_message=raw_text,
@@ -164,9 +213,13 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                 token=token,
                                 chat_id=chat_id
                             )
-                            s_desc = matched_dict['name'] if matched_dict else '일반속보'
-                            print(f"[{time.strftime('%H:%M:%S')}] 📢 {ch_name} 실시간 속보 전송: [{p_id}] ({s_desc})")
+                            s_desc = matched_dict['name'] if matched_dict else '긴급속보'
+                            print(f"[{time.strftime('%H:%M:%S')}] 🚨 {ch_name} 실시간 긴급 속보 전송: [{p_id}] ({s_desc})")
                             time.sleep(0.5)
+                        else:
+                            # ── [아침/마감 브리핑 축적 자료실] ──
+                            # 그대로 퍼나르지 않고 정보를 모아 아침 및 마감 브리핑의 1급 자료로 활용!
+                            _save_to_intelligence_pool(ch_name, raw_text, matched_dict)
 
                         briefing_state[state_key] = p_id
 

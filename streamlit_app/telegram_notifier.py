@@ -1023,6 +1023,23 @@ def fetch_channel_intelligence_briefing() -> str:
     except Exception:
         pass
 
+    # ── [누적된 전문가 채널 풀 결합] ──
+    import os, json
+    pool_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'channel_intelligence_pool.json')
+    if not os.path.exists(pool_file):
+        pool_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'streamlit_app', 'data', 'channel_intelligence_pool.json')
+    if os.path.exists(pool_file):
+        try:
+            with open(pool_file, 'r', encoding='utf-8') as pf:
+                p_items = json.load(pf)
+            if isinstance(p_items, list):
+                for item in p_items[-15:]:
+                    txt = item.get('text', '')
+                    if txt and not any(b in txt for b in bad_keywords):
+                        all_texts.append(txt)
+        except Exception:
+            pass
+
     full_corpus = " ".join(all_texts)
 
     # ── 지능형 핵심 팩트 추출 및 스토리텔링 합성 ──
@@ -2507,29 +2524,34 @@ def notify_external_channel_alert(
             f"└ 💡 시장 전반 영향 및 테마 수급을 실시간 모니터링 중입니다."
         )
 
-    # 2. 메시지 원문 정리 (너무 길면 일부 축약)
-    clean_raw = raw_message.strip()
-    if len(clean_raw) > 700:
-        clean_raw = clean_raw[:700] + "\n...(중략)..."
+    # 2. 메시지 원문 정제 (링크 제거 및 핵심 내용만 정돈)
+    import re
+    clean_raw = re.sub(r'https?://\S+', '', raw_message).strip()
+    # 연속 공백 및 개행 정리
+    clean_raw = re.sub(r'\n{3,}', '\n\n', clean_raw)
+    if len(clean_raw) > 500:
+        clean_raw = clean_raw[:500] + "\n...(중략)..."
 
     ch_map = {
-        'elite_instructor': '엘리트강사 단타',
+        'elite_instructor': '엘리트강사',
         'trading_spin': '트레이딩 스핀',
         'SAJAnote': '사자노트 (SAJAnote)',
-        'no1_dante': '주식단테'
+        'no1_dante': '주식단테',
+        'hana_etf': '하나 Global ETF',
+        'meritz_ship': '메리츠 조선/방산'
     }
     ch_display = ch_map.get(channel_name, channel_name)
 
     text = (
-        f"🚨 <b>[실시간 외부 단타/속보 채널 포착 알림]</b>\n"
+        f"🚨 <b>[GD 3.0 실시간 시장/종목 긴급 속보]</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"📢 <b>출처</b>: <b>{ch_display}</b> (실시간)\n"
-        f"📝 <b>원문 내용</b>:\n"
+        f"📢 <b>속보 출처</b>: <b>{ch_display}</b>\n"
+        f"📌 <b>긴급 속보 요약</b>:\n"
         f"<i>{clean_raw}</i>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{quant_section}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"<i>원칙 매매로 안전하게 수익을 극대화하십시오! 🚀</i>"
+        f"⚠️ <i>속보성 급등락에 뇌동매매를 금하며, 원칙 매매를 준수하십시오! 🚀</i>"
     )
     markup = make_stock_action_keyboard(code, name) if code else None
     if code:
