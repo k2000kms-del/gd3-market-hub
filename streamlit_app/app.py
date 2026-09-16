@@ -723,9 +723,9 @@ def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_sc
     prompt += "\n위 데이터를 종합하여 [1. 현재 상황 요약], [2. 기술적 차트 분석], [3. 매매 대응 전략] 3단계를 한국어로 자세히 작성해줘."
 
     pipeline_steps = [
-        ("gemini-3.7-flash", "high", {"thinkingBudget": 2048}, 10),
-        ("gemini-3.7-flash", "medium", {}, 8),
-        ("gemini-3.6-flash", "standard", {}, 8),
+        ("gemini-2.5-flash", "high", {"thinkingBudget": 1024}, 12),
+        ("gemini-2.5-flash", "standard", {}, 10),
+        ("gemini-2.5-pro", "deep", {}, 15),
     ]
 
     last_err = None
@@ -4317,8 +4317,8 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
 """
 
             models_to_try = [
-                "gemini-3.8-flash",
-                "gemini-3.7-flash"
+                "gemini-2.5-flash",
+                "gemini-2.5-pro"
             ]
 
             headers = {"Content-Type": "application/json"}
@@ -4340,16 +4340,16 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
                 try:
-                    r = requests.post(url, json=payload, headers=headers, timeout=30)
+                    r = requests.post(url, json=payload, headers=headers, timeout=20)
                     if r.status_code == 200:
                         ans = r.json()['candidates'][0]['content']['parts'][0]['text']
-                        st.sidebar.success(f"🤖 {model_name} 투자 어드바이저 답변:")
+                        st.sidebar.success(f"🤖 Gemini Flash 투자 어드바이저 답변:")
                         st.sidebar.markdown(ans)
                         success = True
                         break
                     else:
                         last_err = f"API 에러 (코드 {r.status_code}): {r.text[:200]}"
-                        if "leaked" in r.text.lower() or (r.status_code == 403 and "PERMISSION_DENIED" in r.text):
+                        if "leaked" in r.text.lower() or "api_key_invalid" in r.text.lower():
                             is_leaked = True
                             break
                         if r.status_code in [404, 429, 503]:
