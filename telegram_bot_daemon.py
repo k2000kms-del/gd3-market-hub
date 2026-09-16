@@ -156,17 +156,25 @@ def _save_to_intelligence_pool(ch_name: str, raw_text: str, matched_dict: dict =
         if _is_duplicate_content(clean_text, existing_texts, threshold=0.50):
             return
 
+        now_ts = time.time()
+        # ── [24시간 지난 오래된 시황 자동 정리 (신선도 유지)] ──
+        items = [
+            it for it in items 
+            if isinstance(it, dict) and (now_ts - it.get('created_ts', now_ts)) < 86400
+        ]
+
         new_entry = {
             "channel": ch_name,
             "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+            "created_ts": now_ts,
             "text": clean_text[:600],
             "snippet": clean_text[:50],
             "stock": matched_dict.get('name') if matched_dict else None
         }
         items.append(new_entry)
-        # 최신 50개 유지
-        if len(items) > 50:
-            items = items[-50:]
+        # 최신 40개 유지
+        if len(items) > 40:
+            items = items[-40:]
 
         os.makedirs(os.path.dirname(pool_file), exist_ok=True)
         with open(pool_file, 'w', encoding='utf-8') as pf:
@@ -210,6 +218,7 @@ def _run_external_channels_scanner(token: str, chat_id: str):
 
             for ch_name, ch_url, state_key in _EXTERNAL_CHANNELS:
                 try:
+                    time.sleep(1.0) # 텔레그램 서버 Rate Limit(429) 방지를 위한 젠틀 딜레이
                     import requests as req
                     from bs4 import BeautifulSoup
                     r_t = req.get(ch_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)

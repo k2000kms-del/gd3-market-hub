@@ -177,7 +177,11 @@ def run_poll_loop(token, default_chat_id):
                             except Exception as cmd_err:
                                 print(f"명령 처리 오류: {cmd_err}")
         except Exception as e:
-            print(f"[{datetime.now(KST).strftime('%H:%M:%S')}] 폴링 오류: {e}")
+            err_str = str(e)
+            print(f"[{datetime.now(KST).strftime('%H:%M:%S')}] 폴링 대기/오류: {err_str}")
+            if "409" in err_str:
+                print("💡 [상호 양보] 로컬 PC 데몬이 활성화되어 실시간 응답 중입니다. 클라우드 러너는 역할을 양보하고 정상 조기 종료합니다.")
+                break
             time.sleep(2)
             continue
         time.sleep(LOOP_INTERVAL)
