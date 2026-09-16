@@ -992,12 +992,12 @@ def _get_gemini_api_key() -> str:
                     pass
     return (k or "").strip()
 
-def _call_gemini_raw(prompt: str, api_key: str, timeout: int = 10) -> str:
-    """Gemini Flash REST API를 호출하여 텍스트 요약 생성."""
+def _call_gemini_raw(prompt: str, api_key: str, timeout: int = 25) -> str:
+    """Gemini Flash REST API를 호출하여 텍스트 요약 생성 (3.8 Flash -> 3.7 Flash 순차 호출)."""
     if not api_key:
         return ""
     import requests
-    models = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    models = ["gemini-3.8-flash", "gemini-3.7-flash"]
     headers = {"Content-Type": "application/json"}
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"

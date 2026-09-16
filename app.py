@@ -723,9 +723,8 @@ def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_sc
     prompt += "\n위 데이터를 종합하여 [1. 현재 상황 요약], [2. 기술적 차트 분석], [3. 매매 대응 전략] 3단계를 한국어로 자세히 작성해줘."
 
     pipeline_steps = [
-        ("gemini-3.8-flash", "high", {"thinkingBudget": 1024}, 25),
-        ("gemini-3.7-flash", "high", {"thinkingBudget": 1024}, 25),
-        ("gemini-2.5-flash", "standard", {}, 15),
+        ("gemini-3.8-flash", "high", {"thinkingBudget": 1024}, 30),
+        ("gemini-3.7-flash", "high", {"thinkingBudget": 1024}, 30),
     ]
 
     last_err = None
@@ -4316,11 +4315,10 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
 
 """
 
-            # 대표님 지정 1순위 최신 모델: Gemini 3.8 Flash ➔ 3.7 Flash ➔ 2.5 Flash 스마트 파이프라인
+            # 대표님 지정 최신 모델: Gemini 3.8 Flash ➔ 3.7 Flash 스마트 파이프라인
             models_to_try = [
-                ("gemini-3.8-flash", 25),
-                ("gemini-3.7-flash", 25),
-                ("gemini-2.5-flash", 15)
+                ("gemini-3.8-flash", 30),
+                ("gemini-3.7-flash", 30)
             ]
 
             headers = {"Content-Type": "application/json"}
