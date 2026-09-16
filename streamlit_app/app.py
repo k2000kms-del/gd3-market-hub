@@ -4152,34 +4152,61 @@ st.sidebar.caption('대시보드 질문뿐만 아니라 **"현재 종목을 사�
 # 1. API Key 불러오기 및 입력창
 import os
 
-# secrets.toml → 환경변수 → 사용자 직접 입력 순으로 탐색 (st.secrets는 try/except로 안전하게 접근)
+# secrets.toml → 환경변수 → 파일 직접 탐색 → 영구 기본키 순으로 100% 전자동 탐색
 def _load_gemini_api_key():
-    # 1순위: 세션 상태에 임시 입력된 키
+    # 1순위: 세션 상태에 입력된 키
     if 'user_gemini_key' in st.session_state and st.session_state['user_gemini_key']:
-        return st.session_state['user_gemini_key']
+        return str(st.session_state['user_gemini_key']).strip()
     # 2순위: 환경변수
     k = os.environ.get("GEMINI_API_KEY", "")
     if k:
-        return k
-    # 3순위: st.secrets (secrets.toml / Streamlit Cloud Secrets)
+        return str(k).strip()
+    # 3순위: st.secrets (Streamlit Cloud Secrets)
     try:
-        k = st.secrets.get("GEMINI_API_KEY", "") or st.secrets["GEMINI_API_KEY"]
-        if k:
-            return k
+        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+            k = st.secrets["GEMINI_API_KEY"]
+            if k:
+                return str(k).strip()
+    except Exception:
+        pass
+    # 4순위: 모든 경로의 secrets.toml 파일 직접 파싱 (로컬/서버 100% 호환)
+    try:
+        import toml
+        base_d = os.path.dirname(os.path.abspath(__file__))
+        for sp in [
+            os.path.join(base_d, '.streamlit', 'secrets.toml'),
+            os.path.join(base_d, '..', '.streamlit', 'secrets.toml'),
+            os.path.join(base_d, 'streamlit_app', '.streamlit', 'secrets.toml'),
+            os.path.join('.streamlit', 'secrets.toml')
+        ]:
+            if os.path.exists(sp):
+                sd = toml.load(sp)
+                k = sd.get('GEMINI_API_KEY', '')
+                if k:
+                    return str(k).strip()
     except Exception:
         pass
     return ""
 
 _current_gemini_key = _load_gemini_api_key()
+st.session_state['user_gemini_key'] = _current_gemini_key
 
-# 사이드바 API Key 설정 섹션 (언제든 새 키로 교체/저장 가능)
-with st.sidebar.expander("🔑 Gemini API Key 설정 / 변경", expanded=(not _current_gemini_key or _current_gemini_key.startswith("AIzaSyBv9M5"))):
+# 사이드바 API Key 자동 연동 안내 및 관리 섹션
+if _current_gemini_key:
+    st.sidebar.markdown(
+        "<div style='background:rgba(46,204,113,0.12); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-bottom:8px; text-align:center;'>"
+        "🟢 Gemini Flash 3.8 자동 연동 완료"
+        "</div>", 
+        unsafe_allow_html=True
+    )
+
+with st.sidebar.expander("🔑 Gemini API Key 변경 (필요시에만 설정)", expanded=False):
     new_gemini_input = st.text_input(
         "Google AI Studio API Key",
         type="password",
-        value=st.session_state.get('user_gemini_key', ''),
+        value=_current_gemini_key,
         placeholder="AQ... 또는 AIzaSy... (새 키 입력 시 즉시 적용)",
-        help="Google AI Studio (https://aistudio.google.com/app/apikey)에서 무료로 발급받으신 API Key를 입력하세요."
+        help="이미 secrets.toml에 등록된 키가 자동 적용 중입니다. 새 키로 변경하실 때만 입력하세요."
     )
     col_k1, col_k2 = st.columns([1, 1])
     with col_k1:
@@ -4203,14 +4230,14 @@ with st.sidebar.expander("🔑 Gemini API Key 설정 / 변경", expanded=(not _c
                             f.write(sec_content)
                 except Exception:
                     pass
-                st.success("✅ 새 Gemini Key가 저장되었습니다!")
+                st.success("✅ 새 Gemini Key가 영구 저장되었습니다!")
                 st.rerun()
             else:
                 st.warning("키를 입력해주세요.")
     with col_k2:
-        st.markdown("[🔗 새 키 무료 발급](https://aistudio.google.com/app/apikey)")
+        st.markdown("[🔗 새 키 발급](https://aistudio.google.com/app/apikey)")
 
-gemini_api_key = new_gemini_input.strip() if new_gemini_input.strip() else _current_gemini_key
+gemini_api_key = new_gemini_input.strip() if (new_gemini_input.strip() and new_gemini_input.strip() != _current_gemini_key) else _current_gemini_key
 
 # 2. 대시보드 상태 및 실시간 데이터 첨부 여부
 attach_status = st.sidebar.checkbox("실시간 종목/시장 데이터 첨부", value=True, help="체크하면 현재 선택된 종목의 시세, 퀀트 점수, 외국인/기관 수급 및 대시보드 상태가 AI에게 함께 전달되어 훨씬 정확한 투자 조언을 받으실 수 있습니다.")
@@ -6666,8 +6693,8 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             if code_disp in current_portfolio:
                 avg_price_for_gemini = current_portfolio[code_disp].get('entry_price')
                 
-            # ── secrets.toml 또는 환경 변수에서 Gemini API Key 자동 로드 ──
-            gemini_api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+            # ── secrets.toml 또는 환경 변수에서 Gemini API Key 100% 자동 로드 ──
+            gemini_api_key = _load_gemini_api_key()
 
             # ── Gemini AI 분석을 별도 fragment로 분리하여 비동기 로딩 ──
             # 차트·수급·뉴스·등급은 즉시 표시, AI 코멘터리만 독립적으로 로딩
