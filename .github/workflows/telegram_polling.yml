@@ -1,0 +1,59 @@
+name: Telegram Bot 24H Polling (Cloud Daemon)
+
+on:
+  schedule:
+    - cron: '0,5,10,15,20,25,30,35,40,45,50,55 0-6 * * 1-5'
+    - cron: '0,5,10,15,20,25,30,35,40,45,50,55 22-23 * * 0-4'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason (optional)'
+        required: false
+        default: 'manual test'
+
+jobs:
+  telegram-poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas numpy toml
+
+      - name: Run Telegram Polling (160s loop)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          KIS_APP_KEY:        ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET:     ${{ secrets.KIS_APP_SECRET }}
+          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY:  ${{ secrets.SUPABASE_ANON_KEY }}
+        run: python telegram_poll_once.py
+
+      - name: Save last_update_id (commit and push)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git add data/last_update_id.json streamlit_app/data/last_update_id.json || true
+          git diff --staged --quiet || git commit -m "chore: telegram poll state update"
+          git pull --rebase origin main || true
+          git push origin main || true
