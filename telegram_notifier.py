@@ -943,6 +943,83 @@ def fetch_realtime_lead_indicators() -> str:
     )
     return lead_text
 
+def _clean_channel_text(text: str) -> str:
+    """채널 원문에서 링크, 불필요한 공백, 줄바꿈, 광고성 문구를 제거하여 핵심 내용만 정제."""
+    if not text:
+        return ""
+    import re
+    # 1. URL 제거
+    t = re.sub(r'https?://\S+', '', text)
+    # 2. 텔레그램 대괄호 태그 정규화 ([속보], [단독] 등은 남기되 형식 정돈)
+    t = re.sub(r'#([가-힣a-zA-Z0-9]+)', r'\1', t) # 해시태그 기호만 제거
+    # 3. 3줄 이상의 과도한 연속 줄바꿈 및 특수기호 공백 압축
+    t = re.sub(r'\n{3,}', '\n\n', t)
+    t = re.sub(r'[ \t]+', ' ', t)
+    # 4. 채널 홍보/인사말/동영상 유도 문구 필터링
+    junk_patterns = [
+        r'채널에 들어오셨습니다.*', r'무료 입장.*', r'구독과 좋아요.*',
+        r'오늘의 영상이 지금 막 공개되었습니다.*', r'유튜브에서 확인.*',
+        r'좋은 아침입니다.*', r'굿나잇.*', r'퇴근하겠습니다.*'
+    ]
+    for jp in junk_patterns:
+        t = re.sub(jp, '', t, flags=re.IGNORECASE)
+    t = t.strip()
+    # 5. 정제 후 순수 본문 길이가 20자 미만이면 의미 없는 단편/공백으로 간주
+    hangul_or_eng = len(re.findall(r'[가-힣a-zA-Z0-9]', t))
+    if hangul_or_eng < 15:
+        return ""
+    return t
+
+def _get_gemini_api_key() -> str:
+    """Gemini API Key를 secrets.toml 또는 환경변수에서 안전하게 조회."""
+    import os
+    k = os.environ.get("GEMINI_API_KEY", "")
+    if not k:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        for p in [
+            os.path.join(base_dir, '.streamlit', 'secrets.toml'),
+            os.path.join(base_dir, 'streamlit_app', '.streamlit', 'secrets.toml'),
+            os.path.join(os.path.dirname(base_dir), '.streamlit', 'secrets.toml')
+        ]:
+            if os.path.exists(p):
+                try:
+                    import toml
+                    s = toml.load(p)
+                    k = s.get('GEMINI_API_KEY', '')
+                    if k:
+                        break
+                except Exception:
+                    pass
+    return (k or "").strip()
+
+def _call_gemini_raw(prompt: str, api_key: str, timeout: int = 10) -> str:
+    """Gemini Flash REST API를 호출하여 텍스트 요약 생성."""
+    if not api_key:
+        return ""
+    import requests
+    models = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    headers = {"Content-Type": "application/json"}
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2048}
+        }
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+            if r.status_code == 200:
+                res_json = r.json()
+                cands = res_json.get('candidates', [])
+                if cands:
+                    parts = cands[0].get('content', {}).get('parts', [])
+                    if parts:
+                        text_res = parts[0].get('text', '').strip()
+                        if len(text_res) >= 30:
+                            return text_res
+        except Exception:
+            continue
+    return ""
+
 def _normalize_text_for_dedup(text: str) -> str:
     """채널 접두어, 대괄호 태그, URL, 특수문자, 불필요한 공백을 제거하여 핵심 단어 위주로 정규화."""
     import re
@@ -1006,37 +1083,38 @@ def fetch_channel_intelligence_briefing() -> str:
 
     all_texts = []
 
-    # ── [타임아웃 안전망] 5개 채널을 병렬(ThreadPool)로 최대 1.5초만 시도 ──
-    # 지연되거나 차단되어도 08:00 프리마켓 이전 발송을 100% 보장하기 위함
+    # ── [타임아웃 안전망] 채널들을 병렬(ThreadPool)로 최대 3.0초 시도 ──
     def _fetch_sub_channel(ch_type, url):
         texts = []
         try:
-            r = requests.get(url, headers=headers, timeout=1.5)
+            r = requests.get(url, headers=headers, timeout=3.0)
             if r.status_code == 200:
                 soup = BeautifulSoup(r.text, 'html.parser')
                 if ch_type == 'danteodong':
                     for it in soup.find_all('li', class_='channel_content_item')[:6]:
                         desc_el = it.find('p', class_='channel_content_desc')
                         if desc_el:
-                            t = re.sub(r'https?://\S+', '', desc_el.get_text().strip())
-                            if not any(b in t for b in bad_keywords):
-                                texts.append(t)
+                            t = desc_el.get_text().strip()
+                            t_clean = _clean_channel_text(t)
+                            if len(t_clean) >= 25 and not any(b in t_clean for b in bad_keywords):
+                                texts.append(t_clean)
                 elif ch_type == 'chesley':
                     for it in soup.find_all('li', class_='channel_content_item')[:6]:
                         title_el = it.find('strong', class_='channel_content_title')
                         desc_el = it.find('p', class_='channel_content_desc')
                         title = title_el.get_text().replace('NEW', '').strip() if title_el else ""
                         desc = desc_el.get_text().strip() if desc_el else ""
-                        t = re.sub(r'https?://\S+', '', f"{title} {desc}").strip()
-                        if not any(b in t for b in bad_keywords):
-                            texts.append(t)
+                        t_clean = _clean_channel_text(f"{title} {desc}")
+                        if len(t_clean) >= 25 and not any(b in t_clean for b in bad_keywords):
+                            texts.append(t_clean)
                 elif ch_type == 'telegram':
-                    for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-25:]):
+                    for m in reversed(soup.find_all('div', class_='tgme_widget_message')[-20:]):
                         txt_el = m.find('div', class_='tgme_widget_message_text')
                         if txt_el:
-                            t = re.sub(r'https?://\S+', '', txt_el.get_text('\n').strip())
-                            if not any(b in t for b in bad_keywords):
-                                texts.append(t)
+                            t_raw = txt_el.get_text('\n').strip()
+                            t_clean = _clean_channel_text(t_raw)
+                            if len(t_clean) >= 25 and not any(b in t_clean for b in bad_keywords):
+                                texts.append(t_clean)
         except Exception:
             pass
         return texts
@@ -1048,15 +1126,14 @@ def fetch_channel_intelligence_briefing() -> str:
         ('telegram',   'https://t.me/s/elite_instructor'),
         ('telegram',   'https://t.me/s/trading_spin'),
         ('telegram',   'https://t.me/s/SAJAnote'),
-        # ── 신규 추가 채널 (2026-09-16) ─────────────────────────
-        ('telegram',   'https://t.me/s/globaletfi'),          # 하나 Global ETF 박승진
-        ('telegram',   'https://t.me/s/kiwoom_semibat'),      # 키움 반도체/이차전지 PRIME
-        ('telegram',   'https://t.me/s/gaoshoukorea'),        # 재야의 고수들
-        ('telegram',   'https://t.me/s/defence_24'),          # 우주방산AI로봇 아카이브
-        ('telegram',   'https://t.me/s/hanaglobalbottomup'),  # 하나증권 해외주식분석
-        ('telegram',   'https://t.me/s/HS_academy'),          # HS아카데미 이효석
-        ('telegram',   'https://t.me/s/kimcharger'),          # 김찰저의 관심과 생각
-        ('telegram',   'https://t.me/s/meritzbae'),           # 메리츠 조선/방산 베기연
+        ('telegram',   'https://t.me/s/globaletfi'),
+        ('telegram',   'https://t.me/s/kiwoom_semibat'),
+        ('telegram',   'https://t.me/s/gaoshoukorea'),
+        ('telegram',   'https://t.me/s/defence_24'),
+        ('telegram',   'https://t.me/s/hanaglobalbottomup'),
+        ('telegram',   'https://t.me/s/HS_academy'),
+        ('telegram',   'https://t.me/s/kimcharger'),
+        ('telegram',   'https://t.me/s/meritzbae'),
     ]
 
     try:
@@ -1064,7 +1141,7 @@ def fetch_channel_intelligence_briefing() -> str:
             futures = [executor.submit(_fetch_sub_channel, ch_type, url) for ch_type, url in channel_tasks]
             for fut in futures:
                 try:
-                    res_texts = fut.result(timeout=1.8)
+                    res_texts = fut.result(timeout=3.5)
                     all_texts.extend(res_texts)
                 except Exception:
                     pass
@@ -1081,59 +1158,85 @@ def fetch_channel_intelligence_briefing() -> str:
             with open(pool_file, 'r', encoding='utf-8') as pf:
                 p_items = json.load(pf)
             if isinstance(p_items, list):
-                for item in p_items[-15:]:
+                for item in p_items[-20:]:
                     txt = item.get('text', '')
-                    if txt and not any(b in txt for b in bad_keywords):
-                        all_texts.append(txt)
+                    c_txt = _clean_channel_text(txt)
+                    if len(c_txt) >= 25 and not any(b in c_txt for b in bad_keywords):
+                        all_texts.append(c_txt)
         except Exception:
             pass
 
-    # ── [채널 간 중복 텍스트 정밀 필터링] ──
+    # ── [채널 간 중복 텍스트 정밀 필터링 (유사도 50% 이상 완전 단일화)] ──
     unique_texts = []
     for t in all_texts:
-        if not _is_duplicate_content(t, unique_texts, threshold=0.55):
+        if not _is_duplicate_content(t, unique_texts, threshold=0.50):
             unique_texts.append(t)
     all_texts = unique_texts
 
-    full_corpus = " ".join(all_texts)
+    # ── [Gemini AI 실시간 지능형 통합 요약 시도] ──
+    # 11개 채널의 원문을 한 데 모아, 중복 없이 3대 핵심 영역으로 단 하나의 리포트로 합성
+    gemini_key = _get_gemini_api_key()
+    if gemini_key and len(all_texts) >= 3:
+        try:
+            sample_corpus = "\n\n".join([f"- {t[:300]}" for t in all_texts[:15]])
+            prompt = (
+                "당신은 대한민국 최고 수준의 퀀트 헤지펀드 시황 수석 분석관입니다.\n"
+                "아래는 오늘 국내외 11개 핵심 주식/경제 텔레그램 채널에서 수집된 실시간 시장 코멘트 원문들입니다.\n"
+                "여러 채널에 흩어진 중복 내용(같은 기사/이슈)을 철저히 하나로 단일화하고, "
+                "공백이나 무의미한 인사말을 완전히 배제한 뒤, 아래 형식에 맞춰 깊이 있고 정갈한 한국어로 완성형 브리핑을 작성하세요.\n\n"
+                "[작성 형식]\n"
+                "├ 🌐 <b>글로벌 매크로 & 뉴욕 증시 맥락</b>\n"
+                "└ (미국 증시, 연준 금리/고용, 환율, 반도체 지수 등 핵심 거시 흐름 2~3문장 요약)\n\n"
+                "├ 🤖 <b>주도 테마 & 핵심 수주·섹터</b>\n"
+                "└ (반도체/AI/방산/원전/2차전지 등 당일 스마트머니가 집중되는 주도 섹터 및 구체적 이슈 2~3문장 요약)\n\n"
+                "├ 🎯 <b>오늘 장 핵심 실전 대응 작전</b>\n"
+                "└ (시초가 갭상승 대응, 지지선 확인, 분할 매수 타이밍 등 실전 트레이딩 원칙 2문장 요약)\n\n"
+                "[수집된 채널 원문]:\n"
+                f"{sample_corpus}\n\n"
+                "※ 다른 서론이나 결론 없이 오직 위 [작성 형식]의 내용만 출력하세요."
+            )
+            ai_summary = _call_gemini_raw(prompt, gemini_key)
+            if ai_summary and "글로벌 매크로" in ai_summary:
+                return ai_summary.strip()
+        except Exception as _ai_ex:
+            print(f"DEBUG: Gemini channel summary fallback: {_ai_ex}")
 
-    # ── 지능형 핵심 팩트 추출 및 스토리텔링 합성 ──
-    # 1) 글로벌 매크로 & 뉴욕 증시 맥락
-    macro_story = (
-        "미국 8월 비농업 고용 지표가 16.2만명(예상치 5.5만명)으로 큰 폭 상회하며 경기 침체 우려를 말끔히 해소했습니다. "
-        "연준의 금리 인하 속도 조절 경계감으로 뉴욕 3대 지수는 소폭 숨고르기(-0.3~-0.5%)를 보였으나, "
-        "AI 수요에 힘입은 필라델피아 반도체 지수(+0.67%)와 SK하이닉스 ADR(+8% 급등)은 견고한 차별화 강세를 나타냈습니다."
+    # ── [Fallback: 규칙 기반 지능형 핵심 팩트 추출 및 합성] ──
+    macro_snippets = []
+    theme_snippets = []
+    strategy_snippets = []
+
+    for t in all_texts:
+        if any(w in t for w in ['미국', '뉴욕', '나스닥', '연준', '금리', '환율', '고용', 'CPI', '국채', 'S&P']):
+            if len(macro_snippets) < 2:
+                macro_snippets.append(t[:150].strip())
+        elif any(w in t for w in ['반도체', 'AI', '로봇', '방산', '원전', '수주', '삼성', '하이닉스', '2차전지', '현대']):
+            if len(theme_snippets) < 2:
+                theme_snippets.append(t[:150].strip())
+        elif any(w in t for w in ['대응', '전략', '지지선', '매수', '비중', '조정', '상승', '하락']):
+            if len(strategy_snippets) < 2:
+                strategy_snippets.append(t[:150].strip())
+
+    macro_text = " ".join(macro_snippets) if macro_snippets else (
+        "미국 고용 지표 및 주요 경제 지표가 견조한 흐름을 유지하며 경기 연착륙 기대감이 지속되는 가운데, "
+        "글로벌 빅테크 및 AI 반도체 밸류체인을 중심으로 한 차별화 장세가 이어지고 있습니다."
     )
-
-    # 2) 국내 대형 수주 & 실물 투자 모멘텀
-    material_story = (
-        "이러한 글로벌 반도체 훈풍과 더불어 국내 증시 역시 현대제철의 미국 제철소 착공, 삼성물산의 스웨덴 SMR(소형원전) 수주, "
-        "한화의 KAI 지분 확대 등 원전·방산·철강 제조업의 굵직한 대형 투자·수주 호재가 잇따르며 코스피의 강력한 하방 지지력을 형성하고 있습니다."
+    theme_text = " ".join(theme_snippets) if theme_snippets else (
+        "국내 증시는 글로벌 반도체 훈풍과 더불어 방산, 원전, AI 로봇 등 실물 수주 모멘텀이 뒷받침되는 "
+        "핵심 제조업 주도주를 중심으로 외국인과 기관의 선별적 수급 유입이 집중되고 있습니다."
     )
-
-    # 3) 주도 테마 & 반도체 소부장 압축
-    theme_story = (
-        "이에 따라 지수 반등 국면에서 가장 탄력적으로 치고 나갈 주도주로는, 글로벌 투자은행(노무라)이 '극단적 저평가'로 지목한 "
-        "삼성전자·SK하이닉스와 함께, 최근 조정장에서도 가격을 단단히 지켜낸 핵심 반도체 소부장(비에이치 등)이 최우선으로 압축되고 있습니다. "
-        "아울러 테슬라 사이버캡(무인차), 피지컬 AI/로봇, 스페이스X 우주항공 테마로 스마트머니의 순환매가 집중되고 있습니다."
-    )
-
-    # 4) 오늘 장 핵심 실전 대응 작전
-    strategy_story = (
-        "따라서 오늘의 실전 매매는 호재에 흥분하기보다 철저한 타이밍 싸움입니다. "
-        "장초반 지수가 갭상승으로 출발할 경우 단기 저항과 차익 실현 매물이 출회되며 윗꼬리를 달 수 있으므로 무리한 시초가 추격매수는 절대 자제해야 합니다. "
-        "대신 09:30 이후 시장 진정세를 확인하고, 외국인·기관 스마트머니가 양매수로 집중되는 위 주도 섹터(반도체 소부장/SMR/피지컬AI)의 눌림목을 선별 공략하는 것이 최선의 필승 전략입니다."
+    strat_text = " ".join(strategy_snippets) if strategy_snippets else (
+        "장초반 뇌동 추격매수를 엄격히 자제하고, 수급이 견조하게 지지되는 핵심 주도 섹터의 "
+        "눌림목 지지 가격을 확인한 후 분할 매수로 대응하는 원칙 매매가 유효합니다."
     )
 
     result = (
         f"├ 🌐 <b>글로벌 매크로 & 뉴욕 증시 맥락</b>\n"
-        f"└ {macro_story}\n\n"
-        f"├ 🏗 <b>국내 대형 수주 & 실물 투자 모멘텀</b>\n"
-        f"└ {material_story}\n\n"
-        f"├ 🤖 <b>주도 테마 & 반도체 소부장 압축</b>\n"
-        f"└ {theme_story}\n\n"
+        f"└ {macro_text}\n\n"
+        f"├ 🤖 <b>주도 테마 & 핵심 수주·섹터</b>\n"
+        f"└ {theme_text}\n\n"
         f"├ 🎯 <b>오늘 장 핵심 실전 대응 작전</b>\n"
-        f"└ {strategy_story}"
+        f"└ {strat_text}"
     )
 
     return result
@@ -2459,7 +2562,20 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
         )
         return _send(token, chat_id, reply, force_send=True)
 
-    # 4. 도움말 ('도움말', 'help', 'start', '시작', '안내')
+    # 4. 11개 채널 통합 인텔리전스 ('채널', '인텔리전스', '시황', '뉴스')
+    elif any(k in clean_cmd for k in ['채널', '인텔리전스', 'channel', 'intel', '통합시황']) or clean_cmd == 'c':
+        intel_report = fetch_channel_intelligence_briefing()
+        reply = (
+            f"🌐 <b>[GD 3.0 11개 주식채널 실시간 통합 인텔리전스]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>💡 하나·키움·재야의고수·사자노트·방산·이효석 등 11개 채널 핵심 시황을 중복 없이 단 하나로 집대성했습니다.</i>\n\n"
+            f"{intel_report}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>⏱️ 실시간 채널 풀 기반 자동 분석 완료</i>"
+        )
+        return _send(token, chat_id, reply, force_send=True)
+
+    # 5. 도움말 ('도움말', 'help', 'start', '시작', '안내')
     elif any(k in clean_cmd for k in ['도움말', 'help', 'start', '시작', '안내']) or clean_cmd == 'h':
         reply = (
             f"🤖 <b>[GD 3.0 텔레그램 스마트 비서]</b>\n"
@@ -2468,13 +2584,14 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
             f"• <b>[💼 내 포트폴리오]</b> : 보유종목 실시간 손익\n"
             f"• <b>[🔥 퀀트 TOP3 추천]</b> : 80점 이상 유망 종목\n"
             f"• <b>[📊 시장 에너지 진단]</b> : KOSPI 국면 & 권장 비중\n"
+            f"• <b>[🌐 11개 채널 통합 시황]</b> : <b>/채널</b> (중복 없는 단일 종합 리포트)\n"
             f"• <b>[❓ 명령어 도움말]</b> : 비서 메뉴얼\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"<i>💬 궁금하신 종목 질문(예: '삼성전자', '로보티즈')을 그냥 입력하셔도 실시간 진단 카드와 차트가 즉시 뜹니다!</i>"
+            f"<i>💬 궁금하신 종목명(예: '삼성전자', '로보티즈')을 그냥 입력하셔도 실시간 진단 카드와 차트가 즉시 뜹니다!</i>"
         )
         return _send(token, chat_id, reply, force_send=True)
 
-    # 5. 종목 실시간 진단 콜백 ('ai_005930' 또는 'ai_diag_005930' 등)
+    # 6. 종목 실시간 진단 콜백 ('ai_005930' 또는 'ai_diag_005930' 등)
     elif clean_cmd.startswith('ai_'):
         target_code = clean_cmd.replace('ai_', '').replace('diag_', '').strip().zfill(6)
         return _reply_stock_diagnosis(token, chat_id, target_code, context_fn)
@@ -2605,13 +2722,34 @@ def notify_external_channel_alert(
             f"└ 💡 시장 전반 영향 및 테마 수급을 실시간 모니터링 중입니다."
         )
 
-    # 2. 메시지 원문 정제 (링크 제거 및 핵심 내용만 정돈)
-    import re
-    clean_raw = re.sub(r'https?://\S+', '', raw_message).strip()
-    # 연속 공백 및 개행 정리
-    clean_raw = re.sub(r'\n{3,}', '\n\n', clean_raw)
-    if len(clean_raw) > 500:
-        clean_raw = clean_raw[:500] + "\n...(중략)..."
+    # 2. 메시지 원문 정제 (링크, 광고, 공백 완벽 제거)
+    clean_raw = _clean_channel_text(raw_message)
+    if len(clean_raw) < 20:
+        # 링크만 있거나 순수 텍스트가 20자 미만인 빈 껍데기 메시지는 절대 발송 금지
+        return False
+
+    # 3. 속보 본문 2~3줄 명료 요약 (Gemini 지원 또는 단정한 텍스트 압축)
+    summary_text = ""
+    gemini_k = _get_gemini_api_key()
+    if gemini_k and len(clean_raw) >= 40:
+        try:
+            p_sum = (
+                f"다음 텔레그램 속보 내용에서 불필요한 군더더기, 링크, 이모지를 빼고 "
+                f"투자자가 즉시 판단할 수 있도록 핵심 사실만 1~2문장으로 한국어로 요약해줘:\n{clean_raw[:400]}"
+            )
+            ai_s = _call_gemini_raw(p_sum, gemini_k, timeout=4)
+            if ai_s and len(ai_s) >= 15:
+                summary_text = ai_s.strip()
+        except Exception:
+            pass
+
+    if not summary_text:
+        # 단정하게 줄바꿈 압축 후 최대 250자 발췌
+        import re
+        lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 5]
+        summary_text = "\n".join(lines[:3])
+        if len(summary_text) > 250:
+            summary_text = summary_text[:250] + "..."
 
     ch_map = {
         'elite_instructor':   '엘리트강사',
@@ -2636,8 +2774,8 @@ def notify_external_channel_alert(
         f"🚨 <b>[GD 3.0 실시간 시장/종목 긴급 속보]</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📢 <b>속보 출처</b>: <b>{ch_display}</b>\n"
-        f"📌 <b>긴급 속보 요약</b>:\n"
-        f"<i>{clean_raw}</i>\n"
+        f"📌 <b>핵심 사실 요약</b>:\n"
+        f"<i>{summary_text}</i>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{quant_section}\n"
         f"━━━━━━━━━━━━━━━━━━\n"

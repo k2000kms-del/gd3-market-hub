@@ -56,18 +56,40 @@ def _load_csv_safely(fname: str) -> pd.DataFrame:
             pass
     return pd.DataFrame()
 
-def _normalize_text_for_dedup(text: str) -> str:
-    """채널 접두어, 대괄호 태그, URL, 특수문자, 불필요한 공백을 제거하여 핵심 단어 위주로 정규화."""
+def _clean_channel_text(text: str) -> str:
+    """채널 원문에서 링크, 불필요한 공백, 줄바꿈, 광고성 문구를 제거하여 핵심 내용만 정제."""
+    if not text:
+        return ""
     import re
     # 1. URL 제거
     t = re.sub(r'https?://\S+', '', text)
-    # 2. 대괄호 태그 제거 ([속보], [단독], [엘리트], [스핀] 등)
+    # 2. 해시태그 기호만 제거
+    t = re.sub(r'#([가-힣a-zA-Z0-9]+)', r'\1', t)
+    # 3. 3줄 이상의 과도한 연속 줄바꿈 및 공백 압축
+    t = re.sub(r'\n{3,}', '\n\n', t)
+    t = re.sub(r'[ \t]+', ' ', t)
+    # 4. 채널 홍보/인사말/동영상 유도 문구 필터링
+    junk_patterns = [
+        r'채널에 들어오셨습니다.*', r'무료 입장.*', r'구독과 좋아요.*',
+        r'오늘의 영상이 지금 막 공개되었습니다.*', r'유튜브에서 확인.*',
+        r'좋은 아침입니다.*', r'굿나잇.*', r'퇴근하겠습니다.*'
+    ]
+    for jp in junk_patterns:
+        t = re.sub(jp, '', t, flags=re.IGNORECASE)
+    t = t.strip()
+    # 5. 정제 후 유효 글자 수가 15자 미만이면 무의미한 껍데기로 간주
+    hangul_or_eng = len(re.findall(r'[가-힣a-zA-Z0-9]', t))
+    if hangul_or_eng < 15:
+        return ""
+    return t
+
+def _normalize_text_for_dedup(text: str) -> str:
+    """채널 접두어, 대괄호 태그, URL, 특수문자, 불필요한 공백을 제거하여 핵심 단어 위주로 정규화."""
+    import re
+    t = re.sub(r'https?://\S+', '', text)
     t = re.sub(r'\[[^\]]*\]', '', t)
-    # 3. 해시태그 기호 제거 (#제주반도체 -> 제주반도체)
     t = t.replace('#', '')
-    # 4. 특수문자 및 기호 제거
     t = re.sub(r'[^\w\s가-힣a-zA-Z0-9]', ' ', t)
-    # 5. 연속 공백 압축
     return re.sub(r'\s+', ' ', t).strip()
 
 def _is_duplicate_content(new_text: str, existing_texts: list, threshold: float = 0.55) -> bool:
@@ -112,6 +134,11 @@ def _is_duplicate_content(new_text: str, existing_texts: list, threshold: float 
 
 def _save_to_intelligence_pool(ch_name: str, raw_text: str, matched_dict: dict = None):
     """외부 채널의 유익한 분석글/시황 정보를 모아 아침 및 마감 브리핑의 1급 자료로 활용할 수 있도록 적재 (중복 완벽 배제)."""
+    clean_text = _clean_channel_text(raw_text)
+    if len(clean_text) < 25:
+        # 빈 껍데기, 링크만 있는 글, 단순 인사말 등은 저장하지 않음
+        return
+
     pool_file = os.path.join(CURRENT_DIR, 'data', 'channel_intelligence_pool.json')
     try:
         items = []
@@ -124,13 +151,9 @@ def _save_to_intelligence_pool(ch_name: str, raw_text: str, matched_dict: dict =
         if not isinstance(items, list):
             items = []
 
-        clean_text = raw_text.strip()
-        if len(clean_text) < 15:
-            return
-
         # ── [중복 방지 (고도화: 접두어 정규화 및 단어 유사도 기반 100% 중복 차단)] ──
         existing_texts = [it.get('text', '') for it in items if isinstance(it, dict)]
-        if _is_duplicate_content(clean_text, existing_texts):
+        if _is_duplicate_content(clean_text, existing_texts, threshold=0.50):
             return
 
         new_entry = {
@@ -201,7 +224,10 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                     saved_p_id = briefing_state.get(state_key, '')
                     new_msgs = []
                     if not saved_p_id:
-                        new_msgs = [msgs[-1]]
+                        # ── [최초 감시 등록 시] 과거 글 알림 발송 절대 금지 ──
+                        # 현재 시점 최신 글의 ID만 기록하고 바로 다음 채널로 이동
+                        briefing_state[state_key] = msgs[-1].get('data-post', '')
+                        continue
                     else:
                         found_saved = False
                         for m in msgs:
@@ -212,7 +238,9 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                             if found_saved:
                                 new_msgs.append(m)
                         if not found_saved:
-                            new_msgs = msgs[-3:]
+                            # 저장된 ID를 못 찾은 경우(너무 많은 글이 지난 경우)에도 과거 글 난사를 방지하기 위해 최신 ID만 갱신
+                            briefing_state[state_key] = msgs[-1].get('data-post', '')
+                            continue
 
                     if not new_msgs:
                         continue
@@ -222,11 +250,14 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                         text_el = m_item.find('div', class_='tgme_widget_message_text')
                         raw_text = text_el.get_text('\n').strip() if text_el else ''
 
-                        if not raw_text or len(raw_text) <= 5:
+                        # 1. 텍스트 정제 (링크, 공백, 줄바꿈, 인사말 제거)
+                        clean_text = _clean_channel_text(raw_text)
+                        if len(clean_text) < 25:
+                            # 순수 유효 본문이 25자 미만이면 알림도 풀 저장도 하지 않고 스킵
                             briefing_state[state_key] = p_id
                             continue
 
-                        # 해시태그(#종목명) 및 종목 매칭
+                        # 2. 해시태그(#종목명) 및 정밀 종목 매칭
                         matched_dict = None
                         if not df_m_srch.empty and 'Name' in df_m_srch.columns:
                             import re
@@ -244,46 +275,26 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                         'price': s_cp,
                                         'change_ratio': s_cr,
                                         'quant_score': 85.0,
-                                        'jumping_status': '엘리트강사 단타 브리핑 포착 🟢',
+                                        'jumping_status': '외부 채널 핵심 종목 포착 🟢',
                                         'support_price': s_cp * 0.97
                                     }
                                     break
 
-                            if not matched_dict:
-                                stopwords = {'오늘', '지금', '시장', '코스피', '코스닥', '지수', '상승', '하락', '기술', '전망', '분석', '대응', '전략', '미국', '한국', '영상', '확인', '진행', '브리핑', '종목', '단타'}
-                                for _, m_row in df_m_srch.iterrows():
-                                    s_nm = str(m_row.get('Name', ''))
-                                    if len(s_nm) >= 2 and s_nm not in stopwords and s_nm in raw_text:
-                                        s_cd = str(m_row.get('Code', '')).zfill(6)
-                                        s_cp = float(m_row.get('Close', 0))
-                                        s_cr = float(m_row.get('ChagesRatio', 0))
-                                        matched_dict = {
-                                            'code': s_cd,
-                                            'name': s_nm,
-                                            'price': s_cp,
-                                            'change_ratio': s_cr,
-                                            'quant_score': 85.0,
-                                            'jumping_status': '외부 채널 단타/속보 포착',
-                                            'support_price': s_cp * 0.97
-                                        }
-                                        break
-
-                        # ── [긴급 속보 필터링 및 비증시 가십 제외] ──
-                        # 주가에 즉각적인 파급력을 갖는 초특급 핵심 키워드가 포함된 경우에만 실시간 알림 발송!
+                        # ── [초특급 긴급 속보만 실시간 알림 발송] ──
+                        # 단순 종목 언급이나 일반 시황은 절대 개별 알림을 보내지 않고,
+                        # 오직 시장 전체에 즉각적 충격을 주는 1급 재난/지정학/제도적 쇼크만 실시간 알림 허용!
                         URGENT_KEYWORDS = [
-                            '속보', '[속보]', '긴급', '[긴급]', '단독', '[단독]', 
-                            '공습', '피습', '미사일', '폭격', '교전', '비상계엄',
-                            '품절주', '서킷브레이커', '사이드카', '거래정지'
+                            '[속보]', '[긴급]', '[단독]', '비상계엄', '계엄령',
+                            '서킷브레이커', '사이드카', '거래정지', '미사일 발사', '공습경보', '전면전'
                         ]
-                        # 비증시/사회/가십성 키워드 (실시간 알림에서 제외)
                         EXCLUDE_KEYWORDS = [
                             '교통사고', '음주운전', '마약', '열애', '이혼', '청문회', 
                             '특검', '국회의원', '여당', '야당', '날씨', '단독포토', '포토', 
-                            '연예', '아이돌', '케이팝', '학폭', '사망사고'
+                            '연예', '아이돌', '케이팝', '학폭', '사망사고', '이벤트', '구독'
                         ]
 
-                        has_urgent_kw = any(k in raw_text for k in URGENT_KEYWORDS)
-                        has_exclude_kw = any(k in raw_text for k in EXCLUDE_KEYWORDS)
+                        has_urgent_kw = any(k in clean_text for k in URGENT_KEYWORDS)
+                        has_exclude_kw = any(k in clean_text for k in EXCLUDE_KEYWORDS)
                         
                         is_urgent = has_urgent_kw and not has_exclude_kw
 
@@ -291,36 +302,35 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                             # ── [최근 30분 동일/유사 속보 중복 발송 방지 (Dedup)] ──
                             now_ts = time.time()
                             recent_urgent = briefing_state.get('recent_urgent_alerts', [])
-                            # 30분(1800초) 지난 기록 정리
                             recent_urgent = [a for a in recent_urgent if isinstance(a, dict) and (now_ts - a.get('time', 0)) < 1800]
                             
                             existing_urgent_texts = [a.get('text', '') for a in recent_urgent]
-                            if _is_duplicate_content(raw_text, existing_urgent_texts, threshold=0.55):
-                                print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [중복 방지] {ch_name} 유사 속보 이미 발송됨 (30분 이내 중복 스킵): {raw_text[:40]}...")
-                                # 중복 알림은 스킵하고, 정보 풀에만 중복 검사 후 저장
-                                _save_to_intelligence_pool(ch_name, raw_text, matched_dict)
+                            if _is_duplicate_content(clean_text, existing_urgent_texts, threshold=0.50):
+                                print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [중복 방지] {ch_name} 유사 속보 이미 발송됨 (30분 이내 중복 스킵): {clean_text[:40]}...")
+                                _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
                             else:
                                 notify_external_channel_alert(
                                     channel_name=ch_name,
-                                    raw_message=raw_text,
+                                    raw_message=clean_text,
                                     matched_stock=matched_dict,
                                     token=token,
                                     chat_id=chat_id
                                 )
-                                s_desc = matched_dict['name'] if matched_dict else '긴급속보'
+                                s_desc = matched_dict['name'] if matched_dict else '초특급속보'
                                 print(f"[{time.strftime('%H:%M:%S')}] 🚨 {ch_name} 실시간 긴급 속보 전송: [{p_id}] ({s_desc})")
                                 recent_urgent.append({
                                     'time': now_ts,
-                                    'text': raw_text[:300],
+                                    'text': clean_text[:300],
                                     'channel': ch_name,
                                     'stock': matched_dict.get('name') if matched_dict else None
                                 })
                                 briefing_state['recent_urgent_alerts'] = recent_urgent[-20:]
                                 time.sleep(0.5)
                         else:
-                            # ── [아침/마감 브리핑 축적 자료실] ──
-                            # 그대로 퍼나르지 않고 정보를 모아 아침 및 마감 브리핑의 1급 자료로 활용!
-                            _save_to_intelligence_pool(ch_name, raw_text, matched_dict)
+                            # ── [아침/마감 브리핑 축적 자료실 (알림 미발송, 조용히 풀에만 저장)] ──
+                            # 11개 채널의 내용을 개별적으로 퍼나르지 않고 정보를 모아
+                            # 아침 및 마감 브리핑 때 '단 하나의 완성형 리포트'로 통합 발송!
+                            _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
 
                         briefing_state[state_key] = p_id
 
