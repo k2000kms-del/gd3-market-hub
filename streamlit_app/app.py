@@ -2454,13 +2454,22 @@ def run_portfolio_background_scanner():
 @st.cache_resource
 def start_background_portfolio_scanner(passed_token: str = "", passed_chat_id: str = ""):
     """
-    최초 기동 시 포트폴리오 감시 데몬 및 텔레그램 양방향 리스너 스레드를 구동함.
+    최초 기동 시 포트폴리오 감시 데몬 및 텔레그램 양방향 리스너 스레드, 외부 채널 60초 속보 감시 스레드를 구동함.
     """
     t1 = threading.Thread(target=run_portfolio_background_scanner, daemon=True, name="PortfolioScannerDaemon")
     t1.start()
     
     t2 = threading.Thread(target=run_telegram_listener_daemon, args=(passed_token, passed_chat_id), daemon=True, name="TelegramListenerDaemon")
     t2.start()
+
+    # 3. 외부 채널(엘리트강사/트레이딩스핀) 60초 주기 실시간 감시 스레드
+    try:
+        from telegram_bot_daemon import _run_external_channels_scanner
+        t3 = threading.Thread(target=_run_external_channels_scanner, args=(passed_token, passed_chat_id), daemon=True, name="ExternalChannelsScannerDaemon")
+        t3.start()
+        return [t1, t2, t3]
+    except Exception as _e3:
+        pass
     
     return [t1, t2]
 

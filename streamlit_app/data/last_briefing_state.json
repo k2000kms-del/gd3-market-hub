@@ -1,11 +1,36 @@
 {
-  "last_elite_post_id": "elite_instructor/10029",
-  "last_spin_post_id": "trading_spin/76487",
-  "last_saja_post_id": "SAJAnote/11850",
-  "last_morning_date": "20260908",
+  "last_elite_post_id": "elite_instructor/10143",
+  "last_spin_post_id": "trading_spin/77309",
+  "last_saja_post_id": "SAJAnote/12127",
+  "last_morning_date": "20260909",
   "sent_jumping_codes": [
     "036930",
-    "005930"
+    "005930",
+    "034020",
+    "009150",
+    "233740",
+    "000660",
+    "069540",
+    "403870",
+    "353200",
+    "010120",
+    "096770",
+    "108490",
+    "006400",
+    "356680",
+    "000990",
+    "437730",
+    "058610",
+    "067290",
+    "010170"
   ],
-  "last_closing_date": "20260908"
+  "last_closing_date": "20260916",
+  "recent_urgent_alerts": [
+    {
+      "time": 1789564401.6239665,
+      "text": "✅\n [속보] \"하이닉스, 인텔과 미국 메모리 생산 방안 논의 중\"<로이터>  https://www.yonhapnewstv.co.kr/news/AKR20260916143929N6n",
+      "channel": "elite_instructor",
+      "stock": "이닉스"
+    }
+  ]
 }

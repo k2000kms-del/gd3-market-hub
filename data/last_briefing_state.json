@@ -24,5 +24,13 @@
     "067290",
     "010170"
   ],
-  "last_closing_date": "20260916"
+  "last_closing_date": "20260916",
+  "recent_urgent_alerts": [
+    {
+      "time": 1789564401.6239665,
+      "text": "✅\n [속보] \"하이닉스, 인텔과 미국 메모리 생산 방안 논의 중\"<로이터>  https://www.yonhapnewstv.co.kr/news/AKR20260916143929N6n",
+      "channel": "elite_instructor",
+      "stock": "이닉스"
+    }
+  ]
 }
