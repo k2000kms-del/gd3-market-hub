@@ -723,9 +723,9 @@ def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_sc
     prompt += "\n위 데이터를 종합하여 [1. 현재 상황 요약], [2. 기술적 차트 분석], [3. 매매 대응 전략] 3단계를 한국어로 자세히 작성해줘."
 
     pipeline_steps = [
-        ("gemini-2.5-flash", "high", {"thinkingBudget": 1024}, 12),
-        ("gemini-2.5-flash", "standard", {}, 10),
-        ("gemini-2.5-pro", "deep", {}, 15),
+        ("gemini-3.8-flash", "high", {"thinkingBudget": 1024}, 25),
+        ("gemini-3.7-flash", "high", {"thinkingBudget": 1024}, 25),
+        ("gemini-2.5-flash", "standard", {}, 15),
     ]
 
     last_err = None
@@ -4316,9 +4316,11 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
 
 """
 
+            # 대표님 지정 1순위 최신 모델: Gemini 3.8 Flash ➔ 3.7 Flash ➔ 2.5 Flash 스마트 파이프라인
             models_to_try = [
-                "gemini-2.5-flash",
-                "gemini-2.5-pro"
+                ("gemini-3.8-flash", 25),
+                ("gemini-3.7-flash", 25),
+                ("gemini-2.5-flash", 15)
             ]
 
             headers = {"Content-Type": "application/json"}
@@ -4331,45 +4333,39 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
             full_prompt = f"{diag_info}사용자 질문: {gemini_prompt}"
             payload = {
                 "contents": [{"parts": [{"text": full_prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.4,
+                    "maxOutputTokens": 4096
+                },
                 "systemInstruction": {"parts": [{"text": system_instruction}]}
             }
 
             success = False
             last_err = None
-            is_leaked = False
-            for model_name in models_to_try:
+            used_model_name = ""
+            for model_name, m_timeout in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
                 try:
-                    r = requests.post(url, json=payload, headers=headers, timeout=20)
+                    r = requests.post(url, json=payload, headers=headers, timeout=m_timeout)
                     if r.status_code == 200:
-                        ans = r.json()['candidates'][0]['content']['parts'][0]['text']
-                        st.sidebar.success(f"🤖 Gemini Flash 투자 어드바이저 답변:")
-                        st.sidebar.markdown(ans)
-                        success = True
-                        break
-                    else:
-                        last_err = f"API 에러 (코드 {r.status_code}): {r.text[:200]}"
-                        if "leaked" in r.text.lower() or "api_key_invalid" in r.text.lower():
-                            is_leaked = True
+                        cands = r.json().get('candidates', [])
+                        if cands and 'content' in cands[0] and 'parts' in cands[0]['content']:
+                            ans = cands[0]['content']['parts'][0]['text']
+                            st.sidebar.success(f"🤖 {model_name} 실시간 투자 어드바이저 답변:")
+                            st.sidebar.markdown(ans)
+                            success = True
+                            used_model_name = model_name
                             break
-                        if r.status_code in [404, 429, 503]:
-                            continue
+                    else:
+                        last_err = f"({model_name} 코드 {r.status_code}): {r.text[:150]}"
+                        continue
                 except Exception as ex:
-                    last_err = str(ex)
-                time.sleep(0.5)
+                    last_err = f"({model_name}): {str(ex)}"
+                    continue
 
             if not success:
-                if is_leaked or (last_err and "leaked" in last_err.lower()):
-                    st.sidebar.error("❌ **Gemini API Key 차단됨 (Google 보안 감지)**")
-                    st.sidebar.warning(
-                        "⚠️ 현재 등록된 Gemini API Key가 Google에 의해 **외부 유출(Leaked)**로 감지되어 영구 차단되었습니다.\n\n"
-                        "🔑 **해결 방법 (1분 소요 - 완전 무료)**:\n"
-                        "1. [Google AI Studio (클릭)](https://aistudio.google.com/app/apikey)에 접속합니다.\n"
-                        "2. **'Create API key'** 버튼을 눌러 새 키를 생성합니다.\n"
-                        "3. 바로 위 **'🔑 Gemini API Key 설정 / 변경'**에 새 키를 넣고 **[💾 영구 저장]**을 누르면 즉시 정상 작동합니다."
-                    )
-                else:
-                    st.sidebar.error(f"❌ Gemini 답변 생성 실패: {last_err}")
+                st.sidebar.error(f"❌ AI 답변 생성 지연/오류: {last_err}")
+                st.sidebar.info("💡 잠시 후 다시 질문하기 버튼을 눌러주시면 즉시 정상 생성됩니다.")
 
 
 # KIS API Key 정보 - st.secrets를 try/except로 안전하게 접근
