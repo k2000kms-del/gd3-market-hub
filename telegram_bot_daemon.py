@@ -280,12 +280,17 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                     }
                                     break
 
-                        # ── [초특급 긴급 속보만 실시간 알림 발송] ──
-                        # 단순 종목 언급이나 일반 시황은 절대 개별 알림을 보내지 않고,
-                        # 오직 시장 전체에 즉각적 충격을 주는 1급 재난/지정학/제도적 쇼크만 실시간 알림 허용!
-                        URGENT_KEYWORDS = [
+                        # ── [실시간 즉시 알림 트리거 (시장 충격 속보 & 주가 급등락 이슈)] ──
+                        # 1) 시장 전체 충격 이벤트 (매크로 속보)
+                        # 2) 주가에 즉각 영향을 주는 개별 종목 특급 호재/악재 (특징주, 수주, 계약, 승인, 상한가 등)
+                        MACRO_URGENT_KEYWORDS = [
                             '[속보]', '[긴급]', '[단독]', '비상계엄', '계엄령',
                             '서킷브레이커', '사이드카', '거래정지', '미사일 발사', '공습경보', '전면전'
+                        ]
+                        STOCK_SURGE_KEYWORDS = [
+                            '[특징주]', '특징주', '공급계약', '대규모 수주', '수주공시', 
+                            'FDA 승인', '임상 성공', '상한가', '공개매수', '경영권 분쟁', 
+                            '무상증자', '기술수출', '라이선스 아웃', '어닝 서프라이즈'
                         ]
                         EXCLUDE_KEYWORDS = [
                             '교통사고', '음주운전', '마약', '열애', '이혼', '청문회', 
@@ -293,10 +298,12 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                             '연예', '아이돌', '케이팝', '학폭', '사망사고', '이벤트', '구독'
                         ]
 
-                        has_urgent_kw = any(k in clean_text for k in URGENT_KEYWORDS)
+                        has_macro_urgent = any(k in clean_text for k in MACRO_URGENT_KEYWORDS)
+                        has_stock_surge = any(k in clean_text for k in STOCK_SURGE_KEYWORDS) and (matched_dict is not None)
                         has_exclude_kw = any(k in clean_text for k in EXCLUDE_KEYWORDS)
                         
-                        is_urgent = has_urgent_kw and not has_exclude_kw
+                        # 시장 충격 속보이거나, 주가 급등락 유발 종목 호재/악재인 경우 즉시 실시간 알림!
+                        is_urgent = (has_macro_urgent or has_stock_surge) and not has_exclude_kw
 
                         if is_urgent:
                             # ── [최근 30분 동일/유사 속보 중복 발송 방지 (Dedup)] ──
