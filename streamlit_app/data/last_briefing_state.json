@@ -2,7 +2,7 @@
   "last_elite_post_id": "elite_instructor/10143",
   "last_spin_post_id": "trading_spin/77309",
   "last_saja_post_id": "SAJAnote/12127",
-  "last_morning_date": "20260909",
+  "last_morning_date": "20260916",
   "sent_jumping_codes": [
     "036930",
     "005930",
@@ -32,5 +32,14 @@
       "channel": "elite_instructor",
       "stock": "이닉스"
     }
-  ]
+  ],
+  "last_globaletfi_post_id": "globaletfi/21655",
+  "last_kiwoom_semibat_post_id": "kiwoom_semibat/18268",
+  "last_gaoshoukorea_post_id": "gaoshoukorea/64432",
+  "last_sajanote_post_id": "SAJAnote/12127",
+  "last_defence24_post_id": "defence_24/6208",
+  "last_hanaglobal_post_id": "hanaglobalbottomup/8999",
+  "last_hsacademy_post_id": "HS_academy/10933",
+  "last_kimcharger_post_id": "kimcharger/14155",
+  "last_meritzbae_post_id": "meritzbae/2107"
 }
