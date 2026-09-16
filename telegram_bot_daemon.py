@@ -152,15 +152,26 @@ def _save_to_intelligence_pool(ch_name: str, raw_text: str, matched_dict: dict =
         pass
 
 def _run_external_channels_scanner(token: str, chat_id: str):
-    """외부 텔레그램 채널(엘리트강사/트레이딩스핀)을 60초마다 실시간 감시하여 단타 브리핑 즉시 포착."""
+    """외부 텔레그램 채널(11개)을 60초마다 실시간 감시하여 단타 브리핑 즉시 포착."""
     state_file = os.path.join(CURRENT_DIR, 'data', 'last_briefing_state.json')
     _EXTERNAL_CHANNELS = [
-        ('elite_instructor', 'https://t.me/s/elite_instructor', 'last_elite_post_id'),
-        ('trading_spin',     'https://t.me/s/trading_spin',     'last_spin_post_id'),
+        # ── 기존 채널 ──────────────────────────────────────────
+        ('elite_instructor',    'https://t.me/s/elite_instructor',    'last_elite_post_id'),
+        ('trading_spin',        'https://t.me/s/trading_spin',        'last_spin_post_id'),
+        # ── 신규 추가 채널 (2026-09-16) ─────────────────────────
+        ('globaletfi',          'https://t.me/s/globaletfi',          'last_globaletfi_post_id'),       # 하나 Global ETF 박승진
+        ('kiwoom_semibat',      'https://t.me/s/kiwoom_semibat',      'last_kiwoom_semibat_post_id'),   # 키움 반도체/이차전지 PRIME
+        ('gaoshoukorea',        'https://t.me/s/gaoshoukorea',        'last_gaoshoukorea_post_id'),     # 재야의 고수들
+        ('SAJAnote',            'https://t.me/s/SAJAnote',            'last_sajanote_post_id'),         # Sajah의 투자 노트
+        ('defence_24',          'https://t.me/s/defence_24',          'last_defence24_post_id'),        # 우주방산AI로봇 아카이브
+        ('hanaglobalbottomup',  'https://t.me/s/hanaglobalbottomup',  'last_hanaglobal_post_id'),       # 하나증권 해외주식분석
+        ('HS_academy',          'https://t.me/s/HS_academy',          'last_hsacademy_post_id'),        # HS아카데미 이효석
+        ('kimcharger',          'https://t.me/s/kimcharger',          'last_kimcharger_post_id'),       # 김찰저의 관심과 생각
+        ('meritzbae',           'https://t.me/s/meritzbae',           'last_meritzbae_post_id'),        # 메리츠 조선/방산 베기연
     ]
 
     time.sleep(3) # 메인 봇 초기화 대기
-    print("📡 [실시간 데몬] 외부 채널(엘리트강사/트레이딩스핀) 60초 감시 스레드 가동")
+    print("📡 [실시간 데몬] 외부 채널 11개 60초 감시 스레드 가동")
 
     while True:
         try:

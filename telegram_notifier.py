@@ -864,7 +864,7 @@ def fetch_realtime_lead_indicators() -> str:
 
     # 3. 채널에서 야간선물 언급 추출
     night_fut_text = ""
-    for ch in ['elite_instructor', 'trading_spin', 'SAJAnote']:
+    for ch in ['elite_instructor', 'trading_spin', 'SAJAnote', 'globaletfi', 'kiwoom_semibat', 'gaoshoukorea', 'defence_24', 'hanaglobalbottomup', 'HS_academy', 'kimcharger', 'meritzbae']:
         try:
             r = requests.get(f'https://t.me/s/{ch}', headers=headers, timeout=4)
             if r.status_code == 200:
@@ -1048,10 +1048,19 @@ def fetch_channel_intelligence_briefing() -> str:
         ('telegram',   'https://t.me/s/elite_instructor'),
         ('telegram',   'https://t.me/s/trading_spin'),
         ('telegram',   'https://t.me/s/SAJAnote'),
+        # ── 신규 추가 채널 (2026-09-16) ─────────────────────────
+        ('telegram',   'https://t.me/s/globaletfi'),          # 하나 Global ETF 박승진
+        ('telegram',   'https://t.me/s/kiwoom_semibat'),      # 키움 반도체/이차전지 PRIME
+        ('telegram',   'https://t.me/s/gaoshoukorea'),        # 재야의 고수들
+        ('telegram',   'https://t.me/s/defence_24'),          # 우주방산AI로봇 아카이브
+        ('telegram',   'https://t.me/s/hanaglobalbottomup'),  # 하나증권 해외주식분석
+        ('telegram',   'https://t.me/s/HS_academy'),          # HS아카데미 이효석
+        ('telegram',   'https://t.me/s/kimcharger'),          # 김찰저의 관심과 생각
+        ('telegram',   'https://t.me/s/meritzbae'),           # 메리츠 조선/방산 베기연
     ]
 
     try:
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(_fetch_sub_channel, ch_type, url) for ch_type, url in channel_tasks]
             for fut in futures:
                 try:
@@ -2605,12 +2614,21 @@ def notify_external_channel_alert(
         clean_raw = clean_raw[:500] + "\n...(중략)..."
 
     ch_map = {
-        'elite_instructor': '엘리트강사',
-        'trading_spin': '트레이딩 스핀',
-        'SAJAnote': '사자노트 (SAJAnote)',
-        'no1_dante': '주식단테',
-        'hana_etf': '하나 Global ETF',
-        'meritz_ship': '메리츠 조선/방산'
+        'elite_instructor':   '엘리트강사',
+        'trading_spin':       '트레이딩 스핀',
+        'SAJAnote':           '사자노트 (SAJAnote)',
+        'no1_dante':          '주식단테',
+        'hana_etf':           '하나 Global ETF',
+        'meritz_ship':        '메리츠 조선/방산',
+        # ── 신규 추가 채널 (2026-09-16) ────────────────────────────
+        'globaletfi':         '하나 Global ETF 박승진',
+        'kiwoom_semibat':     '키움 반도체/이차전지 PRIME',
+        'gaoshoukorea':       '재야의 고수들',
+        'defence_24':         '우주방산AI로봇 아카이브',
+        'hanaglobalbottomup': '하나증권 해외주식분석',
+        'HS_academy':         'HS아카데미 (이효석)',
+        'kimcharger':         '김찰저의 관심과 생각',
+        'meritzbae':          '메리츠 조선/방산 (베기연)',
     }
     ch_display = ch_map.get(channel_name, channel_name)
 
