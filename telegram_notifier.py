@@ -33,6 +33,24 @@ def is_allowed_notification_hours() -> bool:
         return True
 
 
+def is_silent_hours() -> bool:
+    """
+    KST 기준 야간 수면 시간(22:00 ~ 08:00) 또는 주말(토/일)인지 판별.
+    이 시간대에는 텔레그램 메시지를 '무음 알림(disable_notification=True)'으로 발송하여
+    소리나 진동 없이 조용히 도착하도록 처리 (무음 수면 모드).
+    """
+    try:
+        import datetime as dt
+        kst_tz = dt.timezone(dt.timedelta(hours=9))
+        now = dt.datetime.now(kst_tz)
+        if now.weekday() >= 5: # 토요일(5), 일요일(6)
+            return True
+        h = now.hour
+        return (h >= 22 or h < 8) # 밤 10시부터 익일 오전 8시까지
+    except Exception:
+        return False
+
+
 def is_regular_market_hours() -> bool:
     """KST 기준 정규장 거래 시간(평일 월~금 09:00 ~ 15:30) 여부 판별 (스캘핑/실시간 매매신호 전용)"""
     try:
@@ -192,8 +210,8 @@ def _get_default_credentials():
     return (token or "").strip(), str(chat_id or "").strip()
 
 
-def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
-    """Telegram Bot API 호출 공통 헬퍼 (HTML 파싱 에러 시 자동 일반텍스트 폴백 및 원터치 키보드 버튼 탑재)"""
+def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False, disable_notification: bool = None) -> bool:
+    """Telegram Bot API 호출 공통 헬퍼 (HTML 파싱 에러 시 자동 일반텍스트 폴백 및 야간/주말 무음 알림 지원)"""
     def_tok, def_chat = _get_default_credentials()
     token = token or def_tok
     chat_id = chat_id or def_chat
@@ -205,6 +223,9 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
         print("DEBUG: 알림 허용 시간 외이므로 전송을 차단합니다.")
         return False
 
+    # 야간(22:00~08:00) 또는 주말에는 폰 소리/진동 없이 조용히 도착하도록 자동 무음 처리
+    silent_flag = disable_notification if disable_notification is not None else is_silent_hours()
+
     try:
         url = _TG_API_BASE.format(token=token)
         payload = {
@@ -212,6 +233,7 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
             "text": text,
             "parse_mode": parse_mode,
             "disable_web_page_preview": True,
+            "disable_notification": silent_flag,
             "reply_markup": reply_markup if reply_markup is not None else DEFAULT_REPLY_KEYBOARD
         }
         res = requests.post(url, json=payload, timeout=5)
@@ -233,8 +255,8 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
         return False
 
 
-def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "", parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False) -> bool:
-    """Telegram Bot API sendPhoto 호출 공통 헬퍼 (차트 이미지 전송)"""
+def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "", parse_mode: str = "HTML", reply_markup: dict = None, force_send: bool = False, disable_notification: bool = None) -> bool:
+    """Telegram Bot API sendPhoto 호출 공통 헬퍼 (차트 이미지 전송 및 야간/주말 무음 지원)"""
     def_tok, def_chat = _get_default_credentials()
     token = token or def_tok
     chat_id = chat_id or def_chat
@@ -247,7 +269,9 @@ def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "",
         return False
 
     if not photo_bytes:
-        return _send(token, chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup, force_send=force_send)
+        return _send(token, chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup, force_send=force_send, disable_notification=disable_notification)
+
+    silent_flag = disable_notification if disable_notification is not None else is_silent_hours()
 
     try:
         import json
@@ -256,6 +280,7 @@ def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "",
             "chat_id": chat_id,
             "caption": caption[:1024],
             "parse_mode": parse_mode,
+            "disable_notification": silent_flag,
             "reply_markup": json.dumps(reply_markup if reply_markup is not None else DEFAULT_REPLY_KEYBOARD)
         }
         files = {
@@ -2829,6 +2854,29 @@ def notify_external_channel_alert(
     return sent_ok
 
 
+def make_aggregated_briefing_keyboard() -> dict:
+    """취합 브리핑 전용 스마트 원클릭 인라인 키보드 (대시보드 바로가기)"""
+    dash_url = "https://gd3-market-hub.streamlit.app"
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 GD 3.0 대시보드 열기", "url": dash_url},
+                {"text": "💼 포트폴리오 점검", "url": f"{dash_url}/?sel_tab=portfolio"}
+            ]
+        ]
+    }
+
+
+def _highlight_market_keywords(text: str) -> str:
+    """브리핑 본문에서 주요 등락률, 금액, 핵심 수치 등을 굵게(<b>) 시각 강조."""
+    import re
+    # 등락률 (+5.6%, -1.2%, 112% 등)
+    text = re.sub(r'(?<![<b><code])([+-]?\d+(?:\.\d+)?%)(?![</b></code>])', r'<b>\1</b>', text)
+    # 금액 및 주요 규모 (7조 달러, 1,000억 원, 7T달러 등)
+    text = re.sub(r'(?<![<b><code])(\b\d+(?:,\d+)*(?:\.\d+)?(?:조\s*달러|억\s*원|T달러|B달러|조|억)\b)(?![</b></code>])', r'<b>\1</b>', text)
+    return text
+
+
 def send_aggregated_channel_briefing(
     posts: list,
     token: str = None,
@@ -2838,6 +2886,7 @@ def send_aggregated_channel_briefing(
     여러 개로 쪼개져 올라온 외부 채널(사자노트 등)의 시황/통계/분석글들을
     하나로 모아(취합하여), Gemini 3.8/3.7 Flash가 핵심과 대응 가이드를
     일목요연하게 정리한 '단 하나의 통합 스마트 브리핑'으로 발송.
+    (야간/주말 자동 무음, 원클릭 버튼 탑재, 수치/종목 자동 시각 강조)
     """
     if not posts:
         return False
@@ -2890,7 +2939,9 @@ def send_aggregated_channel_briefing(
             f"실시간으로 올라온 주요 시황/통계/분석글 {len(combined_texts)}건이야:\n\n"
             f"{all_content_str}\n\n"
             f"이 글들을 낱개로 전달하지 않고, 투자자가 한눈에 맥락을 파악할 수 있도록 "
-            f"아래 형식에 맞춰 완벽하게 한국어로 취합 정리해줘:\n\n"
+            f"아래 형식에 맞춰 완벽하게 한국어로 취합 정리해줘:\n"
+            f"- 가독성을 위해 핵심 수치(예: 7조 달러, +5.6%, 112%), 주요 종목명, 핵심 단어는 <b>태그로 강조해줘.\n"
+            f"- 이전 브리핑과 중복되는 뻔한 내용은 빼고, 새로 추가된 변화와 핵심 팩트 위주로 정리해줘.\n\n"
             f"📌 [핵심 이슈 종합 요약]\n"
             f"• (가장 중요한 팩트 1)\n"
             f"• (가장 중요한 팩트 2)\n"
@@ -2921,6 +2972,9 @@ def send_aggregated_channel_briefing(
             f"글로벌 변동성 요인이 상존하므로, 주요 세력 방어선 지지 여부와 수급 유입을 확인하며 침착하게 분할 대응하십시오."
         )
 
+    # 4. 수치 및 핵심 키워드 2차 자동 시각 강조 (HTML 마크업)
+    summary_body = _highlight_market_keywords(summary_body)
+
     now_time_str = time.strftime('%m/%d %H:%M')
     final_msg = (
         f"📋 <b>[GD 3.0 채널 인텔리전스 취합 브리핑]</b>\n"
@@ -2931,7 +2985,9 @@ def send_aggregated_channel_briefing(
         f"⚠️ <i>실시간 수급 및 세력 방어선 지표를 반드시 교차 확인하십시오. 🚀</i>"
     )
 
-    return _send(token, chat_id, final_msg, force_send=True)
+    markup = make_aggregated_briefing_keyboard()
+    return _send(token, chat_id, final_msg, reply_markup=markup, force_send=True)
+
 
 
 

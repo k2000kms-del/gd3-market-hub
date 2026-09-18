@@ -403,22 +403,51 @@ def _run_external_channels_scanner(token: str, chat_id: str):
             now_agg = time.time()
             if briefing_buffer and buffer_first_added_ts:
                 collection_duration = now_agg - buffer_first_added_ts
-                # 첫 글이 들어온 후 3분(180초) 동안 모든 채널에서 들어오는 글을 계속 모음
-                # 3분이 경과했거나, 모인 글이 4개 이상일 때 단 하나의 통합 브리핑으로 취합 발송!
+                # 첫 글이 들어온 후 3분(180초) 경과했거나, 모인 글이 4개 이상일 때 발송 조건 검사
                 if collection_duration >= 180 or len(briefing_buffer) >= 4:
-                    try:
-                        agg_ok = send_aggregated_channel_briefing(
-                            posts=briefing_buffer,
-                            token=token,
-                            chat_id=chat_id
-                        )
-                        if agg_ok:
-                            ch_count = len(set(p['channel'] for p in briefing_buffer))
-                            print(f"[{time.strftime('%H:%M:%S')}] 📋 [3분 통합 취합 발송 완료] {ch_count}개 채널 {len(briefing_buffer)}개 시황글 Gemini 통합 요약 전송!")
-                            briefing_buffer.clear()
-                            buffer_first_added_ts = None
-                    except Exception as agg_ex:
-                        print(f"DEBUG: send_aggregated_channel_briefing error: {agg_ex}")
+                    # ── [지능형 중복 배제: 최근 3시간 내 이미 브리핑된 글과 유사한 글 필터링] ──
+                    recent_briefed = briefing_state.get('recent_briefed_posts', [])
+                    # 3시간(10800초) 지난 오래된 기록 정리
+                    recent_briefed = [b for b in recent_briefed if isinstance(b, dict) and (now_agg - b.get('time', 0)) < 10800]
+                    past_briefed_texts = [b.get('text', '') for b in recent_briefed]
+
+                    # 이전에 이미 다룬 내용과 중복되지 않는 '진짜 신규 시황글'만 추출
+                    novel_posts = []
+                    for post in briefing_buffer:
+                        p_txt = post.get('text', '')
+                        if not _is_duplicate_content(p_txt, past_briefed_texts, threshold=0.45):
+                            novel_posts.append(post)
+                        else:
+                            print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [이전 브리핑 중복 배제] 이미 요약된 시황 스킵: {p_txt[:35]}...")
+
+                    if not novel_posts:
+                        print(f"[{time.strftime('%H:%M:%S')}] ℹ️ [스마트 정리] 3분간 모인 글들이 이전 브리핑과 동일 내용이므로 재발송 스킵")
+                        briefing_buffer.clear()
+                        buffer_first_added_ts = None
+                    else:
+                        try:
+                            agg_ok = send_aggregated_channel_briefing(
+                                posts=novel_posts,
+                                token=token,
+                                chat_id=chat_id
+                            )
+                            if agg_ok:
+                                ch_count = len(set(p['channel'] for p in novel_posts))
+                                print(f"[{time.strftime('%H:%M:%S')}] 📋 [3분 통합 취합 발송 완료] {ch_count}개 채널 {len(novel_posts)}개 신규 시황글 Gemini 통합 요약 전송!")
+                                for p in novel_posts:
+                                    recent_briefed.append({
+                                        'time': now_agg,
+                                        'text': p.get('text', '')[:300],
+                                        'channel': p.get('channel', '')
+                                    })
+                                briefing_state['recent_briefed_posts'] = recent_briefed[-40:]
+                                with open(state_file, 'w', encoding='utf-8') as sf:
+                                    json.dump(briefing_state, sf, ensure_ascii=False, indent=2)
+
+                                briefing_buffer.clear()
+                                buffer_first_added_ts = None
+                        except Exception as agg_ex:
+                            print(f"DEBUG: send_aggregated_channel_briefing error: {agg_ex}")
 
         except Exception as scan_err:
             pass
