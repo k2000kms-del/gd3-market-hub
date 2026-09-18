@@ -4302,19 +4302,12 @@ _current_gemini_key = _load_gemini_api_key()
 st.session_state['user_gemini_key'] = _current_gemini_key
 
 # 사이드바 API Key 자동 연동 안내 및 관리 섹션
-is_valid_gemini_format = bool(_current_gemini_key and _current_gemini_key.startswith('AIzaSy'))
+is_valid_gemini_format = bool(_current_gemini_key and len(_current_gemini_key) > 20)
 
 if is_valid_gemini_format:
     st.sidebar.markdown(
         "<div style='background:rgba(46,204,113,0.12); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-bottom:8px; text-align:center;'>"
         "🟢 Gemini Flash 3.8 자동 연동 완료"
-        "</div>", 
-        unsafe_allow_html=True
-    )
-elif _current_gemini_key:
-    st.sidebar.markdown(
-        "<div style='background:rgba(231,76,60,0.15); border:1px solid #e74c3c; border-radius:6px; padding:8px 10px; font-size:12px; color:#e74c3c; font-weight:bold; margin-bottom:8px; text-align:center;'>"
-        "⚠️ Gemini API Key 재등록 필요<br><span style='font-size:11px; font-weight:normal; color:#ddd;'>현재 키가 AIzaSy... 형식이 아닙니다. 정식 키를 입력해주세요.</span>"
         "</div>", 
         unsafe_allow_html=True
     )
@@ -4328,11 +4321,11 @@ else:
 
 with st.sidebar.expander("🔑 Gemini API Key 변경 (필요시에만 설정)", expanded=not is_valid_gemini_format):
     new_gemini_input = st.text_input(
-        "Google AI Studio API Key",
+        "Google Gemini API Key",
         type="password",
         value=_current_gemini_key,
-        placeholder="AIzaSy... (Google AI Studio 정식 키)",
-        help="Google AI Studio(aistudio.google.com)에서 발급받은 AIzaSy... 형식의 API Key를 입력하세요."
+        placeholder="Gemini API Key 입력",
+        help="이미 등록된 키가 자동 적용 중입니다. 새 키로 변경하실 때만 입력하세요."
     )
     col_k1, col_k2 = st.columns([1, 1])
     with col_k1:
