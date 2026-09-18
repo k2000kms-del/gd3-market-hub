@@ -2905,16 +2905,20 @@ def send_aggregated_channel_briefing(
         except Exception:
             pass
 
-    # AI 실패 시 폴백 요약
+    # AI 실패 시 (429 할당량 초과 또는 네트워크 지연 시) 자체 고도화 스마트 폴백 요약
     if not summary_body:
         bullets = []
-        for p in posts[:3]:
+        for idx, p in enumerate(posts[:4], 1):
             raw_t = p.get('text', '').strip()
-            first_line = raw_t.split('\n')[0][:80]
-            bullets.append(f"• {first_line}")
+            lines = [l.strip() for l in raw_t.split('\n') if len(l.strip()) >= 10]
+            lead_sentence = lines[0] if lines else raw_t[:85]
+            if len(lead_sentence) > 85:
+                lead_sentence = lead_sentence[:85] + "..."
+            bullets.append(f"• {lead_sentence}")
         summary_body = (
-            f"📌 <b>[핵심 내용 요약]</b>\n" + "\n".join(bullets) + "\n\n"
-            f"💡 <b>[시장 점검]</b>: 수급 동향 및 주요 지지선/방어선을 모니터링하며 원칙 매매를 준수하십시오."
+            f"📌 <b>[핵심 시황 취합 요약]</b>\n" + "\n".join(bullets) + "\n\n"
+            f"💡 <b>[GD 3.0 시장 점검 및 대응]</b>\n"
+            f"글로벌 변동성 요인이 상존하므로, 주요 세력 방어선 지지 여부와 수급 유입을 확인하며 침착하게 분할 대응하십시오."
         )
 
     now_time_str = time.strftime('%m/%d %H:%M')
