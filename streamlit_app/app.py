@@ -6858,20 +6858,69 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
 
                 # 포트폴리오 목록 및 바로가기
                 if portfolio:
+                    # ── 포트폴리오 실시간 현재가 사전 조회 (네이버 캐시 우선 활용) ──
+                    # 이미 fetch_naver_full_market_realtime() 결과가 있으면 dict로 변환하여 재활용
+                    _naver_price_map = {}
+                    try:
+                        _nv_cached = fetch_naver_full_market_realtime()
+                        if not _nv_cached.empty and 'Code' in _nv_cached.columns and 'Close' in _nv_cached.columns:
+                            _naver_price_map = _nv_cached.set_index('Code')['Close'].to_dict()
+                    except Exception:
+                        pass
+
                     # 포트폴리오 테이블 렌더링 (모든 보유 종목에 대해 퀀트 등급 색상 자동 하이라이트 일괄 적용)
                     port_rows = []
                     for p_code, p_data in portfolio.items():
+                        # 포트폴리오 Code를 6자리 문자열로 정규화
+                        p_code_norm = str(p_code).split('.')[0].strip().zfill(6)
+                        p_entry = float(p_data.get("entry_price", 0) or 0)
+                        p_qty   = float(p_data.get("qty", 0) or 0)
+
+                        # ─ 1순위: df_m (Code 6자리 정규화 매칭) ─
                         p_close = 0.0
-                        if df_m is not None and not df_m.empty:
-                            m_match = df_m[df_m['Code'] == p_code]
+                        if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
+                            _dm_codes = df_m['Code'].astype(str).str.split('.').str[0].str.strip().str.zfill(6)
+                            m_match = df_m[_dm_codes == p_code_norm]
                             if not m_match.empty:
-                                p_close = float(m_match.iloc[0]['Close'])
+                                _cv = pd.to_numeric(m_match.iloc[0]['Close'], errors='coerce')
+                                if pd.notna(_cv) and _cv > 0:
+                                    p_close = float(_cv)
+
+                        # ─ 2순위: 네이버 실시간 캐시 ─
+                        if p_close == 0.0 and p_code_norm in _naver_price_map:
+                            _nv_p = _naver_price_map.get(p_code_norm, 0.0)
+                            if _nv_p and _nv_p > 0:
+                                p_close = float(_nv_p)
+
+                        # ─ 3순위: 네이버 개별 종목 실시간 API 직접 호출 ─
                         if p_close == 0.0:
-                            p_close = p_data["entry_price"]
-                            
-                        p_return = ((p_close - p_data["entry_price"]) / p_data["entry_price"]) * 100.0
-                        eval_diff = (p_close - p_data["entry_price"]) * p_data["qty"]
-                        
+                            try:
+                                import requests as _req_mod
+                                _rn = _req_mod.get(
+                                    f"https://m.stock.naver.com/api/stock/{p_code_norm}/basic",
+                                    headers={'User-Agent': 'Mozilla/5.0'},
+                                    timeout=2.0
+                                )
+                                if _rn.status_code == 200:
+                                    _rj = _rn.json()
+                                    _sv = float(str(_rj.get('closePrice', _rj.get('stockExchangeType', {}).get('closePrice', 0)) or 0).replace(',', ''))
+                                    if _sv > 0:
+                                        p_close = _sv
+                            except Exception:
+                                pass
+
+                        # ─ 4순위: 최후 폴백 (매수가로 대체, 수익률 0% 표시) ─
+                        if p_close == 0.0:
+                            p_close = p_entry
+
+                        # 수익률 / 평가손익 계산 (entry_price=0 방어)
+                        if p_entry > 0:
+                            p_return = ((p_close - p_entry) / p_entry) * 100.0
+                            eval_diff = (p_close - p_entry) * p_qty
+                        else:
+                            p_return = 0.0
+                            eval_diff = 0.0
+
                         rt_color = "#ff6b6b" if p_return > 0 else "#4e9ff5" if p_return < 0 else "#888888"
                         rt_sign = "+" if p_return > 0 else ""
                         
@@ -6933,11 +6982,11 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         border_style = "outline: 2px solid #ffd700; outline-offset: -2px;" if is_active_selected else ""
                         row_style = f"background-color: {bg_rgba}; {border_style}"
 
-                        encoded_name = urllib.parse.quote(p_data["name"])
+                        encoded_name = urllib.parse.quote(p_data.get("name", str(p_code)))
                         port_rows.append({
-                            "종목명": f"<a href='/?sel_code={p_code}&sel_name={encoded_name}' target='_self' style='color: #ffffff; text-decoration: none; cursor: pointer;' onmouseover='this.style.color=\"#00e5ff\";' onmouseout='this.style.color=\"#ffffff\";'>{p_data['name']}</a>",
-                            "매수가": f"{int(p_data['entry_price']):,}",
-                            "수량": f"{int(p_data['qty']):,}",
+                            "종목명": f"<a href='/?sel_code={p_code_norm}&sel_name={encoded_name}' target='_self' style='color: #ffffff; text-decoration: none; cursor: pointer;' onmouseover='this.style.color=\"#00e5ff\";' onmouseout='this.style.color=\"#ffffff\";'>{p_data.get('name', p_code)}</a>",
+                            "매수가": f"{int(p_entry):,}" if p_entry > 0 else "-",
+                            "수량": f"{int(p_qty):,}" if p_qty > 0 else "-",
                             "수익률": f"<span style='color:{rt_color}; font-weight:bold;'>{rt_sign}{p_return:.2f}%</span>",
                             "평가손익": f"<span style='color:{rt_color}; font-weight:bold;'>{rt_sign}{int(eval_diff):,}원</span>",
                             "row_style": row_style
