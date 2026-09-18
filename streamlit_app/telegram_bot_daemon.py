@@ -261,10 +261,6 @@ def _run_external_channels_scanner(token: str, chat_id: str):
 
                         # 1. 텍스트 정제 (링크, 공백, 줄바꿈, 인사말 제거)
                         clean_text = _clean_channel_text(raw_text)
-                        if len(clean_text) < 25:
-                            # 순수 유효 본문이 25자 미만이면 알림도 풀 저장도 하지 않고 스킵
-                            briefing_state[state_key] = p_id
-                            continue
 
                         # 2. 해시태그(#종목명) 및 정밀 종목 매칭
                         matched_dict = None
@@ -290,8 +286,6 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                     break
 
                         # ── [실시간 즉시 알림 트리거 (시장 충격 속보 & 주가 급등락 이슈)] ──
-                        # 1) 시장 전체 충격 이벤트 (매크로 속보)
-                        # 2) 주가에 즉각 영향을 주는 개별 종목 특급 호재/악재 (특징주, 수주, 계약, 승인, 상한가 등)
                         MACRO_URGENT_KEYWORDS = [
                             '[속보]', '[긴급]', '[단독]', '비상계엄', '계엄령',
                             '서킷브레이커', '사이드카', '거래정지', '미사일 발사', '공습경보', '전면전'
@@ -311,8 +305,14 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                         has_stock_surge = any(k in clean_text for k in STOCK_SURGE_KEYWORDS) and (matched_dict is not None)
                         has_exclude_kw = any(k in clean_text for k in EXCLUDE_KEYWORDS)
                         
-                        # 시장 충격 속보이거나, 주가 급등락 유발 종목 호재/악재인 경우 즉시 실시간 알림!
-                        is_urgent = (has_macro_urgent or has_stock_surge) and not has_exclude_kw
+                        # ── [품질 필터: 최소 80자 이상 + 종목 매칭 OR 매크로 이슈 필수] ──
+                        # 단순 한 줄 코멘트(통계 수치, 단순 질문 등) 속보 발송 절대 금지
+                        is_enough_content = len(clean_text) >= 80
+                        is_urgent = (
+                            (has_macro_urgent or has_stock_surge)
+                            and not has_exclude_kw
+                            and is_enough_content
+                        )
 
                         if is_urgent:
                             # ── [최근 30분 동일/유사 속보 중복 발송 방지 (Dedup)] ──
@@ -320,6 +320,23 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                             recent_urgent = briefing_state.get('recent_urgent_alerts', [])
                             recent_urgent = [a for a in recent_urgent if isinstance(a, dict) and (now_ts - a.get('time', 0)) < 1800]
                             
+                            # ── [동일 채널 5분 쿨다운: 같은 채널에서 5분 이내 재발송 차단] ──
+                            same_ch_recent = [a for a in recent_urgent if a.get('channel') == ch_name and (now_ts - a.get('time', 0)) < 300]
+                            if same_ch_recent:
+                                print(f"[{time.strftime('%H:%M:%S')}] ⏸️ [{ch_name}] 5분 쿨다운 적용 — 브리핑 풀 저장")
+                                _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
+                                briefing_state[state_key] = p_id
+                                continue
+
+                            # ── [동일 종목 30분 중복 차단] ──
+                            if matched_dict:
+                                same_stock_recent = [a for a in recent_urgent if a.get('stock') == matched_dict.get('name') and (now_ts - a.get('time', 0)) < 1800]
+                                if same_stock_recent:
+                                    print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [{matched_dict.get('name')}] 동일 종목 30분 내 중복 — 스킵")
+                                    _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
+                                    briefing_state[state_key] = p_id
+                                    continue
+
                             existing_urgent_texts = [a.get('text', '') for a in recent_urgent]
                             if _is_duplicate_content(clean_text, existing_urgent_texts, threshold=0.50):
                                 print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [중복 방지] {ch_name} 유사 속보 이미 발송됨 (30분 이내 중복 스킵): {clean_text[:40]}...")

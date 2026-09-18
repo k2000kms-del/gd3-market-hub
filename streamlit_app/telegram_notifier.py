@@ -2681,6 +2681,21 @@ def notify_external_channel_alert(
         except Exception:
             b_state = {}
 
+    # ── [30분 이내 동일/유사 속보 중복 발송 차단 2중 방어] ──
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    state_file = os.path.join(base_dir, 'data', 'last_briefing_state.json')
+    if not os.path.exists(state_file):
+        state_file = os.path.join(base_dir, 'streamlit_app', 'data', 'last_briefing_state.json')
+
+    now_ts = time.time()
+    b_state = {}
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r', encoding='utf-8') as f:
+                b_state = json.load(f)
+        except Exception:
+            b_state = {}
+
     recent_urgent = b_state.get('recent_urgent_alerts', [])
     recent_urgent = [a for a in recent_urgent if isinstance(a, dict) and (now_ts - a.get('time', 0)) < 1800]
     existing_texts = [a.get('text', '') for a in recent_urgent]
@@ -2694,63 +2709,7 @@ def notify_external_channel_alert(
     q_score = None
     support_p = None
 
-    # 1. 퀀트 정밀 진단 섹션 구성
-    if matched_stock and matched_stock.get('code'):
-        code = matched_stock.get('code', '')
-        name = matched_stock.get('name', code)
-        cur_p = matched_stock.get('price', 0)
-        chg_r = matched_stock.get('change_ratio', 0.0)
-        q_score = matched_stock.get('quant_score', 80)
-        jumping_status = matched_stock.get('jumping_status', '수급 분석 중')
-        support_p = matched_stock.get('support_price', cur_p * 0.97)
-        sign = "▲+" if chg_r >= 0 else "▼"
-        
-        quant_section = (
-            f"⚡ <b>[GD 3.0 실시간 퀀트 & 점핑 정밀 진단]</b>:\n"
-            f"├ 🎯 <b>관련 종목</b>: <b>{name} ({code})</b>\n"
-            f"├ 💵 <b>현재가/등락률</b>: <b>{cur_p:,.0f}원</b> ({sign}{chg_r:.2f}%)\n"
-            f"├ 📊 <b>퀀트 점수</b>: <b>{q_score:.0f}점</b>\n"
-            f"├ 🔥 <b>점핑 양봉 상태</b>: {jumping_status} 🟢\n"
-            f"└ 🛡️ <b>세력 절대 방어선</b>: 🟢 <b>{support_p:,.0f}원</b> (손절/지지선)\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"💡 <b>실전 코멘트</b>: 외부 채널 속보와 우리 퀀트 지표를 교차 검증하여, "
-            f"<b>방어선({support_p:,.0f}원) 지지 여부를 확인 후 안전하게 진입</b>하십시오!"
-        )
-    else:
-        quant_section = (
-            f"⚡ <b>[GD 3.0 실시간 분석]</b>:\n"
-            f"└ 💡 시장 전반 영향 및 테마 수급을 실시간 모니터링 중입니다."
-        )
-
-    # 2. 메시지 원문 정제 (링크, 광고, 공백 완벽 제거)
-    clean_raw = _clean_channel_text(raw_message)
-    if len(clean_raw) < 20:
-        # 링크만 있거나 순수 텍스트가 20자 미만인 빈 껍데기 메시지는 절대 발송 금지
-        return False
-
-    # 3. 속보 본문 2~3줄 명료 요약 (Gemini 지원 또는 단정한 텍스트 압축)
-    summary_text = ""
-    gemini_k = _get_gemini_api_key()
-    if gemini_k and len(clean_raw) >= 40:
-        try:
-            p_sum = (
-                f"다음 텔레그램 속보 내용에서 불필요한 군더더기, 링크, 이모지를 빼고 "
-                f"투자자가 즉시 판단할 수 있도록 핵심 사실만 1~2문장으로 한국어로 요약해줘:\n{clean_raw[:400]}"
-            )
-            ai_s = _call_gemini_raw(p_sum, gemini_k, timeout=4)
-            if ai_s and len(ai_s) >= 15:
-                summary_text = ai_s.strip()
-        except Exception:
-            pass
-
-    if not summary_text:
-        # 단정하게 줄바꿈 압축 후 최대 250자 발췌
-        import re
-        lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 5]
-        summary_text = "\n".join(lines[:3])
-        if len(summary_text) > 250:
-            summary_text = summary_text[:250] + "..."
-
+    # 1. 채널 표시명 매핑
     ch_map = {
         'elite_instructor':   '엘리트강사',
         'trading_spin':       '트레이딩 스핀',
@@ -2758,7 +2717,6 @@ def notify_external_channel_alert(
         'no1_dante':          '주식단테',
         'hana_etf':           '하나 Global ETF',
         'meritz_ship':        '메리츠 조선/방산',
-        # ── 신규 추가 채널 (2026-09-16) ────────────────────────────
         'globaletfi':         '하나 Global ETF 박승진',
         'kiwoom_semibat':     '키움 반도체/이차전지 PRIME',
         'gaoshoukorea':       '재야의 고수들',
@@ -2770,17 +2728,81 @@ def notify_external_channel_alert(
     }
     ch_display = ch_map.get(channel_name, channel_name)
 
+    # 2. 종목 정밀 진단 섹션 (매칭된 경우만)
+    quant_section = ""
+    if matched_stock and matched_stock.get('code'):
+        code = matched_stock.get('code', '')
+        name = matched_stock.get('name', code)
+        cur_p = matched_stock.get('price', 0)
+        chg_r = matched_stock.get('change_ratio', 0.0)
+        q_score = matched_stock.get('quant_score', 80)
+        jumping_status = matched_stock.get('jumping_status', '채널 포착')
+        support_p = matched_stock.get('support_price', cur_p * 0.97)
+        sign = "▲+" if chg_r >= 0 else "▼"
+        pnl_icon = "🟢" if chg_r >= 0 else "🔴"
+        quant_section = (
+            f"\n📊 <b>GD 퀀트 진단</b>\n"
+            f"  종목: <b>{name}</b> ({code})\n"
+            f"  현재가: <b>{cur_p:,.0f}원</b> {pnl_icon} {sign}{chg_r:.2f}%\n"
+            f"  퀀트점수: <b>{q_score:.0f}점</b>  |  방어선: <b>{support_p:,.0f}원</b>"
+        )
+
+    # 3. 속보 본문 정제
+    clean_raw = _clean_channel_text(raw_message)
+    if len(clean_raw) < 20:
+        return False
+
+    # 4. Gemini AI 분석 — 항상 실행 (타임아웃 25초, 종목 유무 관계없이)
+    gemini_k = _get_gemini_api_key()
+    ai_analysis = ""
+    if gemini_k and len(clean_raw) >= 40:
+        try:
+            if matched_stock and code:
+                # 종목 매칭된 경우: 해당 종목에 대한 구체적 투자 전략
+                p_ai = (
+                    f"다음은 텔레그램 투자 채널 '{ch_display}'의 속보입니다:\n\n{clean_raw[:500]}\n\n"
+                    f"이 내용이 {name}({code}) 주가에 미치는 영향을 분석해줘. "
+                    f"1줄: 핵심 임팩트 판단 (호재/악재/중립). "
+                    f"2줄: 지금 투자자 대응 전략 (매수/홀딩/익절 중 하나와 그 이유). "
+                    f"총 2문장 이내, 한국어, 간결하게."
+                )
+            else:
+                # 종목 미매칭: 시장 전체 영향 분석
+                p_ai = (
+                    f"다음은 텔레그램 투자 채널 '{ch_display}'의 속보입니다:\n\n{clean_raw[:500]}\n\n"
+                    f"이 내용이 국내 주식 시장(코스피/코스닥)에 미치는 영향을 분석해줘. "
+                    f"1줄: 시장 영향 방향(강세/약세/중립)과 핵심 이유. "
+                    f"2줄: 주목해야 할 섹터나 테마. "
+                    f"총 2문장 이내, 한국어, 간결하게."
+                )
+            ai_result = _call_gemini_raw(p_ai, gemini_k, timeout=25)
+            if ai_result and len(ai_result) >= 20:
+                ai_analysis = ai_result.strip()
+        except Exception:
+            pass
+
+    # 5. 원문 요약 (AI 실패 시 폴백)
+    if not ai_analysis:
+        lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 10]
+        summary_fallback = "\n".join(lines[:3])
+        if len(summary_fallback) > 200:
+            summary_fallback = summary_fallback[:200] + "..."
+        ai_analysis = summary_fallback if summary_fallback else clean_raw[:150]
+
+    # 6. ── 새 카드형 포맷 (깔끔하고 읽기 쉬운 구조) ──
+    now_time_str = time.strftime('%m/%d %H:%M')
+    header_icon = "🚨" if matched_stock else "📡"
     text = (
-        f"🚨 <b>[GD 3.0 실시간 시장/종목 긴급 속보]</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📢 <b>속보 출처</b>: <b>{ch_display}</b>\n"
-        f"📌 <b>핵심 사실 요약</b>:\n"
-        f"<i>{summary_text}</i>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
+        f"{header_icon} <b>[{ch_display}] 속보</b>  <i>{now_time_str}</i>\n"
+        f"{'─' * 20}\n"
+        f"<i>{clean_raw[:300]}</i>\n"
+        f"{'─' * 20}\n"
+        f"💡 <b>GD AI 분석:</b> {ai_analysis}"
         f"{quant_section}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ <i>속보성 급등락에 뇌동매매를 금하며, 원칙 매매를 준수하십시오! 🚀</i>"
+        f"{'─' * 20}\n"
+        f"⚠️ <i>속보성 급등락 뇌동매매 금지 · 원칙 매매 준수</i>"
     )
+
     markup = make_stock_action_keyboard(code, name) if code else None
     sent_ok = False
     if code:
