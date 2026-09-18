@@ -2829,4 +2829,105 @@ def notify_external_channel_alert(
     return sent_ok
 
 
+def send_aggregated_channel_briefing(
+    posts: list,
+    token: str = None,
+    chat_id: str = None
+) -> bool:
+    """
+    여러 개로 쪼개져 올라온 외부 채널(사자노트 등)의 시황/통계/분석글들을
+    하나로 모아(취합하여), Gemini 3.8/3.7 Flash가 핵심과 대응 가이드를
+    일목요연하게 정리한 '단 하나의 통합 스마트 브리핑'으로 발송.
+    """
+    if not posts:
+        return False
+
+    import time
+    token = token or _get_bot_token()
+    chat_id = chat_id or _get_chat_id()
+    if not token or not chat_id:
+        return False
+
+    ch_map = {
+        'elite_instructor':   '엘리트강사',
+        'trading_spin':       '트레이딩 스핀',
+        'SAJAnote':           '사자노트',
+        'no1_dante':          '주식단테',
+        'hana_etf':           '하나 Global ETF',
+        'meritz_ship':        '메리츠 조선/방산',
+        'globaletfi':         '하나 ETF 박승진',
+        'kiwoom_semibat':     '키움 반도체/배터리',
+        'gaoshoukorea':       '재야의 고수들',
+        'defence_24':         '우주방산AI',
+        'hanaglobalbottomup': '하나증권 해외분석',
+        'HS_academy':         'HS아카데미',
+        'kimcharger':         '김찰저',
+        'meritzbae':          '메리츠 베기연',
+    }
+
+    # 채널 출처 목록 및 본문 취합
+    ch_names_set = set()
+    combined_texts = []
+    for idx, p in enumerate(posts, 1):
+        raw_ch = p.get('channel', '외부채널')
+        ch_disp = ch_map.get(raw_ch, raw_ch)
+        ch_names_set.add(ch_disp)
+        txt = p.get('text', '').strip()
+        if txt:
+            combined_texts.append(f"[{ch_disp} 발췌 {idx}]\n{txt[:400]}")
+
+    if not combined_texts:
+        return False
+
+    ch_str = ", ".join(sorted(ch_names_set))
+    all_content_str = "\n\n".join(combined_texts[:5])
+
+    gemini_k = _get_gemini_api_key()
+    summary_body = ""
+    if gemini_k:
+        prompt = (
+            f"너는 최고 수준의 퀀트 증시 분석가야. 다음은 주요 텔레그램 채널({ch_str})에서 "
+            f"실시간으로 올라온 주요 시황/통계/분석글 {len(combined_texts)}건이야:\n\n"
+            f"{all_content_str}\n\n"
+            f"이 글들을 낱개로 전달하지 않고, 투자자가 한눈에 맥락을 파악할 수 있도록 "
+            f"아래 형식에 맞춰 완벽하게 한국어로 취합 정리해줘:\n\n"
+            f"📌 [핵심 이슈 종합 요약]\n"
+            f"• (가장 중요한 팩트 1)\n"
+            f"• (가장 중요한 팩트 2)\n"
+            f"• (가장 중요한 팩트 3)\n\n"
+            f"💡 [GD 3.0 시장 영향 및 실전 대응]\n"
+            f"(국내 증시 및 주요 섹터에 미칠 영향과, 지금 투자자가 취해야 할 매수/관망/방어선 전략을 2~3문장으로 명확히 제시)"
+        )
+        try:
+            ai_res = _call_gemini_raw(prompt, gemini_k, timeout=25)
+            if ai_res and len(ai_res) >= 40:
+                summary_body = ai_res.strip()
+        except Exception:
+            pass
+
+    # AI 실패 시 폴백 요약
+    if not summary_body:
+        bullets = []
+        for p in posts[:3]:
+            raw_t = p.get('text', '').strip()
+            first_line = raw_t.split('\n')[0][:80]
+            bullets.append(f"• {first_line}")
+        summary_body = (
+            f"📌 <b>[핵심 내용 요약]</b>\n" + "\n".join(bullets) + "\n\n"
+            f"💡 <b>[시장 점검]</b>: 수급 동향 및 주요 지지선/방어선을 모니터링하며 원칙 매매를 준수하십시오."
+        )
+
+    now_time_str = time.strftime('%m/%d %H:%M')
+    final_msg = (
+        f"📋 <b>[GD 3.0 채널 인텔리전스 취합 브리핑]</b>\n"
+        f"📢 <b>출처</b>: <b>{ch_str}</b> ({len(combined_texts)}개 시황 취합)  <i>{now_time_str}</i>\n"
+        f"{'─' * 22}\n"
+        f"{summary_body}\n"
+        f"{'─' * 22}\n"
+        f"⚠️ <i>실시간 수급 및 세력 방어선 지표를 반드시 교차 확인하십시오. 🚀</i>"
+    )
+
+    return _send(token, chat_id, final_msg, force_send=True)
+
+
 

@@ -26,7 +26,7 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
-from telegram_notifier import process_incoming_command, notify_external_channel_alert
+from telegram_notifier import process_incoming_command, notify_external_channel_alert, send_aggregated_channel_briefing
 from chart_image_generator import fetch_stock_chart_df, generate_stock_chart_image
 
 def _load_secrets():
@@ -204,6 +204,9 @@ def _run_external_channels_scanner(token: str, chat_id: str):
     time.sleep(3) # 메인 봇 초기화 대기
     print("📡 [실시간 데몬] 외부 채널 11개 60초 감시 스레드 가동")
 
+    briefing_buffer = []
+    last_aggregated_briefing_time = time.time()
+
     while True:
         try:
             briefing_state = {}
@@ -376,10 +379,15 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                 briefing_state['recent_urgent_alerts'] = recent_urgent[-20:]
                                 time.sleep(0.5)
                         else:
-                            # ── [아침/마감 브리핑 축적 자료실 (알림 미발송, 조용히 풀에만 저장)] ──
-                            # 11개 채널의 시황/통계/분석글을 개별적으로 퍼나르지 않고 정보를 모아
-                            # 아침 및 마감 브리핑 때 Gemini가 '단 하나의 최고급 리포트'로 통합 정리하여 발송!
+                            # ── [스마트 취합 브리핑 버퍼 및 인텔리전스 풀 적재] ──
+                            # 낱개로 쪼개서 쏘지 않고, 모아서 Gemini가 '단 하나의 스마트 브리핑'으로 요약 발송하도록 적재!
                             _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
+                            if len(clean_text) >= 25 and not has_exclude_kw:
+                                briefing_buffer.append({
+                                    'channel': ch_name,
+                                    'text': clean_text,
+                                    'stock': matched_dict.get('name') if matched_dict else None
+                                })
 
                         briefing_state[state_key] = p_id
 
@@ -388,6 +396,25 @@ def _run_external_channels_scanner(token: str, chat_id: str):
 
                 except Exception as ch_err:
                     pass
+
+            # ── [스마트 취합 브리핑 발송 (여러 개로 쪼개진 시황글들을 Gemini가 하나로 묶어 정리)] ──
+            now_agg = time.time()
+            if briefing_buffer:
+                time_elapsed = now_agg - last_aggregated_briefing_time
+                # 버퍼에 2건 이상 모였거나, 1건이라도 쌓인 채 3분(180초) 경과 시 통합 브리핑 발송
+                if len(briefing_buffer) >= 2 or time_elapsed >= 180:
+                    try:
+                        agg_ok = send_aggregated_channel_briefing(
+                            posts=briefing_buffer,
+                            token=token,
+                            chat_id=chat_id
+                        )
+                        if agg_ok:
+                            print(f"[{time.strftime('%H:%M:%S')}] 📋 [스마트 취합 발송 완료] 외부 채널 {len(briefing_buffer)}개 시황/분석글을 Gemini가 하나로 통합 요약하여 발송함")
+                            briefing_buffer.clear()
+                            last_aggregated_briefing_time = now_agg
+                    except Exception as agg_ex:
+                        print(f"DEBUG: send_aggregated_channel_briefing error: {agg_ex}")
 
         except Exception as scan_err:
             pass
