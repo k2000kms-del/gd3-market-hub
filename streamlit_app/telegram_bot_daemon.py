@@ -205,7 +205,7 @@ def _run_external_channels_scanner(token: str, chat_id: str):
     print("📡 [실시간 데몬] 외부 채널 11개 60초 감시 스레드 가동")
 
     briefing_buffer = []
-    last_aggregated_briefing_time = time.time()
+    buffer_first_added_ts = None
 
     while True:
         try:
@@ -388,6 +388,8 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                     'text': clean_text,
                                     'stock': matched_dict.get('name') if matched_dict else None
                                 })
+                                if buffer_first_added_ts is None:
+                                    buffer_first_added_ts = time.time()
 
                         briefing_state[state_key] = p_id
 
@@ -397,12 +399,13 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                 except Exception as ch_err:
                     pass
 
-            # ── [스마트 취합 브리핑 발송 (여러 개로 쪼개진 시황글들을 Gemini가 하나로 묶어 정리)] ──
+            # ── [전 채널 통합 3분 수집 윈도우: 3분 동안 모인 모든 채널 글 취합 요약 발송] ──
             now_agg = time.time()
-            if briefing_buffer:
-                time_elapsed = now_agg - last_aggregated_briefing_time
-                # 버퍼에 2건 이상 모였거나, 1건이라도 쌓인 채 3분(180초) 경과 시 통합 브리핑 발송
-                if len(briefing_buffer) >= 2 or time_elapsed >= 180:
+            if briefing_buffer and buffer_first_added_ts:
+                collection_duration = now_agg - buffer_first_added_ts
+                # 첫 글이 들어온 후 3분(180초) 동안 모든 채널에서 들어오는 글을 계속 모음
+                # 3분이 경과했거나, 모인 글이 4개 이상일 때 단 하나의 통합 브리핑으로 취합 발송!
+                if collection_duration >= 180 or len(briefing_buffer) >= 4:
                     try:
                         agg_ok = send_aggregated_channel_briefing(
                             posts=briefing_buffer,
@@ -410,9 +413,10 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                             chat_id=chat_id
                         )
                         if agg_ok:
-                            print(f"[{time.strftime('%H:%M:%S')}] 📋 [스마트 취합 발송 완료] 외부 채널 {len(briefing_buffer)}개 시황/분석글을 Gemini가 하나로 통합 요약하여 발송함")
+                            ch_count = len(set(p['channel'] for p in briefing_buffer))
+                            print(f"[{time.strftime('%H:%M:%S')}] 📋 [3분 통합 취합 발송 완료] {ch_count}개 채널 {len(briefing_buffer)}개 시황글 Gemini 통합 요약 전송!")
                             briefing_buffer.clear()
-                            last_aggregated_briefing_time = now_agg
+                            buffer_first_added_ts = None
                     except Exception as agg_ex:
                         print(f"DEBUG: send_aggregated_channel_briefing error: {agg_ex}")
 
