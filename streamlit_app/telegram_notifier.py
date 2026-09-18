@@ -1017,12 +1017,12 @@ def _get_gemini_api_key() -> str:
                     pass
     return (k or "").strip()
 
-def _call_gemini_raw(prompt: str, api_key: str, timeout: int = 25) -> str:
-    """Gemini Flash REST API를 호출하여 텍스트 요약 생성 (3.8 Flash -> 3.7 Flash 순차 호출)."""
+def _call_gemini_raw(prompt: str, api_key: str, timeout: int = 15) -> str:
+    """Gemini Flash REST API를 호출하여 텍스트 요약 생성 (2.5 Flash -> 3.8 Flash -> 3.7 Flash 순차 호출)."""
     if not api_key:
         return ""
     import requests
-    models = ["gemini-3.8-flash", "gemini-3.7-flash"]
+    models = ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.7-flash"]
     headers = {"Content-Type": "application/json"}
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
@@ -1039,7 +1039,7 @@ def _call_gemini_raw(prompt: str, api_key: str, timeout: int = 25) -> str:
                     parts = cands[0].get('content', {}).get('parts', [])
                     if parts:
                         text_res = parts[0].get('text', '').strip()
-                        if len(text_res) >= 30:
+                        if len(text_res) >= 20:
                             return text_res
         except Exception:
             continue
@@ -2091,10 +2091,40 @@ def notify_market_crash_warning(
 
 
 def _find_stock_by_query(query: str) -> tuple:
-    """종목코드(6자리) 또는 종목명으로 시장 종목을 탐색하여 (code, name) 반환."""
+    """종목코드(6자리), 종목명, 별칭 또는 문장 내 포함된 종목명을 탐색하여 (code, name) 반환."""
     q = query.strip()
     if not q or len(q) < 2:
         return None, None
+
+    # 0. 대표 종목 별칭/축약어 우선 매칭
+    ALIAS_MAP = {
+        '삼전': ('005930', '삼성전자'),
+        '삼성전자': ('005930', '삼성전자'),
+        '하닉': ('000660', 'SK하이닉스'),
+        '하이닉스': ('000660', 'SK하이닉스'),
+        'sk하이닉스': ('000660', 'SK하이닉스'),
+        '현차': ('005380', '현대차'),
+        '현대차': ('005380', '현대차'),
+        '기아': ('000270', '기아'),
+        '삼바': ('207940', '삼성바이오로직스'),
+        '셀트': ('068270', '셀트리온'),
+        '셀트리온': ('068270', '셀트리온'),
+        '에코': ('086520', '에코프로'),
+        '에코프로': ('086520', '에코프로'),
+        '에코프로비엠': ('247540', '에코프로비엠'),
+        '엔솔': ('373220', 'LG에너지솔루션'),
+        '두에': ('034020', '두산에너빌리티'),
+        '두산에너빌리티': ('034020', '두산에너빌리티'),
+        '네이버': ('035420', 'NAVER'),
+        '카카오': ('035720', '카카오'),
+        '로보티즈': ('108490', '로보티즈'),
+        '알테오젠': ('196170', '알테오젠'),
+        '한미반도체': ('042700', '한미반도체'),
+    }
+    for alias_k, (alias_c, alias_n) in ALIAS_MAP.items():
+        if alias_k in q.lower() or alias_k in q:
+            return alias_c, alias_n
+
     try:
         import os, pandas as pd
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2119,9 +2149,210 @@ def _find_stock_by_query(query: str) -> tuple:
                 row = df_m[df_m['Name'].astype(str).str.contains(q, case=False, na=False)]
                 if not row.empty:
                     return str(row.iloc[0]['Code']).zfill(6), str(row.iloc[0]['Name'])
+                # 4. 문장 내 종목명 포함 탐색 (질문 문장 내 종목명 추출)
+                valid_names = [str(n) for n in df_m['Name'].dropna().unique() if len(str(n)) >= 2]
+                matched_in_q = [n for n in valid_names if n in q]
+                if matched_in_q:
+                    best_name = max(matched_in_q, key=len)
+                    r = df_m[df_m['Name'] == best_name]
+                    if not r.empty:
+                        return str(r.iloc[0]['Code']).zfill(6), best_name
     except Exception as e:
         print(f"DEBUG: _find_stock_by_query error: {e}")
     return None, None
+
+def reply_ai_market_analysis(
+    token: str,
+    chat_id: str,
+    user_query: str,
+    context_fn=None,
+    matched_code: str = None,
+    matched_name: str = None
+) -> bool:
+    """
+    대표님이 텔레그램 채팅창에서 던진 자연어 질문(시장 현상황, 개별 종목, 투자 전략 등)에 대해
+    실시간 KOSPI/KOSDAQ 지수, 당일 퀀트 TOP 점수, 11개 채널 시황 인텔리전스를 결합하여
+    Gemini Flash AI가 1~2초 내로 분석 답변 카드를 전송.
+    """
+    import os, json, time, requests
+    from datetime import datetime, timezone, timedelta
+
+    _now_kst = datetime.now(timezone(timedelta(hours=9))).strftime('%H:%M')
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+    # 1. 실시간 코스피 / 코스닥 지수 수집
+    kospi_str = "2,600.00pt (0.00%)"
+    kosdaq_str = "800.00pt (0.00%)"
+    try:
+        r_ks = requests.get("https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI", headers=headers, timeout=2.0)
+        if r_ks.status_code == 200:
+            d = r_ks.json().get('datas', [{}])[0]
+            fl_r = float(d.get('fluctuationsRatio', 0))
+            kospi_str = f"{d.get('closePrice', '2,600')}pt ({fl_r:+.2f}%)"
+    except Exception:
+        pass
+
+    try:
+        r_kd = requests.get("https://polling.finance.naver.com/api/realtime/domestic/index/KOSDAQ", headers=headers, timeout=2.0)
+        if r_kd.status_code == 200:
+            d = r_kd.json().get('datas', [{}])[0]
+            fl_r = float(d.get('fluctuationsRatio', 0))
+            kosdaq_str = f"{d.get('closePrice', '800')}pt ({fl_r:+.2f}%)"
+    except Exception:
+        pass
+
+    # 2. 언급된 특정 종목 실시간 시세 및 퀀트 수집
+    stock_context = ""
+    stock_chart_bytes = None
+    stock_markup = None
+
+    if matched_code:
+        clean_code = str(matched_code).zfill(6)
+        s_name = matched_name or clean_code
+        live_s = fetch_realtime_stock_info(clean_code)
+        s_price = live_s.get('price', 0.0) if live_s else 0.0
+        s_chg = live_s.get('chg', 0.0) if live_s else 0.0
+        s_open = live_s.get('open', s_price) if live_s else s_price
+        s_amt = live_s.get('amount_str', '') if live_s else ''
+        if live_s and live_s.get('name'):
+            s_name = live_s['name']
+
+        # 퀀트 점수 확인
+        s_score = 75.0
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+            if os.path.exists(q_path):
+                import pandas as pd
+                df_q = pd.read_csv(q_path)
+                if not df_q.empty and 'Code' in df_q.columns:
+                    df_q['Code'] = df_q['Code'].astype(str).str.split('.').str[0].str.zfill(6)
+                    r_q = df_q[df_q['Code'] == clean_code]
+                    if not r_q.empty:
+                        s_score = float(r_q.iloc[0].get('Total_Score', s_score))
+        except Exception:
+            pass
+
+        stock_context = (
+            f"\n[질문 대상 종목 실시간 데이터]\n"
+            f"- 종목명: {s_name} ({clean_code})\n"
+            f"- 현재가: {s_price:,.0f}원 ({s_chg:+.2f}%)\n"
+            f"- 당일 시초가(세력 절대 방어선): {s_open:,.0f}원\n"
+            f"- 당일 거래대금: {s_amt or '집계 중'}\n"
+            f"- GD 3.0 퀀트 점수: {s_score:.1f}점 (80점 이상 강력 매수 우위)\n"
+        )
+        stock_chart_bytes = _get_stock_chart_safe(clean_code, s_name, score=s_score, stop_loss=s_open)
+        stock_markup = make_stock_action_keyboard(clean_code, s_name)
+
+    # 3. 실시간 퀀트 모멘텀 상위 3종목 수집
+    top_quant_str = "집계 중"
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
+        if os.path.exists(q_path):
+            import pandas as pd
+            df_q = pd.read_csv(q_path)
+            if not df_q.empty and 'Total_Score' in df_q.columns and 'Name' in df_q.columns:
+                top_q = df_q.sort_values('Total_Score', ascending=False).head(3)
+                top_quant_str = ", ".join([f"{r.get('Name')}({float(r.get('Total_Score', 0)):.1f}점)" for _, r in top_q.iterrows()])
+    except Exception:
+        pass
+
+    # 4. 최근 11개 채널 시황 핵심 문장 요약 수집
+    channel_snippet = ""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        p_path = os.path.join(base_dir, 'data', 'channel_intelligence_pool.json')
+        if not os.path.exists(p_path):
+            p_path = os.path.join(base_dir, 'streamlit_app', 'data', 'channel_intelligence_pool.json')
+        if os.path.exists(p_path):
+            with open(p_path, 'r', encoding='utf-8') as pf:
+                pool = json.load(pf)
+            if isinstance(pool, list) and pool:
+                texts = [p.get('text', '')[:100] for p in pool[-5:] if p.get('text')]
+                channel_snippet = "\n".join([f"• {t}" for t in texts if len(t) > 15])
+    except Exception:
+        pass
+
+    if not channel_snippet:
+        channel_snippet = "반도체 HBM 선별 수급, 방산/원전 정책 수혜 모멘텀 지속, 고환율 속 외국인 프로그램 매매 주시"
+
+    # 5. Gemini Flash AI 프롬프트 생성 및 호출
+    gemini_key = _get_gemini_api_key()
+    ai_reply_text = ""
+
+    if gemini_key:
+        prompt = (
+            f"당신은 대한민국 상위 0.1% 퀀트 헤지펀드 시황 수석 운용역이자 GD 3.0 Market Hub의 스마트 AI 투자 비서입니다.\n"
+            f"투자자(대표님)가 텔레그램 메신저에서 다음 질문을 입력하였습니다:\n\n"
+            f"질문: \"{user_query}\"\n\n"
+            f"[실시간 시장 팩트 데이터 ({_now_kst} 기준)]\n"
+            f"- KOSPI 지수: {kospi_str}\n"
+            f"- KOSDAQ 지수: {kosdaq_str}\n"
+            f"{stock_context}"
+            f"- 실시간 퀀트 TOP 종목: {top_quant_str}\n"
+            f"- 최근 주식 채널 핫이슈: {channel_snippet}\n\n"
+            f"위 실시간 팩트 데이터를 결합하여, 모바일 텔레그램에서 한눈에 읽기 쉬운 정갈한 형식으로 명쾌하게 답변하세요.\n"
+            f"반드시 HTML 태그(<b>, <i>, <code>)만을 사용하고 마크다운 별표(**)는 일절 쓰지 마세요.\n\n"
+            f"[출력 템플릿]\n"
+            f"🤖 <b>[GD 3.0 실시간 AI 시장 분석]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📊 <b>1. 실시간 팩트 현황 요약</b>\n"
+            f"(질문하신 내용과 관련된 현재 시장/종목의 핵심 수치와 흐름을 2~3문장으로 명확히 요약)\n\n"
+            f"💡 <b>2. AI 심층 수급 & 배경 분석</b>\n"
+            f"(왜 이런 흐름이 나타나는지 외인/기관 메이저 수급의 의도 및 재료 맥락을 2~3문장으로 분석)\n\n"
+            f"🎯 <b>3. 실전 투자자 액션 가이드</b>\n"
+            f"(대표님이 지금 취해야 할 구체적인 포지션, 목표가/손절선 기준, 비중 조절 팁 2문장 제시)\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>⚡ GD 3.0 퀀트 & Gemini Flash 2.5 초고속 연동</i>"
+        )
+        try:
+            ai_res = _call_gemini_raw(prompt, gemini_key, timeout=12)
+            if ai_res and len(ai_res) >= 40:
+                ai_clean = ai_res.replace('**', '<b>').replace('###', '').strip()
+                ai_reply_text = ai_clean
+        except Exception as _ai_err:
+            print(f"DEBUG: reply_ai_market_analysis gemini call error: {_ai_err}")
+
+    # 6. Fallback: Gemini 미응답 시 실시간 팩트 기반 자동 생성
+    if not ai_reply_text:
+        target_title = f"{matched_name} ({matched_code})" if matched_code else "국내 증시 실시간 현황"
+        ai_reply_text = (
+            f"🤖 <b>[GD 3.0 실시간 시장 팩트 분석]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⏱️ <b>기준 시각</b>: {_now_kst} (실시간 집계)\n"
+            f"📈 <b>KOSPI</b>: <b>{kospi_str}</b>\n"
+            f"📉 <b>KOSDAQ</b>: <b>{kosdaq_str}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📊 <b>[주요 수급 & 퀀트 모멘텀]</b>\n"
+            f"• <b>퀀트 상위 유망주</b>: <b>{top_quant_str}</b>\n"
+            f"• <b>시장 핵심 맥락</b>: {channel_snippet[:120]}...\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 <b>실전 매매 가이드</b>:\n"
+            f"외인 및 기관 수급의 선별적 유입이 진행되는 장세입니다. <b>시초가 방어선</b>을 기준으로 지지 여부를 확인 후 분할 매수로 대응하십시오.\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>💡 하단 메뉴 버튼을 누르시면 세부 퀀트 및 차트를 확인하실 수 있습니다.</i>"
+        )
+
+    # 7. 키보드 구성
+    if not stock_markup:
+        stock_markup = {
+            'inline_keyboard': [
+                [
+                    {'text': '🔥 퀀트 TOP3', 'callback_data': '추천'},
+                    {'text': '💼 내 포트폴리오', 'callback_data': '포트'}
+                ],
+                [
+                    {'text': '📊 시장 에너지', 'callback_data': '시장'},
+                    {'text': '🌐 11개 채널 시황', 'callback_data': '채널'}
+                ]
+            ]
+        }
+
+    # 8. 전송
+    if stock_chart_bytes:
+        return _send_photo(token, chat_id, stock_chart_bytes, caption=ai_reply_text, reply_markup=stock_markup, force_send=True)
+    return _send(token, chat_id, ai_reply_text, reply_markup=stock_markup, force_send=True)
 
 
 def _reply_stock_diagnosis(token: str, chat_id: str, code: str, context_fn=None, stock_name: str = "") -> bool:
@@ -2610,9 +2841,14 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
             f"• <b>[🔥 퀀트 TOP3 추천]</b> : 80점 이상 유망 종목\n"
             f"• <b>[📊 시장 에너지 진단]</b> : KOSPI 국면 & 권장 비중\n"
             f"• <b>[🌐 11개 채널 통합 시황]</b> : <b>/채널</b> (중복 없는 단일 종합 리포트)\n"
+            f"• <b>[🤖 AI 실시간 시장/종목 분석]</b> : <b>/ai [질문]</b> 또는 자유롭게 질문 입력\n"
             f"• <b>[❓ 명령어 도움말]</b> : 비서 메뉴얼\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"<i>💬 궁금하신 종목명(예: '삼성전자', '로보티즈')을 그냥 입력하셔도 실시간 진단 카드와 차트가 즉시 뜹니다!</i>"
+            f"<i>💡 질문 예시:</i>\n"
+            f"👉 <i>'현재 시장 상황 어때?'</i>\n"
+            f"👉 <i>'삼성전자 지금 살만한 타이밍이야?'</i>\n"
+            f"👉 <i>'하이닉스 외인 수급이랑 목표가 알려줘'</i>\n"
+            f"👉 <i>종목명(예: '로보티즈', '삼전')만 입력하셔도 실시간 진단 차트가 즉시 뜹니다!</i>"
         )
         return _send(token, chat_id, reply, force_send=True)
 
@@ -2621,11 +2857,25 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
         target_code = clean_cmd.replace('ai_', '').replace('diag_', '').strip().zfill(6)
         return _reply_stock_diagnosis(token, chat_id, target_code, context_fn)
 
-    # 6. 자유 종목 검색 (종목명 또는 6자리 종목코드 입력 시)
+    # 7. AI 자연어 질문 및 종목 검색 통합 처리
     else:
-        matched_code, matched_name = _find_stock_by_query(cmd_text)
-        if matched_code:
+        raw_query = cmd_text.strip()
+        if raw_query.lower().startswith('/ai'):
+            raw_query = raw_query[3:].strip()
+        elif raw_query.lower().startswith('ai'):
+            raw_query = raw_query[2:].strip()
+
+        matched_code, matched_name = _find_stock_by_query(raw_query or cmd_text)
+
+        # 7-1. 단독 종목명 또는 6자리 종목코드만 입력된 경우 (예: "삼성전자", "005930", "삼전") -> 초고속 타점 진단 & 차트 발송
+        trimmed = raw_query.strip()
+        if matched_code and (trimmed == matched_name or trimmed == matched_code or len(trimmed) <= 4 or (trimmed.isdigit() and len(trimmed) <= 6)):
             return _reply_stock_diagnosis(token, chat_id, matched_code, context_fn, matched_name)
+
+        # 7-2. 그 외 모든 자연어 질문 ("시장 현상황 어때?", "삼성전자 지금 살까?", "오늘 코스피 왜 떨어져?" 등)
+        # -> Gemini AI가 실시간 지수 + 수급 + 퀀트 점수 + 11개 채널 시황을 융합하여 실시간 스마트 브리핑 전송!
+        if len(raw_query) >= 2 or matched_code:
+            return reply_ai_market_analysis(token, chat_id, raw_query or cmd_text, context_fn, matched_code=matched_code, matched_name=matched_name)
 
     return False
 
