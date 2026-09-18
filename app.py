@@ -3916,31 +3916,53 @@ if 'accum_date' not in st.session_state or st.session_state.accum_date != today_
 st.sidebar.title("🎛️ 대시보드 설정")
 
 def _get_active_telegram_credentials():
+    """Streamlit Secrets, telegram_notifier 모듈, 환경변수, 절대경로 secrets.toml을 전수 탐색하여 텔레그램 인증정보를 100% 로드"""
     token, chat_id = "", ""
+    # 1순위: st.secrets
     try:
         if hasattr(st, "secrets"):
             token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
             chat_id = str(st.secrets.get("TELEGRAM_CHAT_ID", ""))
     except Exception:
         pass
-    if not token:
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = str(os.environ.get("TELEGRAM_CHAT_ID", ""))
-    if not token:
-        for sp in [".streamlit/secrets.toml", "../.streamlit/secrets.toml"]:
-            if os.path.exists(sp):
-                try:
-                    import toml
-                    sd = toml.load(sp)
-                    token = token or sd.get('TELEGRAM_BOT_TOKEN', '')
-                    chat_id = chat_id or str(sd.get('TELEGRAM_CHAT_ID', ''))
-                    if token:
-                        break
-                except Exception:
-                    pass
-    if not token:
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    # 2순위: telegram_notifier 모듈의 검증된 _get_default_credentials() 직접 호출
+    if not token or not chat_id:
+        try:
+            from telegram_notifier import _get_default_credentials
+            t_tok, t_chat = _get_default_credentials()
+            token = token or t_tok
+            chat_id = chat_id or t_chat
+        except Exception:
+            pass
+    # 3순위: os.environ
+    if not token or not chat_id:
+        token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = chat_id or str(os.environ.get("TELEGRAM_CHAT_ID", ""))
+    # 4순위: 모든 가능한 secrets.toml 절대경로 전수 파싱
+    if not token or not chat_id:
+        try:
+            import toml
+            cur_d = os.path.dirname(os.path.abspath(__file__))
+            candidate_paths = [
+                os.path.join(cur_d, '.streamlit', 'secrets.toml'),
+                os.path.join(cur_d, '..', '.streamlit', 'secrets.toml'),
+                os.path.join(cur_d, 'streamlit_app', '.streamlit', 'secrets.toml'),
+                os.path.join(os.path.dirname(cur_d), '.streamlit', 'secrets.toml'),
+                os.path.join('.streamlit', 'secrets.toml'),
+                os.path.join('..', '.streamlit', 'secrets.toml')
+            ]
+            for sp in candidate_paths:
+                if os.path.exists(sp):
+                    try:
+                        sd = toml.load(sp)
+                        token = token or sd.get('TELEGRAM_BOT_TOKEN', '')
+                        chat_id = chat_id or str(sd.get('TELEGRAM_CHAT_ID', ''))
+                        if token and chat_id:
+                            break
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     return (token or "").strip(), str(chat_id or "").strip()
 
 if st.sidebar.button("🔄 최신 데이터 즉시 동기화", type="primary", use_container_width=True, help="클라우드 및 거래소 최신 데이터를 즉시 강제 다운로드하고 텔레그램과 동기화합니다."):
@@ -4280,44 +4302,66 @@ _current_gemini_key = _load_gemini_api_key()
 st.session_state['user_gemini_key'] = _current_gemini_key
 
 # 사이드바 API Key 자동 연동 안내 및 관리 섹션
-if _current_gemini_key:
+is_valid_gemini_format = bool(_current_gemini_key and _current_gemini_key.startswith('AIzaSy'))
+
+if is_valid_gemini_format:
     st.sidebar.markdown(
         "<div style='background:rgba(46,204,113,0.12); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-bottom:8px; text-align:center;'>"
         "🟢 Gemini Flash 3.8 자동 연동 완료"
         "</div>", 
         unsafe_allow_html=True
     )
+elif _current_gemini_key:
+    st.sidebar.markdown(
+        "<div style='background:rgba(231,76,60,0.15); border:1px solid #e74c3c; border-radius:6px; padding:8px 10px; font-size:12px; color:#e74c3c; font-weight:bold; margin-bottom:8px; text-align:center;'>"
+        "⚠️ Gemini API Key 재등록 필요<br><span style='font-size:11px; font-weight:normal; color:#ddd;'>현재 키가 AIzaSy... 형식이 아닙니다. 정식 키를 입력해주세요.</span>"
+        "</div>", 
+        unsafe_allow_html=True
+    )
+else:
+    st.sidebar.markdown(
+        "<div style='background:rgba(241,196,15,0.15); border:1px solid #f1c40f; border-radius:6px; padding:8px 10px; font-size:12px; color:#f1c40f; font-weight:bold; margin-bottom:8px; text-align:center;'>"
+        "🔑 Gemini API Key 입력 필요"
+        "</div>", 
+        unsafe_allow_html=True
+    )
 
-with st.sidebar.expander("🔑 Gemini API Key 변경 (필요시에만 설정)", expanded=False):
+with st.sidebar.expander("🔑 Gemini API Key 변경 (필요시에만 설정)", expanded=not is_valid_gemini_format):
     new_gemini_input = st.text_input(
         "Google AI Studio API Key",
         type="password",
         value=_current_gemini_key,
-        placeholder="AQ... 또는 AIzaSy... (새 키 입력 시 즉시 적용)",
-        help="이미 secrets.toml에 등록된 키가 자동 적용 중입니다. 새 키로 변경하실 때만 입력하세요."
+        placeholder="AIzaSy... (Google AI Studio 정식 키)",
+        help="Google AI Studio(aistudio.google.com)에서 발급받은 AIzaSy... 형식의 API Key를 입력하세요."
     )
     col_k1, col_k2 = st.columns([1, 1])
     with col_k1:
         if st.button("💾 영구 저장", key="btn_save_gemini_key", use_container_width=True):
             if new_gemini_input.strip():
-                st.session_state['user_gemini_key'] = new_gemini_input.strip()
-                # secrets.toml 파일에 영구 반영
-                try:
-                    sec_path = os.path.join(os.path.dirname(__file__), "..", ".streamlit", "secrets.toml")
-                    if not os.path.exists(sec_path):
-                        sec_path = os.path.join(os.path.dirname(__file__), ".streamlit", "secrets.toml")
-                    if os.path.exists(sec_path):
-                        with open(sec_path, "r", encoding="utf-8") as f:
-                            sec_content = f.read()
+                saved_key = new_gemini_input.strip()
+                st.session_state['user_gemini_key'] = saved_key
+                # 모든 secrets.toml 파일에 영구 동시 반영
+                cur_base = os.path.dirname(os.path.abspath(__file__))
+                for sec_path in [
+                    os.path.join(cur_base, ".streamlit", "secrets.toml"),
+                    os.path.join(cur_base, "streamlit_app", ".streamlit", "secrets.toml"),
+                    os.path.join(cur_base, "..", ".streamlit", "secrets.toml")
+                ]:
+                    try:
+                        os.makedirs(os.path.dirname(sec_path), exist_ok=True)
+                        sec_content = ""
+                        if os.path.exists(sec_path):
+                            with open(sec_path, "r", encoding="utf-8") as f:
+                                sec_content = f.read()
                         import re
                         if 'GEMINI_API_KEY' in sec_content:
-                            sec_content = re.sub(r'GEMINI_API_KEY\s*=\s*"[^"]*"', f'GEMINI_API_KEY = "{new_gemini_input.strip()}"', sec_content)
+                            sec_content = re.sub(r'GEMINI_API_KEY\s*=\s*"[^"]*"', f'GEMINI_API_KEY = "{saved_key}"', sec_content)
                         else:
-                            sec_content += f'\nGEMINI_API_KEY = "{new_gemini_input.strip()}"\n'
+                            sec_content += f'\nGEMINI_API_KEY = "{saved_key}"\n'
                         with open(sec_path, "w", encoding="utf-8") as f:
                             f.write(sec_content)
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
                 st.success("✅ 새 Gemini Key가 영구 저장되었습니다!")
                 st.rerun()
             else:
@@ -4444,15 +4488,23 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
                             used_model_name = model_name
                             break
                     else:
-                        last_err = f"({model_name} 코드 {r.status_code}): {r.text[:150]}"
+                        if r.status_code == 400 and ("API key not valid" in r.text or "INVALID_ARGUMENT" in r.text):
+                            last_err = "등록된 API Key가 구글 정식 키가 아닙니다. Google AI Studio(aistudio.google.com)에서 발급받은 정식 키(AIzaSy...로 시작)를 'Gemini API Key 변경'에 입력해 주세요."
+                        elif r.status_code == 429:
+                            last_err = "Gemini API 호출 속도 제한(429)에 도달했습니다. 1~2분 후 다시 시도해 주세요."
+                        else:
+                            last_err = f"({model_name} 코드 {r.status_code}): {r.text[:150]}"
                         continue
                 except Exception as ex:
                     last_err = f"({model_name}): {str(ex)}"
                     continue
 
             if not success:
-                st.sidebar.error(f"❌ AI 답변 생성 지연/오류: {last_err}")
-                st.sidebar.info("💡 잠시 후 다시 질문하기 버튼을 눌러주시면 즉시 정상 생성됩니다.")
+                st.sidebar.error(f"❌ AI 답변 생성 지연/오류:\n{last_err}")
+                if "정식 키" in str(last_err):
+                    st.sidebar.info("💡 사이드바의 '🔑 Gemini API Key 변경' 메뉴를 열고 구글 AI 스튜디오 키를 붙여넣은 뒤 [💾 영구 저장]을 눌러주세요.")
+                else:
+                    st.sidebar.info("💡 잠시 후 다시 질문하기 버튼을 눌러주시면 즉시 정상 생성됩니다.")
 
 
 # KIS API Key 정보 - st.secrets를 try/except로 안전하게 접근
