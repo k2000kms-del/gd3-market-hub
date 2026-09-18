@@ -2797,8 +2797,8 @@ def notify_external_channel_alert(
         f"{'─' * 20}\n"
         f"<i>{clean_raw[:300]}</i>\n"
         f"{'─' * 20}\n"
-        f"💡 <b>GD AI 분석:</b> {ai_analysis}"
-        f"{quant_section}\n"
+        f"💡 <b>GD AI 분석:</b>\n{ai_analysis}\n"
+        f"{quant_section}"
         f"{'─' * 20}\n"
         f"⚠️ <i>속보성 급등락 뇌동매매 금지 · 원칙 매매 준수</i>"
     )

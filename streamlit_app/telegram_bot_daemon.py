@@ -254,6 +254,9 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                     if not new_msgs:
                         continue
 
+                    # ── [이번 채널 루프에서 단 1건만 발송 허용 (배치 묶음 스팸 발송 차단)] ──
+                    channel_alert_sent = False
+
                     for m_item in new_msgs:
                         p_id = m_item.get('data-post', '')
                         text_el = m_item.find('div', class_='tgme_widget_message_text')
@@ -285,15 +288,17 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                     }
                                     break
 
-                        # ── [실시간 즉시 알림 트리거 (시장 충격 속보 & 주가 급등락 이슈)] ──
-                        MACRO_URGENT_KEYWORDS = [
-                            '[속보]', '[긴급]', '[단독]', '비상계엄', '계엄령',
-                            '서킷브레이커', '사이드카', '거래정지', '미사일 발사', '공습경보', '전면전'
+                        # ── [엄격한 실시간 즉시 알림 트리거 (단순 시황/통계/잡담 발송 100% 차단)] ──
+                        # A) 국내 증시 마비급 초특급 매크로 위기 (일반 [속보] 말머리 완전 제외)
+                        MACRO_CRISIS_KEYWORDS = [
+                            '서킷브레이커', '사이드카', '비상계엄', '계엄령', '전면전', '공습경보'
                         ]
+                        # B) 국내 상장 종목의 주가를 즉각 튀게 만드는 핵심 호재/악재 공시
                         STOCK_SURGE_KEYWORDS = [
                             '[특징주]', '특징주', '공급계약', '대규모 수주', '수주공시', 
                             'FDA 승인', '임상 성공', '상한가', '공개매수', '경영권 분쟁', 
-                            '무상증자', '기술수출', '라이선스 아웃', '어닝 서프라이즈'
+                            '무상증자', '기술수출', '라이선스 아웃', '어닝 서프라이즈',
+                            '횡령', '배임', '감사의견'
                         ]
                         EXCLUDE_KEYWORDS = [
                             '교통사고', '음주운전', '마약', '열애', '이혼', '청문회', 
@@ -301,34 +306,42 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                             '연예', '아이돌', '케이팝', '학폭', '사망사고', '이벤트', '구독'
                         ]
 
-                        has_macro_urgent = any(k in clean_text for k in MACRO_URGENT_KEYWORDS)
-                        has_stock_surge = any(k in clean_text for k in STOCK_SURGE_KEYWORDS) and (matched_dict is not None)
-                        has_exclude_kw = any(k in clean_text for k in EXCLUDE_KEYWORDS)
-                        
-                        # ── [품질 필터: 최소 80자 이상 + 종목 매칭 OR 매크로 이슈 필수] ──
-                        # 단순 한 줄 코멘트(통계 수치, 단순 질문 등) 속보 발송 절대 금지
-                        is_enough_content = len(clean_text) >= 80
+                        is_macro_crisis = any(k in clean_text for k in MACRO_CRISIS_KEYWORDS)
+                        is_stock_event  = (matched_dict is not None) and any(k in clean_text for k in STOCK_SURGE_KEYWORDS)
+                        has_exclude_kw  = any(k in clean_text for k in EXCLUDE_KEYWORDS)
+
+                        # ★ 핵심 원칙:
+                        # 1. 국내 증시 비상사태이거나, 명확한 국내 종목 호재/악재가 특정될 때만 알림!
+                        # 2. 해외 시장 통계, 옵션 만기일 분석, 개인 시황 코멘트 등은 100% 알림 미발송 (풀로만 저장)
                         is_urgent = (
-                            (has_macro_urgent or has_stock_surge)
+                            (is_macro_crisis or is_stock_event)
                             and not has_exclude_kw
-                            and is_enough_content
+                            and len(clean_text) >= 40
+                            and not channel_alert_sent  # 이번 배치에서 아직 발송 안 한 경우만
                         )
 
                         if is_urgent:
-                            # ── [최근 30분 동일/유사 속보 중복 발송 방지 (Dedup)] ──
                             now_ts = time.time()
                             recent_urgent = briefing_state.get('recent_urgent_alerts', [])
                             recent_urgent = [a for a in recent_urgent if isinstance(a, dict) and (now_ts - a.get('time', 0)) < 1800]
-                            
-                            # ── [동일 채널 5분 쿨다운: 같은 채널에서 5분 이내 재발송 차단] ──
-                            same_ch_recent = [a for a in recent_urgent if a.get('channel') == ch_name and (now_ts - a.get('time', 0)) < 300]
-                            if same_ch_recent:
-                                print(f"[{time.strftime('%H:%M:%S')}] ⏸️ [{ch_name}] 5분 쿨다운 적용 — 브리핑 풀 저장")
+
+                            # ── [방어 1: 전체 채널 통합 전역 쿨다운 (최소 5분 동안 연속 알림 금지)] ──
+                            last_global_alert_ts = max([a.get('time', 0) for a in recent_urgent], default=0)
+                            if (now_ts - last_global_alert_ts) < 300:
+                                print(f"[{time.strftime('%H:%M:%S')}] ⏸️ [전역 쿨다운 5분] 연속 알림 방지 — 브리핑 풀로 안전 저장: {clean_text[:30]}...")
                                 _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
                                 briefing_state[state_key] = p_id
                                 continue
 
-                            # ── [동일 종목 30분 중복 차단] ──
+                            # ── [방어 2: 동일 채널 쿨다운 (최소 15분 이내 재발송 차단)] ──
+                            same_ch_recent = [a for a in recent_urgent if a.get('channel') == ch_name and (now_ts - a.get('time', 0)) < 900]
+                            if same_ch_recent:
+                                print(f"[{time.strftime('%H:%M:%S')}] ⏸️ [{ch_name}] 동일 채널 15분 쿨다운 적용 — 브리핑 풀 저장")
+                                _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
+                                briefing_state[state_key] = p_id
+                                continue
+
+                            # ── [방어 3: 동일 종목 30분 중복 차단] ──
                             if matched_dict:
                                 same_stock_recent = [a for a in recent_urgent if a.get('stock') == matched_dict.get('name') and (now_ts - a.get('time', 0)) < 1800]
                                 if same_stock_recent:
@@ -337,9 +350,10 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                     briefing_state[state_key] = p_id
                                     continue
 
+                            # ── [방어 4: 내용 유사도 중복 차단] ──
                             existing_urgent_texts = [a.get('text', '') for a in recent_urgent]
-                            if _is_duplicate_content(clean_text, existing_urgent_texts, threshold=0.50):
-                                print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [중복 방지] {ch_name} 유사 속보 이미 발송됨 (30분 이내 중복 스킵): {clean_text[:40]}...")
+                            if _is_duplicate_content(clean_text, existing_urgent_texts, threshold=0.45):
+                                print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [중복 방지] {ch_name} 유사 속보 이미 발송됨 (스킵): {clean_text[:40]}...")
                                 _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
                             else:
                                 notify_external_channel_alert(
@@ -349,8 +363,10 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                     token=token,
                                     chat_id=chat_id
                                 )
-                                s_desc = matched_dict['name'] if matched_dict else '초특급속보'
-                                print(f"[{time.strftime('%H:%M:%S')}] 🚨 {ch_name} 실시간 긴급 속보 전송: [{p_id}] ({s_desc})")
+                                s_desc = matched_dict['name'] if matched_dict else '국내증시비상'
+                                print(f"[{time.strftime('%H:%M:%S')}] 🚨 {ch_name} 엄선 속보 발송 완료: [{p_id}] ({s_desc})")
+                                channel_alert_sent = True  # 이번 배치에서 발송 완료 마킹
+
                                 recent_urgent.append({
                                     'time': now_ts,
                                     'text': clean_text[:300],
@@ -361,8 +377,8 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                 time.sleep(0.5)
                         else:
                             # ── [아침/마감 브리핑 축적 자료실 (알림 미발송, 조용히 풀에만 저장)] ──
-                            # 11개 채널의 내용을 개별적으로 퍼나르지 않고 정보를 모아
-                            # 아침 및 마감 브리핑 때 '단 하나의 완성형 리포트'로 통합 발송!
+                            # 11개 채널의 시황/통계/분석글을 개별적으로 퍼나르지 않고 정보를 모아
+                            # 아침 및 마감 브리핑 때 Gemini가 '단 하나의 최고급 리포트'로 통합 정리하여 발송!
                             _save_to_intelligence_pool(ch_name, clean_text, matched_dict)
 
                         briefing_state[state_key] = p_id
