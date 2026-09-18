@@ -57,7 +57,7 @@ def _load_csv_safely(fname: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 def _clean_channel_text(text: str) -> str:
-    """채널 원문에서 링크, 불필요한 공백, 줄바꿈, 광고성 문구를 제거하여 핵심 내용만 정제."""
+    """채널 원문에서 링크, 불필요한 공백, 줄바꿈, 광고성 문구, 코인/가상자산을 제거하여 순수 주식 핵심 내용만 정제."""
     if not text:
         return ""
     import re
@@ -68,6 +68,7 @@ def _clean_channel_text(text: str) -> str:
     # 3. 3줄 이상의 과도한 연속 줄바꿈 및 공백 압축
     t = re.sub(r'\n{3,}', '\n\n', t)
     t = re.sub(r'[ \t]+', ' ', t)
+
     # 4. 채널 홍보/인사말/동영상 유도 문구 필터링
     junk_patterns = [
         r'채널에 들어오셨습니다.*', r'무료 입장.*', r'구독과 좋아요.*',
@@ -76,10 +77,23 @@ def _clean_channel_text(text: str) -> str:
     ]
     for jp in junk_patterns:
         t = re.sub(jp, '', t, flags=re.IGNORECASE)
+
+    # 5. 코인/가상자산/크립토/단순 선물 메모 100% 원천 차단 (국내/해외 주식 전용)
+    crypto_junk = [
+        '하이퍼리퀴드', 'hype', '비트코인', 'btc', '이더리움', 'eth', '솔라나', 'sol',
+        '업비트', '빗썸', '바이낸스', '코인', '가상자산', '가상화폐', '에어드랍',
+        '선물 일봉', '선물 숏', '선물 롱', '숏 포지션', '롱 포지션', '크립토',
+        'nft', 'meme', '민팅', '지갑 주소'
+    ]
+    t_lower = t.lower()
+    for cj in crypto_junk:
+        if cj in t_lower:
+            return ""
+
     t = t.strip()
-    # 5. 정제 후 유효 글자 수가 15자 미만이면 무의미한 껍데기로 간주
+    # 6. 정제 후 유효 글자 수가 35자 미만이면 영양가 없는 단순 1줄 메모/껍데기로 간주하여 영구 탈락
     hangul_or_eng = len(re.findall(r'[가-힣a-zA-Z0-9]', t))
-    if hangul_or_eng < 15:
+    if hangul_or_eng < 35:
         return ""
     return t
 
@@ -425,6 +439,27 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                         briefing_buffer.clear()
                         buffer_first_added_ts = None
                     else:
+                        # ── [취합 브리핑 품질 및 심야 보호 안전망] ──
+                        from datetime import datetime as _dt_agg, timezone as _tz_agg, timedelta as _td_agg
+                        _kst_now = _dt_agg.now(_tz_agg(_td_agg(hours=9)))
+                        _cur_hour = _kst_now.hour
+                        is_late_night = (_cur_hour >= 23 or _cur_hour < 7)
+
+                        total_chars = sum(len(p.get('text', '')) for p in novel_posts)
+                        # 1. 1건 단독이고 80자 미만의 단순 단문 메모/껍데기는 취합 브리핑으로 발송 금지
+                        if len(novel_posts) == 1 and total_chars < 80:
+                            print(f"[{time.strftime('%H:%M:%S')}] ℹ️ [단문 메모 제외] 1건 단독({total_chars}자)은 취합 브리핑 대상이 아니므로 버퍼에서 정리합니다: {novel_posts[0].get('text', '')[:30]}...")
+                            briefing_buffer.clear()
+                            buffer_first_added_ts = None
+                            continue
+
+                        # 2. 심야 시간대(23시~07시)에는 120자 이상의 글로벌 핵심 매크로가 아니면 발송 차단
+                        if is_late_night and total_chars < 120:
+                            print(f"[{time.strftime('%H:%M:%S')}] 🌙 [심야 수면 보호] 심야({_cur_hour}시) 단문 시황은 발송하지 않고 인텔리전스 풀에만 보관합니다.")
+                            briefing_buffer.clear()
+                            buffer_first_added_ts = None
+                            continue
+
                         try:
                             agg_ok = send_aggregated_channel_briefing(
                                 posts=novel_posts,
@@ -534,17 +569,26 @@ def standalone_context_fn(query_type: str, code: str = None, **kwargs):
                     return df_c
 
         elif query_type == 'market':
-            df_m = _load_csv_safely('df_market_summary.csv')
-            ks_c = 2560.0
-            if not df_m.empty and 'Close' in df_m.columns:
-                ks_c = float(df_m.iloc[0]['Close'])
+            ks_c = 2680.50
+            ks_chg = 0.0
+            try:
+                import requests
+                r_ks = requests.get("https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI", headers={'User-Agent': 'Mozilla/5.0'}, timeout=1.5)
+                if r_ks.status_code == 200:
+                    d = r_ks.json().get('datas', [{}])[0]
+                    ks_c = float(str(d.get('closePrice', '2680.5')).replace(',', ''))
+                    ks_chg = float(d.get('fluctuationsRatio', 0))
+            except Exception:
+                df_m = _load_csv_safely('df_market_summary.csv')
+                if not df_m.empty and 'Close' in df_m.columns:
+                    ks_c = float(df_m.iloc[0]['Close'])
             return {
                 'kospi_close': ks_c,
-                'kospi_chg': 0.0,
-                'b_ma5': 12.0,
-                'b_status': '수급 안정',
-                'stock_ratio': 70,
-                'cash_ratio': 30
+                'kospi_chg': ks_chg,
+                'b_ma5': 14.5 if ks_chg >= 0 else 8.0,
+                'b_status': '🟢 수급 안정 지지세' if ks_chg >= 0 else '🟡 단기 매물 소화',
+                'stock_ratio': 70 if ks_chg >= 0 else 40,
+                'cash_ratio': 30 if ks_chg >= 0 else 60
             }
 
     except Exception as ex:
