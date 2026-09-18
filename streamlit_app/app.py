@@ -2482,6 +2482,56 @@ def _get_market_ttl():
     return 120 if is_market_hours else 600
 
 
+@st.cache_data(ttl=30)  # 거래대금/상승률 리더 전용: 30초 캐시 (개장 초반 실시간 데이터 채움)
+def fetch_naver_full_market_realtime() -> pd.DataFrame:
+    """
+    네이버 금융 모바일 API로 코스피/코스닥 전체 종목 실시간 시세 수집.
+    - 개장 직후 09:00부터 1분 이내 집계 시작 (GitHub CSV/FDR 지연 완전 대체)
+    - 시가총액 순 페이지 방식으로 최대 2,000개 종목 커버
+    - 반환: DataFrame(Code, Name, Close, ChagesRatio, Volume, Amount)
+    """
+    import requests
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    rows = []
+    try:
+        for market in ['KOSPI', 'KOSDAQ']:
+            for page in range(1, 21):   # 페이지당 100개 × 20페이지 = 최대 2,000개
+                try:
+                    url = (f"https://m.stock.naver.com/api/stocks/marketValue/{market}"
+                           f"?page={page}&pageSize=100")
+                    r = requests.get(url, headers=headers, timeout=3.0)
+                    if r.status_code != 200:
+                        break
+                    stocks = r.json().get('stocks', [])
+                    if not stocks:
+                        break
+                    for s in stocks:
+                        try:
+                            code = str(s.get('itemCode', '')).zfill(6)
+                            name = s.get('stockName', '')
+                            close = float(str(s.get('closePrice', '0')).replace(',', '') or 0)
+                            chg   = float(str(s.get('fluctuationsRatio', '0')).replace(',', '') or 0)
+                            vol   = float(str(s.get('accumulatedTradingVolume', '0')).replace(',', '') or 0)
+                            # accumulatedTradingValue 단위: 백만원 → 원으로 변환
+                            amt_raw = str(s.get('accumulatedTradingValue', '0')).replace(',', '')
+                            amt   = float(amt_raw or 0) * 1_000_000
+                            if code and name:
+                                rows.append({'Code': code, 'Name': name, 'Close': close,
+                                             'ChagesRatio': chg, 'Volume': vol, 'Amount': amt})
+                        except Exception:
+                            continue
+                except Exception:
+                    break
+    except Exception as e:
+        print(f"DEBUG: fetch_naver_full_market_realtime error: {e}")
+
+    if not rows:
+        return pd.DataFrame()
+    df_naver = pd.DataFrame(rows)
+    df_naver['Code'] = df_naver['Code'].astype(str).str.zfill(6)
+    return df_naver
+
+
 @st.cache_data(ttl=30)  # 순환매 지도 전용: 30초 캐시 (장중 실시간 체결가 초고속 반영)
 def fetch_naver_realtime_sector_prices(stock_names: tuple) -> dict:
     """
@@ -3448,7 +3498,7 @@ df_q_filtered  = _apply_etf_filter(df_q)
 df_m_filtered  = _apply_etf_filter(df_m) if not df_m.empty else pd.DataFrame()
 
 
-# ── 실시간 시세 반영 (FDR → GitHub CSV 폴백) ─────────────────
+# ── 실시간 시세 반영 (FDR → 네이버 실시간 → GitHub CSV 폴백 3단계) ─────────────────
 if df_m is not None and not df_m.empty:
     with st.spinner("🔄 실시간 시세 및 지수 반영 중..."):
         try:
@@ -3481,7 +3531,46 @@ if df_m is not None and not df_m.empty:
                         df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
         except Exception:
             pass  # 실패해도 GitHub CSV 데이터로 자연스럽게 동작
-        
+
+        # ── [실시간 강화] 개장 초반 거래대금/등락률 공백 → 네이버 실시간 API 자동 채움 ──
+        # Amount가 대부분 0이거나 비어있을 때 (개장 초반 09:00~09:10, 또는 FDR 미반영 상황)
+        # 네이버 모바일 API(30초 캐시)로 코스피/코스닥 전체 종목 실시간 시세를 즉시 반영
+        try:
+            _kst_now = datetime.now(timezone(timedelta(hours=9)))
+            _is_market_hours = _kst_now.weekday() < 5 and (900 <= _kst_now.hour * 100 + _kst_now.minute <= 1530)
+            if _is_market_hours and not df_m.empty and 'Amount' in df_m.columns:
+                # 거래대금이 0인 종목 비율이 70% 이상이면 → 네이버 실시간으로 교체
+                _zero_ratio = (df_m['Amount'] == 0).sum() / max(len(df_m), 1)
+                if _zero_ratio > 0.7:
+                    _df_naver_rt = fetch_naver_full_market_realtime()
+                    if not _df_naver_rt.empty:
+                        # 네이버 실시간 데이터로 Amount, ChagesRatio, Close, Volume 덮어쓰기
+                        df_m_base2 = df_m.drop(columns=['Close', 'ChagesRatio', 'Volume', 'Amount'], errors='ignore')
+                        df_m = df_m_base2.merge(
+                            _df_naver_rt[['Code', 'Close', 'ChagesRatio', 'Volume', 'Amount']],
+                            on='Code', how='left'
+                        )
+                        for col in ['Close', 'ChagesRatio', 'Volume', 'Amount']:
+                            if col in df_m.columns:
+                                df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
+                else:
+                    # 거래대금이 어느 정도 채워져 있어도 0인 행만 네이버로 보완
+                    _df_naver_rt = fetch_naver_full_market_realtime()
+                    if not _df_naver_rt.empty and 'Amount' in df_m.columns:
+                        _zero_mask = df_m['Amount'] == 0
+                        if _zero_mask.any():
+                            _naver_map = _df_naver_rt.set_index('Code')
+                            for col in ['Close', 'ChagesRatio', 'Volume', 'Amount']:
+                                if col in _naver_map.columns:
+                                    df_m.loc[_zero_mask, col] = df_m.loc[_zero_mask, 'Code'].map(
+                                        _naver_map[col]
+                                    ).fillna(df_m.loc[_zero_mask, col] if col in df_m.columns else 0)
+                            for col in ['Close', 'ChagesRatio', 'Volume', 'Amount']:
+                                if col in df_m.columns:
+                                    df_m[col] = pd.to_numeric(df_m[col], errors='coerce').fillna(0)
+        except Exception:
+            pass  # 네이버 폴백 실패해도 기존 데이터 유지
+
         # [성능 최적화] 실시간 시세가 반영된 df_m으로 df_m_filtered 재계산 (최신 가격 반영)
         if not df_m.empty:
             df_m_filtered = _apply_etf_filter(df_m)
