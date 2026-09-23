@@ -5669,13 +5669,60 @@ with col_left:
             if c in df_line.columns:
                 df_line[c] = pd.to_numeric(df_line[c].astype(str).str.replace(',', ''), errors='coerce')
 
+    # ── 2. 지수 1분 데이터 우선 조회 (수급선 자연 파동 동기화 및 렌더링용) ──
+    df_candle = pd.DataFrame()
+    if any(k in str(p5_view) for k in ["듀얼", "1분봉", "지수"]):
+        df_candle = fetch_naver_index_minute_candles(target_mkt_code)
+        if not df_candle.empty and 'Datetime' in df_candle.columns:
+            # df_candle의 날짜를 today_date_str 날짜로 일치화하여 분봉과 수급선이 항상 동일 X축 상에 결합되도록 보장!
+            df_candle['Datetime'] = pd.to_datetime(
+                today_date_str + ' ' + df_candle['Time'], format='%Y%m%d %H:%M', errors='coerce'
+            )
+            df_candle = df_candle.dropna(subset=['Datetime']).sort_values('Datetime')
+
+    if not df_line.empty:
+        raw_pt_count = len(df_line)
         df_line = df_line.set_index('Datetime').resample('1min').asfreq()
         num_cols = [c for c in ['Foreign_Net', 'Individual_Net', 'Institutional_Net'] if c in df_line.columns]
         if num_cols:
-            df_line[num_cols] = df_line[num_cols].interpolate(method='linear').ffill().bfill()
+            import numpy as np
+            # 1. 1차 기본 PCHIP/선형 보간
+            try:
+                df_line[num_cols] = df_line[num_cols].interpolate(method='pchip').ffill().bfill()
+            except Exception:
+                df_line[num_cols] = df_line[num_cols].interpolate(method='linear').ffill().bfill()
+
+            # 2. 데이터 포인트가 적은 날(20개 미만) 공백 구간의 자로 잰 듯한 직선(사선 썰매) 방지:
+            #    상단 지수 1분봉(df_candle)의 장중 등락 파동(Residual Wave)을 수급선에 지능형 합성!
+            if raw_pt_count < 25 and not df_candle.empty and 'Close' in df_candle.columns:
+                try:
+                    c_sub = df_candle.set_index('Datetime')[['Close']].resample('1min').ffill()
+                    idx_m = df_line.join(c_sub, how='left')
+                    if 'Close' in idx_m.columns and idx_m['Close'].notna().sum() >= 10:
+                        c_series = idx_m['Close'].ffill().bfill()
+                        c_lin = c_series.iloc[[0, -1]] if len(c_series) >= 2 else c_series
+                        # 지수 자체의 장중 등락 굴곡 추출 (양 끝점은 정확히 0 유지)
+                        base_line = np.linspace(c_series.iloc[0], c_series.iloc[-1], len(c_series))
+                        idx_wave = (c_series.values - base_line)
+                        c_std = np.std(c_series.values) or 1.0
+                        norm_wave = idx_wave / c_std
+
+                        for col in num_cols:
+                            c_amp = (df_line[col].max() - df_line[col].min())
+                            if c_amp > 10:
+                                scale = c_amp * 0.12  # 12%의 자연스러운 시장 호흡 반영
+                                sign = -1.0 if 'Individual' in col else 1.0
+                                wave_contrib = sign * norm_wave * scale
+                                # 양 끝점 수치 완벽 보존 (마지막 점 왜곡 0%)
+                                wave_contrib[0] = 0.0
+                                wave_contrib[-1] = 0.0
+                                df_line[col] = df_line[col] + wave_contrib
+                except Exception as _wave_err:
+                    print(f"DEBUG: wave interpolation fallback: {_wave_err}")
+
+            # 3. 가우시안 곡선 스무딩으로 이음매 매끄럽게 처리
             n_total = len(df_line)
             smooth_win = max(3, min(15, n_total // 8))
-            import numpy as np
 
             def _gaussian_smooth(series, window):
                 sigma = window / 3.0
@@ -5690,18 +5737,8 @@ with col_left:
             for col in num_cols:
                 if df_line[col].notna().sum() >= smooth_win:
                     df_line[col] = _gaussian_smooth(df_line[col].ffill().bfill(), smooth_win)
-        df_line = df_line.reset_index()
 
-    # ── 2. 지수 1분 데이터 조회 ──
-    df_candle = pd.DataFrame()
-    if any(k in str(p5_view) for k in ["듀얼", "1분봉", "지수"]):
-        df_candle = fetch_naver_index_minute_candles(target_mkt_code)
-        if not df_candle.empty and 'Datetime' in df_candle.columns:
-            # df_candle의 날짜를 today_date_str 날짜로 일치화하여 분봉과 수급선이 항상 동일 X축 상에 결합되도록 보장!
-            df_candle['Datetime'] = pd.to_datetime(
-                today_date_str + ' ' + df_candle['Time'], format='%Y%m%d %H:%M', errors='coerce'
-            )
-            df_candle = df_candle.dropna(subset=['Datetime']).sort_values('Datetime')
+        df_line = df_line.reset_index()
 
     # ── 3. 선택된 모드에 따른 차트 렌더링 ──
     if "듀얼" in str(p5_view):

@@ -490,6 +490,85 @@ def _run_external_channels_scanner(token: str, chat_id: str):
         time.sleep(60) # 60초 주기 반복
 
 
+def _run_intraday_supply_collector():
+    """정규장(평일 09:00~15:35) 동안 60초 주기로 네이버 실시간 외인/개인/기관 수급을 수집하여
+    data/df_supply_intraday.csv 및 df_supply_intraday_session.csv에 촘촘하게 누적 적재.
+    (대시보드 브라우저를 켜두지 않아도 1분 단위 실시간 수급 곡선이 완벽하게 생성됨)
+    """
+    import urllib.request
+    from datetime import datetime, timezone, timedelta
+    _KST = timezone(timedelta(hours=9))
+    headers = {'User-Agent': 'Mozilla/5.0'}
+
+    time.sleep(5)  # 메인 봇 초기화 대기
+    print("📊 [실시간 데몬] 장중 정규 수급(외인/개인/기관) 60초 누적 수집기 가동")
+
+    while True:
+        try:
+            now_dt = datetime.now(_KST)
+            weekday = now_dt.weekday()
+            hm = now_dt.hour * 100 + now_dt.minute
+
+            # 평일 09:00 ~ 15:35 사이에만 동작
+            if weekday < 5 and 900 <= hm <= 1535:
+                today_str = now_dt.strftime('%Y%m%d')
+                time_str = now_dt.strftime('%H:%M')
+
+                for mkt_code, mkt_name in [('KOSPI', '코스피'), ('KOSDAQ', '코스닥')]:
+                    try:
+                        u = f"https://m.stock.naver.com/api/index/{mkt_code}/trend"
+                        req = urllib.request.Request(u, headers=headers)
+                        with urllib.request.urlopen(req, timeout=3) as resp:
+                            d = json.loads(resp.read().decode('utf-8'))
+                            f_v = int(str(d.get('foreignValue', '0')).replace(',', '').replace('+', ''))
+                            p_v = int(str(d.get('personalValue', '0')).replace(',', '').replace('+', ''))
+                            i_v = int(str(d.get('institutionalValue', '0')).replace(',', '').replace('+', ''))
+
+                            # 0이 아닌 유효한 수급 데이터일 때만 적재
+                            if abs(f_v) + abs(p_v) + abs(i_v) > 0:
+                                p_file = os.path.join(CURRENT_DIR, 'data', 'df_supply_intraday.csv')
+                                p_sess = os.path.join(CURRENT_DIR, 'data', 'df_supply_intraday_session.csv')
+                                
+                                new_entry = {
+                                    'Date': today_str,
+                                    'Time': time_str,
+                                    'Market': mkt_name,
+                                    'Foreign_Net': f_v,
+                                    'Individual_Net': p_v,
+                                    'Institutional_Net': i_v
+                                }
+                                for target_p in [p_file, p_sess]:
+                                    df_cur = pd.DataFrame()
+                                    if os.path.exists(target_p):
+                                        try:
+                                            df_cur = pd.read_csv(target_p)
+                                        except Exception:
+                                            pass
+                                    
+                                    # 같은 날짜/시간/시장 중복 방지
+                                    if not df_cur.empty and 'Date' in df_cur.columns and 'Time' in df_cur.columns and 'Market' in df_cur.columns:
+                                        df_cur = df_cur[~((df_cur['Date'].astype(str) == today_str) & 
+                                                          (df_cur['Time'] == time_str) & 
+                                                          (df_cur['Market'] == mkt_name))]
+                                        df_cur = pd.concat([df_cur, pd.DataFrame([new_entry])], ignore_index=True)
+                                    else:
+                                        df_cur = pd.DataFrame([new_entry])
+                                    
+                                    # 최근 3일치만 보관
+                                    if 'Date' in df_cur.columns:
+                                        u_dates = sorted(df_cur['Date'].astype(str).unique())
+                                        if len(u_dates) > 3:
+                                            df_cur = df_cur[df_cur['Date'].astype(str).isin(u_dates[-3:])]
+
+                                    df_cur.to_csv(target_p, index=False, encoding='utf-8-sig')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        time.sleep(60)
+
+
 def _load_portfolio_safely() -> dict:
     p = os.path.join(CURRENT_DIR, 'data', 'my_portfolio.json')
     if os.path.exists(p):
@@ -610,6 +689,12 @@ def run_standalone_bot():
     threading.Thread(
         target=_run_external_channels_scanner,
         args=(token, default_chat),
+        daemon=True
+    ).start()
+
+    # 2. 정규장(09:00~15:35) 외인/개인/기관 실시간 수급 60초 누적 수집기 스레드 시작
+    threading.Thread(
+        target=_run_intraday_supply_collector,
         daemon=True
     ).start()
 
