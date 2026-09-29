@@ -569,6 +569,11 @@ def load_portfolio(force_remote: bool = False):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     port_path = os.path.join(base_dir, 'data', 'my_portfolio.json')
 
+    # [수정] force_remote가 아니면 세션 캐시를 Supabase보다 먼저 확인
+    # → save_portfolio() 직후 st.rerun() 시 수정 내용이 즉시 반영됨
+    if not force_remote and 'session_portfolio' in st.session_state and st.session_state['session_portfolio']:
+        return st.session_state['session_portfolio']
+
     sb = get_supabase()
     if sb:
         try:
@@ -595,9 +600,6 @@ def load_portfolio(force_remote: bool = False):
                     return port_dict
         except Exception:
             pass
-
-    if not force_remote and 'session_portfolio' in st.session_state and st.session_state['session_portfolio']:
-        return st.session_state['session_portfolio']
 
     if force_remote:
         remote_data = fetch_remote_portfolio()
@@ -2482,7 +2484,7 @@ def _get_market_ttl():
     return 120 if is_market_hours else 600
 
 
-@st.cache_data(ttl=30)  # 거래대금/상승률 리더 전용: 30초 캐시 (개장 초반 실시간 데이터 채움)
+@st.cache_data(ttl=60)  # [성능 최적화] 1분 캐시: 매 rerun마다 2,000건 API 호출 방지
 def fetch_naver_full_market_realtime() -> pd.DataFrame:
     """
     네이버 금융 모바일 API로 코스피/코스닥 전체 종목 실시간 시세 수집.
