@@ -6945,12 +6945,60 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                     # ── 포트폴리오 실시간 현재가 사전 조회 (네이버 캐시 우선 활용) ──
                     # 이미 fetch_naver_full_market_realtime() 결과가 있으면 dict로 변환하여 재활용
                     _naver_price_map = {}
+                    _kst_now_p = datetime.now(timezone(timedelta(hours=9)))
+                    _is_market_open = (_kst_now_p.weekday() < 5 and
+                                       900 <= _kst_now_p.hour * 100 + _kst_now_p.minute <= 1535)
                     try:
                         _nv_cached = fetch_naver_full_market_realtime()
                         if not _nv_cached.empty and 'Code' in _nv_cached.columns and 'Close' in _nv_cached.columns:
                             _naver_price_map = _nv_cached.set_index('Code')['Close'].to_dict()
                     except Exception:
                         pass
+
+                    # ── [성능 최적화] 장중 미조회 종목만 병렬 API 호출로 현재가 보완 ──
+                    # df_m + 네이버 전체 캐시에서도 못 찾은 종목만 추려서 한 번에 병렬 처리
+                    def _fetch_single_price(code_str):
+                        """네이버 개별 종목 현재가 API (장중 전용, 종목코드 → float)"""
+                        try:
+                            import requests as _rq
+                            _r = _rq.get(
+                                f"https://m.stock.naver.com/api/stock/{code_str}/basic",
+                                headers={'User-Agent': 'Mozilla/5.0'},
+                                timeout=2.0
+                            )
+                            if _r.status_code == 200:
+                                _j = _r.json()
+                                _v = float(str(_j.get('closePrice', 0) or 0).replace(',', ''))
+                                return code_str, _v
+                        except Exception:
+                            pass
+                        return code_str, 0.0
+
+                    # 1단계: df_m 기반으로 포트폴리오 전 종목 가격 사전 추출
+                    _dm_price_map = {}
+                    if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
+                        _dm_codes_s = df_m['Code'].astype(str).str.split('.').str[0].str.strip().str.zfill(6)
+                        for _c in portfolio.keys():
+                            _cn = str(_c).split('.')[0].strip().zfill(6)
+                            _mm = df_m[_dm_codes_s == _cn]
+                            if not _mm.empty:
+                                _cv = pd.to_numeric(_mm.iloc[0]['Close'], errors='coerce')
+                                if pd.notna(_cv) and _cv > 0:
+                                    _dm_price_map[_cn] = float(_cv)
+
+                    # 2단계: 여전히 0인 종목만 골라서 장중이면 병렬 API 호출
+                    _missing_codes = [
+                        str(c).split('.')[0].strip().zfill(6)
+                        for c in portfolio.keys()
+                        if str(c).split('.')[0].strip().zfill(6) not in _dm_price_map
+                        and str(c).split('.')[0].strip().zfill(6) not in _naver_price_map
+                    ]
+                    _extra_price_map = {}
+                    if _missing_codes and _is_market_open:
+                        with ThreadPoolExecutor(max_workers=min(len(_missing_codes), 5)) as _pool:
+                            for _code_r, _price_r in _pool.map(_fetch_single_price, _missing_codes):
+                                if _price_r > 0:
+                                    _extra_price_map[_code_r] = _price_r
 
                     # 포트폴리오 테이블 렌더링 (모든 보유 종목에 대해 퀀트 등급 색상 자동 하이라이트 일괄 적용)
                     port_rows = []
@@ -6960,38 +7008,20 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         p_entry = float(p_data.get("entry_price", 0) or 0)
                         p_qty   = float(p_data.get("qty", 0) or 0)
 
-                        # ─ 1순위: df_m (Code 6자리 정규화 매칭) ─
-                        p_close = 0.0
-                        if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
-                            _dm_codes = df_m['Code'].astype(str).str.split('.').str[0].str.strip().str.zfill(6)
-                            m_match = df_m[_dm_codes == p_code_norm]
-                            if not m_match.empty:
-                                _cv = pd.to_numeric(m_match.iloc[0]['Close'], errors='coerce')
-                                if pd.notna(_cv) and _cv > 0:
-                                    p_close = float(_cv)
+                        # ─ 1순위: df_m 사전 추출 맵 ─
+                        p_close = _dm_price_map.get(p_code_norm, 0.0)
 
-                        # ─ 2순위: 네이버 실시간 캐시 ─
-                        if p_close == 0.0 and p_code_norm in _naver_price_map:
+                        # ─ 2순위: 네이버 전체 캐시 ─
+                        if p_close == 0.0:
                             _nv_p = _naver_price_map.get(p_code_norm, 0.0)
                             if _nv_p and _nv_p > 0:
                                 p_close = float(_nv_p)
 
-                        # ─ 3순위: 네이버 개별 종목 실시간 API 직접 호출 ─
+                        # ─ 3순위: 병렬 개별 API 결과 (장중에만) ─
                         if p_close == 0.0:
-                            try:
-                                import requests as _req_mod
-                                _rn = _req_mod.get(
-                                    f"https://m.stock.naver.com/api/stock/{p_code_norm}/basic",
-                                    headers={'User-Agent': 'Mozilla/5.0'},
-                                    timeout=2.0
-                                )
-                                if _rn.status_code == 200:
-                                    _rj = _rn.json()
-                                    _sv = float(str(_rj.get('closePrice', _rj.get('stockExchangeType', {}).get('closePrice', 0)) or 0).replace(',', ''))
-                                    if _sv > 0:
-                                        p_close = _sv
-                            except Exception:
-                                pass
+                            _ex_p = _extra_price_map.get(p_code_norm, 0.0)
+                            if _ex_p > 0:
+                                p_close = _ex_p
 
                         # ─ 4순위: 최후 폴백 (매수가로 대체, 수익률 0% 표시) ─
                         if p_close == 0.0:
