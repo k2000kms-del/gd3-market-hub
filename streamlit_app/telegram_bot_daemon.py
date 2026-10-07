@@ -417,8 +417,8 @@ def _run_external_channels_scanner(token: str, chat_id: str):
             now_agg = time.time()
             if briefing_buffer and buffer_first_added_ts:
                 collection_duration = now_agg - buffer_first_added_ts
-                # 첫 글이 들어온 후 3분(180초) 경과했거나, 모인 글이 4개 이상일 때 발송 조건 검사
-                if collection_duration >= 180 or len(briefing_buffer) >= 4:
+                # 첫 글이 들어온 후 5분(300초) 경과했거나, 모인 글이 5개 이상일 때 발송 조건 검사
+                if collection_duration >= 300 or len(briefing_buffer) >= 5:
                     # ── [지능형 중복 배제: 최근 3시간 내 이미 브리핑된 글과 유사한 글 필터링] ──
                     recent_briefed = briefing_state.get('recent_briefed_posts', [])
                     # 3시간(10800초) 지난 오래된 기록 정리

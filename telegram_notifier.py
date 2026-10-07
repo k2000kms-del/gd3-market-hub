@@ -3265,19 +3265,22 @@ def send_aggregated_channel_briefing(
     summary_body = ""
     if gemini_k:
         prompt = (
-            f"너는 최고 수준의 퀀트 증시 분석가야. 다음은 주요 텔레그램 채널({ch_str})에서 "
-            f"실시간으로 올라온 주요 시황/통계/분석글 {len(combined_texts)}건이야:\n\n"
+            f"너는 최고 수준의 퀀트 증시 분석가야. 다음은 여러 텔레그램 채널({ch_str})에서 "
+            f"올라온 {len(combined_texts)}건의 시황/분석 데이터야:\n\n"
             f"{all_content_str}\n\n"
-            f"이 글들을 낱개로 전달하지 않고, 투자자가 한눈에 맥락을 파악할 수 있도록 "
-            f"아래 형식에 맞춰 완벽하게 한국어로 취합 정리해줘:\n"
-            f"- 가독성을 위해 핵심 수치(예: 7조 달러, +5.6%, 112%), 주요 종목명, 핵심 단어는 <b>태그로 강조해줘.\n"
-            f"- 이전 브리핑과 중복되는 뻔한 내용은 빼고, 새로 추가된 변화와 핵심 팩트 위주로 정리해줘.\n\n"
-            f"📌 [핵심 이슈 종합 요약]\n"
-            f"• (가장 중요한 팩트 1)\n"
-            f"• (가장 중요한 팩트 2)\n"
-            f"• (가장 중요한 팩트 3)\n\n"
-            f"💡 [GD 3.0 시장 영향 및 실전 대응]\n"
-            f"(국내 증시 및 주요 섹터에 미칠 영향과, 지금 투자자가 취해야 할 매수/관망/방어선 전략을 2~3문장으로 명확히 제시)"
+            f"이 내용들을 서로 뭉뚱그려 섞지 말고, 반드시 아래 4개 섹션으로 명확히 '구분/분리'하여 한국어로 요약해줘.\n"
+            f"(해당하는 내용이 없는 섹션은 아예 생략해도 됨)\n\n"
+            f"🌐 [글로벌 매크로 & 해외 이슈]\n"
+            f"• (미국 증시, 환율, 금리, 원자재 등 글로벌 핵심 팩트 1~2개)\n\n"
+            f"📈 [국내 증시 & 수급/섹터]\n"
+            f"• (코스피/코스닥 지수 흐름, 외인/기관 수급, 주도 테마 1~2개)\n\n"
+            f"🎯 [주요 개별 종목 속보 & 이슈]\n"
+            f"• <b>종목명</b>: 핵심 내용 및 주가 영향 요약\n\n"
+            f"💡 [GD 3.0 실전 대응 전략]\n"
+            f"• (지금 투자자가 취해야 할 매수/관망/방어선 전략을 1~2문장으로 명확히 제시)\n\n"
+            f"규칙:\n"
+            f"- 핵심 수치(예: <b>+3.5%</b>, <b>1,400원</b>)와 주요 종목명은 반드시 <b> 태그로 강조할 것.\n"
+            f"- 여러 채널의 잡다한 단문이나 단순 인사는 과감히 버리고 알맹이 팩트만 남길 것."
         )
         try:
             ai_res = _call_gemini_raw(prompt, gemini_k, timeout=25)
@@ -3291,15 +3294,20 @@ def send_aggregated_channel_briefing(
         bullets = []
         for idx, p in enumerate(posts[:4], 1):
             raw_t = p.get('text', '').strip()
+            ch_item = ch_map.get(p.get('channel', ''), '외부채널')
             lines = [l.strip() for l in raw_t.split('\n') if len(l.strip()) >= 10]
-            lead_sentence = lines[0] if lines else raw_t[:85]
-            if len(lead_sentence) > 85:
-                lead_sentence = lead_sentence[:85] + "..."
-            bullets.append(f"• {lead_sentence}")
+            lead_sentence = lines[0] if lines else raw_t[:80]
+            if len(lead_sentence) > 80:
+                lead_sentence = lead_sentence[:80] + "..."
+            stk = p.get('stock')
+            if stk:
+                bullets.append(f"• 🎯 <b>[{stk}]</b>: {lead_sentence} (출처: {ch_item})")
+            else:
+                bullets.append(f"• 📌 <b>[{ch_item}]</b>: {lead_sentence}")
         summary_body = (
-            f"📌 <b>[핵심 시황 취합 요약]</b>\n" + "\n".join(bullets) + "\n\n"
-            f"💡 <b>[GD 3.0 시장 점검 및 대응]</b>\n"
-            f"글로벌 변동성 요인이 상존하므로, 주요 세력 방어선 지지 여부와 수급 유입을 확인하며 침착하게 분할 대응하십시오."
+            f"📋 <b>[채널별 핵심 팩트 요약]</b>\n" + "\n".join(bullets) + "\n\n"
+            f"💡 <b>[GD 3.0 실전 대응]</b>\n"
+            f"• 시장 변동성 요인이 혼재되어 있으므로 세력 방어선 지지 여부를 확인하며 분할 대응하십시오."
         )
 
     # 4. 수치 및 핵심 키워드 2차 자동 시각 강조 (HTML 마크업)
