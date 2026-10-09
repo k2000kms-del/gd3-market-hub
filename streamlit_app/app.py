@@ -1866,7 +1866,13 @@ def run_portfolio_background_scanner():
             now_dt = datetime.now(_KST)
             today_str = now_dt.strftime('%Y-%m-%d')
             hm = now_dt.hour * 100 + now_dt.minute
-            is_weekday = now_dt.weekday() < 5
+            
+            # 📅 정규 개장일 판별 (주말 및 법정 공휴일 완벽 필터링)
+            try:
+                from telegram_notifier import is_trading_day
+                is_weekday = is_trading_day(now_dt.date())
+            except Exception:
+                is_weekday = now_dt.weekday() < 5
             
             # 날짜 바뀜 시 브리핑 및 일봉 플래그 리셋
             if _briefing_sent_date != today_str:

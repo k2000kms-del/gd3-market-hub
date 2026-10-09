@@ -223,6 +223,15 @@ def _run_external_channels_scanner(token: str, chat_id: str):
 
     while True:
         try:
+            # 📅 주말(토/일) 및 KRX 법정 공휴일에는 스캐너 대기 (알림 일체 미발송)
+            try:
+                from telegram_notifier import is_trading_day
+                if not is_trading_day():
+                    time.sleep(60)
+                    continue
+            except Exception:
+                pass
+
             briefing_state = {}
             if os.path.exists(state_file):
                 try:

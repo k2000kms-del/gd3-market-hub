@@ -16,13 +16,96 @@ from datetime import datetime
 _TG_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
 
 
+# ── 📅 한국거래소(KRX) 법정 공휴일 및 정규 휴장일 판별 ───────────────
+def is_krx_market_holiday(date_obj=None) -> bool:
+    """
+    KST 기준 해당 날짜가 국내 증시(KRX) 휴장일인지 판별.
+    (토/일요일 주말, 신정, 설날, 삼일절, 선거일, 어린이날, 부처님오신날, 현충일, 광복절, 추석, 개천절, 한글날, 성탄절, 연말 폐장일 및 대체공휴일)
+    """
+    try:
+        import datetime as dt
+        if date_obj is None:
+            kst_tz = dt.timezone(dt.timedelta(hours=9))
+            date_obj = dt.datetime.now(kst_tz).date()
+        elif isinstance(date_obj, dt.datetime):
+            date_obj = date_obj.date()
+
+        # 1. 주말 (토요일: 5, 일요일: 6)
+        if date_obj.weekday() >= 5:
+            return True
+
+        # 2. 2025~2027 KRX 정규 공휴일 및 휴장일 목록 (YYYY-MM-DD)
+        # 연도별 설날/추석 연휴, 대체공휴일, 12월 31일 폐장일 완벽 등록
+        KRX_HOLIDAYS = {
+            # 2025년
+            "2025-01-01", "2025-01-27", "2025-01-28", "2025-01-29", "2025-01-30",
+            "2025-03-03", "2025-05-01", "2025-05-05", "2025-05-06", "2025-06-06",
+            "2025-08-15", "2025-10-03", "2025-10-05", "2025-10-06", "2025-10-07",
+            "2025-10-08", "2025-10-09", "2025-12-25", "2025-12-31",
+            # 2026년
+            "2026-01-01", # 신정
+            "2026-02-16", "2026-02-17", "2026-02-18", # 설날 연휴
+            "2026-03-01", "2026-03-02", # 삼일절 및 대체공휴일
+            "2026-05-01", # 근로자의 날(증시 휴장)
+            "2026-05-05", # 어린이날
+            "2026-05-24", "2026-05-25", # 부처님오신날 및 대체공휴일
+            "2026-06-03", # 지방선거일
+            "2026-06-06", # 현충일
+            "2026-08-15", "2026-08-17", # 광복절 및 대체공휴일
+            "2026-09-24", "2026-09-25", "2026-09-26", # 추석 연휴
+            "2026-10-03", "2026-10-05", # 개천절 및 대체공휴일
+            "2026-10-09", # 한글날
+            "2026-12-25", # 성탄절
+            "2026-12-31", # 연말 증시 폐장일 (거래 없음)
+            # 2027년
+            "2027-01-01", "2027-02-05", "2027-02-06", "2027-02-07", "2027-02-08",
+            "2027-03-01", "2027-05-01", "2027-05-05", "2027-05-13", "2027-06-06",
+            "2027-08-15", "2027-09-14", "2027-09-15", "2027-09-16", "2027-10-03",
+            "2027-10-09", "2027-12-25", "2027-12-31",
+        }
+
+        # 고정 매년 공휴일 패턴 (MM-DD)
+        FIXED_HOLIDAYS_MMDD = {
+            "01-01", # 신정
+            "03-01", # 삼일절
+            "05-01", # 근로자의 날(KRX 휴장)
+            "05-05", # 어린이날
+            "06-06", # 현충일
+            "08-15", # 광복절
+            "10-03", # 개천절
+            "10-09", # 한글날
+            "12-25", # 성탄절
+            "12-31", # 폐장일
+        }
+
+        date_str = date_obj.strftime("%Y-%m-%d")
+        mmdd_str = date_obj.strftime("%m-%d")
+
+        if date_str in KRX_HOLIDAYS or mmdd_str in FIXED_HOLIDAYS_MMDD:
+            return True
+
+        return False
+    except Exception as e:
+        print(f"DEBUG: is_krx_market_holiday error: {e}")
+        return False
+
+
+def is_trading_day(date_obj=None) -> bool:
+    """정상 매매 개장일(평일이면서 KRX 휴장일이 아닌 날) 여부"""
+    return not is_krx_market_holiday(date_obj)
+
+
 def is_allowed_notification_hours() -> bool:
-    """KST 기준 현재 시각이 알림 전송 허용 시간(07:00 ~ 23:30)에 해당하는지 판별"""
+    """KST 기준 현재 시각이 알림 전송 허용 시간(07:00 ~ 23:30)에 해당하는지 판별 (주말/공휴일은 기본 차단)"""
     try:
         import datetime as dt
         kst_tz = dt.timezone(dt.timedelta(hours=9))
         now = dt.datetime.now(kst_tz)
         
+        # 1. 주말 및 KRX 공휴일에는 자동 알림 차단
+        if is_krx_market_holiday(now.date()):
+            return False
+
         current_time = now.time()
         start_time = dt.time(7, 0, 0)
         end_time = dt.time(23, 30, 0)
@@ -35,7 +118,7 @@ def is_allowed_notification_hours() -> bool:
 
 def is_silent_hours() -> bool:
     """
-    KST 기준 야간 수면 시간(22:00 ~ 08:00) 또는 주말(토/일)인지 판별.
+    KST 기준 야간 수면 시간(22:00 ~ 08:00) 또는 주말/공휴일인지 판별.
     이 시간대에는 텔레그램 메시지를 '무음 알림(disable_notification=True)'으로 발송하여
     소리나 진동 없이 조용히 도착하도록 처리 (무음 수면 모드).
     """
@@ -43,7 +126,7 @@ def is_silent_hours() -> bool:
         import datetime as dt
         kst_tz = dt.timezone(dt.timedelta(hours=9))
         now = dt.datetime.now(kst_tz)
-        if now.weekday() >= 5: # 토요일(5), 일요일(6)
+        if is_krx_market_holiday(now.date()):
             return True
         h = now.hour
         return (h >= 22 or h < 8) # 밤 10시부터 익일 오전 8시까지
@@ -52,13 +135,16 @@ def is_silent_hours() -> bool:
 
 
 def is_regular_market_hours() -> bool:
-    """KST 기준 정규장 거래 시간(평일 월~금 09:00 ~ 15:30) 여부 판별 (스캘핑/실시간 매매신호 전용)"""
+    """KST 기준 정규장 거래 시간(평일 월~금 09:00 ~ 15:30 및 공휴일 제외) 여부 판별 (스캘핑/실시간 매매신호 전용)"""
     try:
         import datetime as dt
         kst_tz = dt.timezone(dt.timedelta(hours=9))
         now = dt.datetime.now(kst_tz)
-        if now.weekday() >= 5: # 주말 (토, 일)
+        
+        # 주말 및 법정 공휴일 즉시 차단
+        if is_krx_market_holiday(now.date()):
             return False
+
         hm = now.hour * 100 + now.minute
         return 900 <= hm <= 1530
     except Exception as e:
