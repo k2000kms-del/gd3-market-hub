@@ -223,14 +223,11 @@ def _run_external_channels_scanner(token: str, chat_id: str):
 
     while True:
         try:
-            # 📅 주말(토/일) 및 KRX 법정 공휴일에는 스캐너 대기 (알림 일체 미발송)
-            try:
-                from telegram_notifier import is_trading_day
-                if not is_trading_day():
-                    time.sleep(60)
-                    continue
-            except Exception:
-                pass
+            # 주말 및 KRX 법정 공휴일/휴장일에는 외부 채널 감시 및 알림 발송 전면 중단
+            from telegram_notifier import is_krx_market_open_day
+            if not is_krx_market_open_day():
+                time.sleep(60)
+                continue
 
             briefing_state = {}
             if os.path.exists(state_file):
@@ -518,8 +515,9 @@ def _run_intraday_supply_collector():
             weekday = now_dt.weekday()
             hm = now_dt.hour * 100 + now_dt.minute
 
-            # 평일 09:00 ~ 15:35 사이에만 동작
-            if weekday < 5 and 900 <= hm <= 1535:
+            # 평일 개장일 09:00 ~ 15:35 사이에만 동작 (주말 및 법정 공휴일 완전 차단)
+            from telegram_notifier import is_krx_market_open_day
+            if is_krx_market_open_day() and 900 <= hm <= 1535:
                 today_str = now_dt.strftime('%Y%m%d')
                 time_str = now_dt.strftime('%H:%M')
 

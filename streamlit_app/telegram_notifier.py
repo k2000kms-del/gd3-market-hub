@@ -16,135 +16,95 @@ from datetime import datetime
 _TG_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
 
 
-# ── 📅 한국거래소(KRX) 법정 공휴일 및 정규 휴장일 판별 ───────────────
-def is_krx_market_holiday(date_obj=None) -> bool:
-    """
-    KST 기준 해당 날짜가 국내 증시(KRX) 휴장일인지 판별.
-    (토/일요일 주말, 신정, 설날, 삼일절, 선거일, 어린이날, 부처님오신날, 현충일, 광복절, 추석, 개천절, 한글날, 성탄절, 연말 폐장일 및 대체공휴일)
-    """
-    try:
-        import datetime as dt
-        if date_obj is None:
-            kst_tz = dt.timezone(dt.timedelta(hours=9))
-            date_obj = dt.datetime.now(kst_tz).date()
-        elif isinstance(date_obj, dt.datetime):
-            date_obj = date_obj.date()
-
-        # 1. 주말 (토요일: 5, 일요일: 6)
-        if date_obj.weekday() >= 5:
-            return True
-
-        # 2. 2025~2027 KRX 정규 공휴일 및 휴장일 목록 (YYYY-MM-DD)
-        # 연도별 설날/추석 연휴, 대체공휴일, 12월 31일 폐장일 완벽 등록
-        KRX_HOLIDAYS = {
-            # 2025년
-            "2025-01-01", "2025-01-27", "2025-01-28", "2025-01-29", "2025-01-30",
-            "2025-03-03", "2025-05-01", "2025-05-05", "2025-05-06", "2025-06-06",
-            "2025-08-15", "2025-10-03", "2025-10-05", "2025-10-06", "2025-10-07",
-            "2025-10-08", "2025-10-09", "2025-12-25", "2025-12-31",
-            # 2026년
-            "2026-01-01", # 신정
-            "2026-02-16", "2026-02-17", "2026-02-18", # 설날 연휴
-            "2026-03-01", "2026-03-02", # 삼일절 및 대체공휴일
-            "2026-05-01", # 근로자의 날(증시 휴장)
-            "2026-05-05", # 어린이날
-            "2026-05-24", "2026-05-25", # 부처님오신날 및 대체공휴일
-            "2026-06-03", # 지방선거일
-            "2026-06-06", # 현충일
-            "2026-08-15", "2026-08-17", # 광복절 및 대체공휴일
-            "2026-09-24", "2026-09-25", "2026-09-26", # 추석 연휴
-            "2026-10-03", "2026-10-05", # 개천절 및 대체공휴일
-            "2026-10-09", # 한글날
-            "2026-12-25", # 성탄절
-            "2026-12-31", # 연말 증시 폐장일 (거래 없음)
-            # 2027년
-            "2027-01-01", "2027-02-05", "2027-02-06", "2027-02-07", "2027-02-08",
-            "2027-03-01", "2027-05-01", "2027-05-05", "2027-05-13", "2027-06-06",
-            "2027-08-15", "2027-09-14", "2027-09-15", "2027-09-16", "2027-10-03",
-            "2027-10-09", "2027-12-25", "2027-12-31",
-        }
-
-        # 고정 매년 공휴일 패턴 (MM-DD)
-        FIXED_HOLIDAYS_MMDD = {
-            "01-01", # 신정
-            "03-01", # 삼일절
-            "05-01", # 근로자의 날(KRX 휴장)
-            "05-05", # 어린이날
-            "06-06", # 현충일
-            "08-15", # 광복절
-            "10-03", # 개천절
-            "10-09", # 한글날
-            "12-25", # 성탄절
-            "12-31", # 폐장일
-        }
-
-        date_str = date_obj.strftime("%Y-%m-%d")
-        mmdd_str = date_obj.strftime("%m-%d")
-
-        if date_str in KRX_HOLIDAYS or mmdd_str in FIXED_HOLIDAYS_MMDD:
-            return True
-
-        return False
-    except Exception as e:
-        print(f"DEBUG: is_krx_market_holiday error: {e}")
-        return False
+# 대한민국 증시(KRX) 법정 공휴일 및 정규 휴장일 목록 (2025~2027 고정 공휴일 및 대체공휴일 완벽 망라)
+KRX_HOLIDAYS = {
+    # 2025년
+    "2025-01-01", "2025-01-28", "2025-01-29", "2025-01-30", "2025-03-01", "2025-03-03",
+    "2025-05-05", "2025-05-06", "2025-06-06", "2025-08-15", "2025-10-03", "2025-10-05",
+    "2025-10-06", "2025-10-07", "2025-10-08", "2025-10-09", "2025-12-25", "2025-12-31",
+    # 2026년 (현재 운용 연도)
+    "2026-01-01",  # 신정
+    "2026-02-16", "2026-02-17", "2026-02-18",  # 설날 연휴
+    "2026-03-01", "2026-03-02",  # 삼일절 및 대체공휴일
+    "2026-05-05",  # 어린이날
+    "2026-05-24", "2026-05-25",  # 부처님오신날 및 대체공휴일
+    "2026-06-06",  # 현충일
+    "2026-08-15", "2026-08-17",  # 광복절 및 대체공휴일
+    "2026-09-24", "2026-09-25", "2026-09-26",  # 추석 연휴
+    "2026-10-03", "2026-10-05",  # 개천절 및 대체공휴일
+    "2026-10-09",  # 한글날
+    "2026-12-25",  # 성탄절
+    "2026-12-31",  # 연말 거래소 폐장일 (납회일)
+    # 2027년
+    "2027-01-01", "2027-02-05", "2027-02-06", "2027-02-07", "2027-02-08",
+    "2027-03-01", "2027-05-05", "2027-05-13", "2027-06-06", "2027-08-15",
+    "2027-08-16", "2027-09-14", "2027-09-15", "2027-09-16", "2027-10-03",
+    "2027-10-04", "2027-10-09", "2027-10-11", "2027-12-25", "2027-12-31"
+}
 
 
-def is_trading_day(date_obj=None) -> bool:
-    """정상 매매 개장일(평일이면서 KRX 휴장일이 아닌 날) 여부"""
-    return not is_krx_market_holiday(date_obj)
-
-
-def is_allowed_notification_hours() -> bool:
-    """KST 기준 현재 시각이 알림 전송 허용 시간(07:00 ~ 23:30)에 해당하는지 판별 (주말/공휴일은 기본 차단)"""
+def is_krx_market_open_day() -> bool:
+    """KST 기준 오늘이 한국 거래소(KRX) 정규 개장일(평일이면서 법정공휴일/대체공휴일/폐장일이 아님)인지 판별."""
     try:
         import datetime as dt
         kst_tz = dt.timezone(dt.timedelta(hours=9))
         now = dt.datetime.now(kst_tz)
-        
-        # 1. 주말 및 KRX 공휴일에는 자동 알림 차단
-        if is_krx_market_holiday(now.date()):
+        if now.weekday() >= 5:  # 토요일(5), 일요일(6)은 무조건 휴장
             return False
+        date_str = now.strftime('%Y-%m-%d')
+        if date_str in KRX_HOLIDAYS:
+            return False
+        return True
+    except Exception as e:
+        print(f"DEBUG: is_krx_market_open_day error: {e}")
+        return False
 
+
+def is_allowed_notification_hours() -> bool:
+    """
+    KST 기준 현재 시각이 알림 전송 허용 시간인지 판별.
+    - 주말(토/일) 및 KRX 법정 공휴일/휴장일에는 전면 차단 (False 반환)
+    - 평일 개장일에는 07:00 ~ 23:30 사이에만 허용
+    """
+    try:
+        if not is_krx_market_open_day():
+            return False
+        import datetime as dt
+        kst_tz = dt.timezone(dt.timedelta(hours=9))
+        now = dt.datetime.now(kst_tz)
         current_time = now.time()
         start_time = dt.time(7, 0, 0)
         end_time = dt.time(23, 30, 0)
-        
         return start_time <= current_time <= end_time
     except Exception as e:
         print(f"DEBUG: is_allowed_notification_hours error: {e}")
-        return True
+        return False
 
 
 def is_silent_hours() -> bool:
     """
     KST 기준 야간 수면 시간(22:00 ~ 08:00) 또는 주말/공휴일인지 판별.
-    이 시간대에는 텔레그램 메시지를 '무음 알림(disable_notification=True)'으로 발송하여
-    소리나 진동 없이 조용히 도착하도록 처리 (무음 수면 모드).
     """
     try:
+        if not is_krx_market_open_day():
+            return True
         import datetime as dt
         kst_tz = dt.timezone(dt.timedelta(hours=9))
         now = dt.datetime.now(kst_tz)
-        if is_krx_market_holiday(now.date()):
-            return True
         h = now.hour
-        return (h >= 22 or h < 8) # 밤 10시부터 익일 오전 8시까지
+        return (h >= 22 or h < 8)
     except Exception:
-        return False
+        return True
 
 
 def is_regular_market_hours() -> bool:
-    """KST 기준 정규장 거래 시간(평일 월~금 09:00 ~ 15:30 및 공휴일 제외) 여부 판별 (스캘핑/실시간 매매신호 전용)"""
+    """KST 기준 KRX 정규장 거래 시간(평일 개장일 09:00 ~ 15:30) 여부 판별 (스캘핑/실시간 매매신호 전용)"""
     try:
+        if not is_krx_market_open_day():
+            return False
         import datetime as dt
         kst_tz = dt.timezone(dt.timedelta(hours=9))
         now = dt.datetime.now(kst_tz)
-        
-        # 주말 및 법정 공휴일 즉시 차단
-        if is_krx_market_holiday(now.date()):
-            return False
-
         hm = now.hour * 100 + now.minute
         return 900 <= hm <= 1530
     except Exception as e:
@@ -362,9 +322,24 @@ def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "",
     try:
         import json
         url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        
+        # 텔레그램 사진 캡션 최대 길이는 1,024자이므로 내용이 길면 텍스트가 짤리지 않게 분리 전송
+        if len(caption) > 900:
+            short_caption = caption.split('\n')[0][:200]
+            data = {
+                "chat_id": chat_id,
+                "caption": short_caption,
+                "parse_mode": parse_mode,
+                "disable_notification": silent_flag,
+            }
+            files = {"photo": ("chart.png", photo_bytes, "image/png")}
+            r_photo = requests.post(url, data=data, files=files, timeout=10)
+            # 온전한 전체 텍스트와 버튼은 본문 메시지(최대 4,096자)로 짤림 없이 전송
+            return _send(token, chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup, force_send=force_send, disable_notification=silent_flag)
+
         data = {
             "chat_id": chat_id,
-            "caption": caption[:1024],
+            "caption": caption,
             "parse_mode": parse_mode,
             "disable_notification": silent_flag,
             "reply_markup": json.dumps(reply_markup if reply_markup is not None else DEFAULT_REPLY_KEYBOARD)
@@ -3184,55 +3159,59 @@ def notify_external_channel_alert(
     if len(clean_raw) < 20:
         return False
 
-    # 4. Gemini AI 분석 — 항상 실행 (타임아웃 25초, 종목 유무 관계없이)
+    # 4. Gemini AI 분석 — 항상 실행 (타임아웃 25초, 종목 유무 관계없이 전체 문맥 온전 전달)
     gemini_k = _get_gemini_api_key()
     ai_analysis = ""
-    if gemini_k and len(clean_raw) >= 40:
+    if gemini_k and len(clean_raw) >= 30:
         try:
             if matched_stock and code:
                 # 종목 매칭된 경우: 해당 종목에 대한 구체적 투자 전략
                 p_ai = (
-                    f"다음은 텔레그램 투자 채널 '{ch_display}'의 속보입니다:\n\n{clean_raw[:500]}\n\n"
-                    f"이 내용이 {name}({code}) 주가에 미치는 영향을 분석해줘. "
-                    f"1줄: 핵심 임팩트 판단 (호재/악재/중립). "
-                    f"2줄: 지금 투자자 대응 전략 (매수/홀딩/익절 중 하나와 그 이유). "
-                    f"총 2문장 이내, 한국어, 간결하게."
+                    f"다음은 투자 채널 '{ch_display}'의 속보입니다:\n\n{clean_raw}\n\n"
+                    f"이 내용을 투자자가 명확히 이해할 수 있도록 온전한 완성형 문장으로 한국어로 분석해줘:\n"
+                    f"1. <b>[핵심 팩트]</b>: 무슨 사건/공시/이슈인지 1~2문장으로 정리\n"
+                    f"2. <b>[{name}({code}) 주가 영향]</b>: 호재/악재/중립 판단과 단기/중기 영향\n"
+                    f"3. <b>[실전 대응 전략]</b>: 매수/홀딩/분할익절/관망 중 권장 행동 제시\n"
+                    f"문장이 중간에 끊기지 않도록 마침표까지 완전한 문장으로 작성해줘."
                 )
             else:
                 # 종목 미매칭: 시장 전체 영향 분석
                 p_ai = (
-                    f"다음은 텔레그램 투자 채널 '{ch_display}'의 속보입니다:\n\n{clean_raw[:500]}\n\n"
-                    f"이 내용이 국내 주식 시장(코스피/코스닥)에 미치는 영향을 분석해줘. "
-                    f"1줄: 시장 영향 방향(강세/약세/중립)과 핵심 이유. "
-                    f"2줄: 주목해야 할 섹터나 테마. "
-                    f"총 2문장 이내, 한국어, 간결하게."
+                    f"다음은 투자 채널 '{ch_display}'의 시황 속보입니다:\n\n{clean_raw}\n\n"
+                    f"이 내용을 투자자가 한눈에 파악할 수 있도록 온전한 완성형 문장으로 한국어로 분석해줘:\n"
+                    f"1. <b>[핵심 팩트]</b>: 시장에서 주목하는 핵심 사건 1~2문장 요약\n"
+                    f"2. <b>[증시 영향]</b>: 코스피/코스닥 및 주요 수혜/피해 섹터\n"
+                    f"3. <b>[실전 투자 가이드]</b>: 지금 개인투자자가 취해야 할 포지션\n"
+                    f"문장이 중간에 끊기지 않도록 마침표까지 완전한 문장으로 작성해줘."
                 )
             ai_result = _call_gemini_raw(p_ai, gemini_k, timeout=25)
-            if ai_result and len(ai_result) >= 20:
+            if ai_result and len(ai_result) >= 30:
                 ai_analysis = ai_result.strip()
         except Exception:
             pass
 
-    # 5. 원문 요약 (AI 실패 시 폴백)
+    # 5. AI 실패 시 폴백 (원문 글귀를 마침표 단위로 온전히 정리하여 중간 잘림 방지)
     if not ai_analysis:
-        lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 10]
-        summary_fallback = "\n".join(lines[:3])
-        if len(summary_fallback) > 200:
-            summary_fallback = summary_fallback[:200] + "..."
-        ai_analysis = summary_fallback if summary_fallback else clean_raw[:150]
+        clean_lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 10]
+        fallback_text = "\n".join(clean_lines[:3]) if clean_lines else clean_raw
+        if len(fallback_text) > 250:
+            last_period = fallback_text[:250].rfind('.')
+            if last_period > 100:
+                fallback_text = fallback_text[:last_period + 1]
+            else:
+                fallback_text = fallback_text[:250] + "..."
+        ai_analysis = f"📌 <b>[핵심 내용]</b>\n{fallback_text}"
 
-    # 6. ── 새 카드형 포맷 (깔끔하고 읽기 쉬운 구조) ──
+    # 6. ── 새 카드형 포맷 (원문 무작정 복붙 제거, AI 정밀 리포트 중심) ──
     now_time_str = time.strftime('%m/%d %H:%M')
     header_icon = "🚨" if matched_stock else "📡"
     text = (
-        f"{header_icon} <b>[{ch_display}] 속보</b>  <i>{now_time_str}</i>\n"
-        f"{'─' * 20}\n"
-        f"<i>{clean_raw[:300]}</i>\n"
-        f"{'─' * 20}\n"
-        f"💡 <b>GD AI 분석:</b>\n{ai_analysis}\n"
+        f"{header_icon} <b>[{ch_display}] GD 3.0 인텔리전스</b>  <i>{now_time_str}</i>\n"
+        f"{'─' * 22}\n"
+        f"{ai_analysis}\n"
         f"{quant_section}"
-        f"{'─' * 20}\n"
-        f"⚠️ <i>속보성 급등락 뇌동매매 금지 · 원칙 매매 준수</i>"
+        f"{'─' * 22}\n"
+        f"⚠️ <i>뇌동매매 금지 · 수급 및 세력 방어선 지표 교차 확인</i>"
     )
 
     markup = make_stock_action_keyboard(code, name) if code else None
