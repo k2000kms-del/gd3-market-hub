@@ -64,7 +64,7 @@ def is_allowed_notification_hours() -> bool:
     """
     KST 기준 현재 시각이 알림 전송 허용 시간인지 판별.
     - 주말(토/일) 및 KRX 법정 공휴일/휴장일에는 전면 차단 (False 반환)
-    - 평일 개장일에는 07:00 ~ 23:30 사이에만 허용
+    - 평일 개장일에는 07:00 ~ 20:00(오후 8시) 사이에만 허용 (오후 8시 이후 완전 차단)
     """
     try:
         if not is_krx_market_open_day():
@@ -74,7 +74,7 @@ def is_allowed_notification_hours() -> bool:
         now = dt.datetime.now(kst_tz)
         current_time = now.time()
         start_time = dt.time(7, 0, 0)
-        end_time = dt.time(23, 30, 0)
+        end_time = dt.time(20, 0, 0)  # 오후 8시(20:00) 정각 이후 전면 차단
         return start_time <= current_time <= end_time
     except Exception as e:
         print(f"DEBUG: is_allowed_notification_hours error: {e}")
@@ -83,7 +83,7 @@ def is_allowed_notification_hours() -> bool:
 
 def is_silent_hours() -> bool:
     """
-    KST 기준 야간 수면 시간(22:00 ~ 08:00) 또는 주말/공휴일인지 판별.
+    KST 기준 야간 시간(오후 8시/20:00 ~ 익일 오전 8시/08:00) 또는 주말/공휴일인지 판별.
     """
     try:
         if not is_krx_market_open_day():
@@ -92,7 +92,7 @@ def is_silent_hours() -> bool:
         kst_tz = dt.timezone(dt.timedelta(hours=9))
         now = dt.datetime.now(kst_tz)
         h = now.hour
-        return (h >= 22 or h < 8)
+        return (h >= 20 or h < 8)  # 오후 8시부터 익일 오전 8시까지
     except Exception:
         return True
 
@@ -265,9 +265,13 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
 
-    if not force_send and not is_allowed_notification_hours():
-        print("DEBUG: 알림 허용 시간 외이므로 전송을 차단합니다.")
-        return False
+    # 오후 8시(20:00) 이후, 주말, 공휴일에는 모든 자동 발송 절대 차단 (사용자 대화형 명령어 응답 제외)
+    is_user_cmd = reply_markup and "inline_keyboard" not in reply_markup and force_send
+    if not is_allowed_notification_hours():
+        # 사용자가 텔레그램 채팅창에서 직접 /종목, /시황 등을 타이핑해 물어본 경우가 아니면 전면 차단
+        if not (force_send and ("질문" in text or "조회 결과" in text or "도움말" in text or "명령어" in text)):
+            print("DEBUG: [오후 8시 이후/공휴일 차단] 알림 허용 시간(07:00~20:00 개장일) 외이므로 전송을 차단합니다.")
+            return False
 
     # 야간(22:00~08:00) 또는 주말에는 폰 소리/진동 없이 조용히 도착하도록 자동 무음 처리
     silent_flag = disable_notification if disable_notification is not None else is_silent_hours()
@@ -310,9 +314,11 @@ def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "",
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
 
-    if not force_send and not is_allowed_notification_hours():
-        print("DEBUG: 알림 허용 시간 외이므로 전송을 차단합니다.")
-        return False
+    # 오후 8시(20:00) 이후, 주말, 공휴일에는 사진 알림 전면 차단
+    if not is_allowed_notification_hours():
+        if not (force_send and ("질문" in caption or "조회 결과" in caption or "차트" in caption)):
+            print("DEBUG: [오후 8시 이후/공휴일 차단] 사진 알림 허용 시간(07:00~20:00 개장일) 외이므로 전송을 차단합니다.")
+            return False
 
     if not photo_bytes:
         return _send(token, chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup, force_send=force_send, disable_notification=disable_notification)
