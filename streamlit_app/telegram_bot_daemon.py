@@ -330,10 +330,12 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                     }
                                     break
 
-                        # ── [엄격한 실시간 즉시 알림 트리거 (단순 시황/통계/잡담 발송 100% 차단)] ──
-                        # A) 국내 증시 마비급 초특급 매크로 위기 (일반 [속보] 말머리 완전 제외)
+                        # ── [엄격한 실시간 즉시 알림 트리거] ──
+                        # A) 국내/글로벌 시장 긴급 조치 및 초특급 매크로 위기 (즉시 단독 긴급 알림!)
                         MACRO_CRISIS_KEYWORDS = [
-                            '서킷브레이커', '사이드카', '비상계엄', '계엄령', '전면전', '공습경보'
+                            '서킷브레이커', '사이드카', '매수 사이드카', '매도 사이드카', '매수사이드카', '매도사이드카',
+                            'circuit breaker', 'sidecar', '거래정지', '변동성완화장치', '동적VI', '정적VI',
+                            '비상계엄', '계엄령', '전면전', '공습경보', '디폴트', '뱅크런'
                         ]
                         # B) 국내 상장 종목의 주가를 즉각 튀게 만드는 핵심 호재/악재 공시
                         STOCK_SURGE_KEYWORDS = [
@@ -444,8 +446,9 @@ def _run_external_channels_scanner(token: str, chat_id: str):
             now_agg = time.time()
             if briefing_buffer and buffer_first_added_ts:
                 collection_duration = now_agg - buffer_first_added_ts
-                # 첫 글이 들어온 후 5분(300초) 경과했거나, 모인 글이 5개 이상일 때 발송 조건 검사
-                if collection_duration >= 300 or len(briefing_buffer) >= 5:
+                # 서로 다른 채널 글이 2개 이상 모였거나, 첫 글 등록 후 3분(180초) 경과 시 즉시 취합 요약 발송!
+                distinct_channels = len(set(p.get('channel') for p in briefing_buffer))
+                if (distinct_channels >= 2 and len(briefing_buffer) >= 2) or collection_duration >= 180 or len(briefing_buffer) >= 4:
                     # ── [지능형 중복 배제: 최근 3시간 내 이미 브리핑된 글과 유사한 글 필터링] ──
                     recent_briefed = briefing_state.get('recent_briefed_posts', [])
                     # 3시간(10800초) 지난 오래된 기록 정리
