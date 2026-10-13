@@ -2500,7 +2500,12 @@ def start_background_portfolio_scanner(passed_token: str = "", passed_chat_id: s
     """
     t1 = threading.Thread(target=run_portfolio_background_scanner, daemon=True, name="PortfolioScannerDaemon")
     t1.start()
-    
+
+    # [추가] 별도 상시 서버에서 daemon 을 돌릴 때: STANDALONE_DAEMON=1 이면 리스너/외부채널 스캐너는 앱에서 띄우지 않음
+    if str(_get_secret("STANDALONE_DAEMON") or os.environ.get("STANDALONE_DAEMON", "")).strip() == "1":
+        print("DEBUG: STANDALONE_DAEMON=1 → 텔레그램 리스너·외부채널 스캐너는 별도 상시 데몬이 담당")
+        return [t1]
+
     t2 = threading.Thread(target=run_telegram_listener_daemon, args=(passed_token, passed_chat_id), daemon=True, name="TelegramListenerDaemon")
     t2.start()
 
@@ -2511,7 +2516,7 @@ def start_background_portfolio_scanner(passed_token: str = "", passed_chat_id: s
         t3.start()
         return [t1, t2, t3]
     except Exception as _e3:
-        pass
+        print(f"DEBUG: 외부채널 스캐너 기동 실패: {_e3!r}")   # [수정] 예외 삼킴 제거
     
     return [t1, t2]
 

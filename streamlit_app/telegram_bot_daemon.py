@@ -28,6 +28,10 @@ if CURRENT_DIR not in sys.path:
 
 from telegram_notifier import process_incoming_command, notify_external_channel_alert, send_aggregated_channel_briefing
 from chart_image_generator import fetch_stock_chart_df, generate_stock_chart_image
+from notifier_fixes import (
+    is_crypto_junk, is_duplicate_ko, stock_mentioned, lag_info,
+    heartbeat_start, heartbeat_tick,
+)
 
 def _load_secrets():
     token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
@@ -79,16 +83,9 @@ def _clean_channel_text(text: str) -> str:
         t = re.sub(jp, '', t, flags=re.IGNORECASE)
 
     # 5. 코인/가상자산/크립토/단순 선물 메모 100% 원천 차단 (국내/해외 주식 전용)
-    crypto_junk = [
-        '하이퍼리퀴드', 'hype', '비트코인', 'btc', '이더리움', 'eth', '솔라나', 'sol',
-        '업비트', '빗썸', '바이낸스', '코인', '가상자산', '가상화폐', '에어드랍',
-        '선물 일봉', '선물 숏', '선물 롱', '숏 포지션', '롱 포지션', '크립토',
-        'nft', 'meme', '민팅', '지갑 주소'
-    ]
-    t_lower = t.lower()
-    for cj in crypto_junk:
-        if cj in t_lower:
-            return ""
+    #    [수정] 부분문자열 오탐(Ethernet, Solar 등) 방지 → notifier_fixes.is_crypto_junk 사용
+    if is_crypto_junk(t):
+        return ""
 
     t = t.strip()
     # 6. 정제 후 유효 글자 수가 35자 미만이면 영양가 없는 단순 1줄 메모/껍데기로 간주하여 영구 탈락
@@ -108,6 +105,8 @@ def _normalize_text_for_dedup(text: str) -> str:
 
 def _is_duplicate_content(new_text: str, existing_texts: list, threshold: float = 0.55) -> bool:
     """새로운 텍스트가 기존 텍스트 목록과 핵심 내용이 중복(유사도 threshold 이상)되는지 정밀 판별."""
+    if is_duplicate_ko(new_text, existing_texts):   # [추가] 한글 재작성 기사 중복 판정
+        return True
     norm_new = _normalize_text_for_dedup(new_text)
     if len(norm_new) < 8:
         return False
@@ -221,7 +220,11 @@ def _run_external_channels_scanner(token: str, chat_id: str):
     briefing_buffer = []
     buffer_first_added_ts = None
 
+    _hb_path = os.path.join(CURRENT_DIR, 'data', 'scanner_heartbeat.txt')   # [추가] 스캐너 생존 진단
+    heartbeat_start(_hb_path)
+
     while True:
+        heartbeat_tick(_hb_path)                                              # [추가]
         try:
             # 주말 및 KRX 법정 공휴일/휴장일에는 외부 채널 감시 및 알림 발송 전면 중단
             from telegram_notifier import is_krx_market_open_day
@@ -285,6 +288,20 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                         text_el = m_item.find('div', class_='tgme_widget_message_text')
                         raw_text = text_el.get_text('\n').strip() if text_el else ''
 
+                        # [추가] 원문 메타(원문 시각·전달 출처·링크)와 지연(stale) 판정
+                        _t_el = m_item.find('time')
+                        _fw_el = m_item.find(class_='tgme_widget_message_forwarded_from_name')
+                        post_meta = {
+                            'channel': p_id.split('/')[0],
+                            'post_id': p_id.split('/')[-1],
+                            'time_iso': (_t_el.get('datetime') if _t_el else '') or '',
+                            'forwarded_from': _fw_el.get_text(strip=True) if _fw_el else '',
+                            'urls': [a.get('href') for a in (text_el.find_all('a') if text_el else [])
+                                     if (a.get('href') or '').startswith('http')],
+                        }
+                        _, _lag_min = lag_info(post_meta['time_iso'])
+                        is_stale = (_lag_min is not None and _lag_min > 90)   # 90분 넘은 글은 '속보' 대신 취합 버퍼로
+
                         # 1. 텍스트 정제 (링크, 공백, 줄바꿈, 인사말 제거)
                         clean_text = _clean_channel_text(raw_text)
 
@@ -293,7 +310,10 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                         if not df_m_srch.empty and 'Name' in df_m_srch.columns:
                             import re
                             hashtags = re.findall(r'#([가-힣a-zA-Z0-9]+)', raw_text)
+                            body_wo_tags = re.sub(r'#\S+', '', raw_text)   # [추가] 태그를 뺀 본문
                             for tag in hashtags:
+                                if not stock_mentioned(body_wo_tags, tag):  # [추가] 태그만 달린 종목은 제외
+                                    continue
                                 row_tag = df_m_srch[df_m_srch['Name'].astype(str) == tag]
                                 if not row_tag.empty:
                                     m_row = row_tag.iloc[0]
@@ -305,9 +325,8 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                         'name': tag,
                                         'price': s_cp,
                                         'change_ratio': s_cr,
-                                        'quant_score': 85.0,
-                                        'jumping_status': '외부 채널 핵심 종목 포착 🟢',
-                                        'support_price': s_cp * 0.97
+                                        'jumping_status': '외부 채널 핵심 종목 포착 🟢'
+                                        # [삭제] 'quant_score': 85.0 (고정값), 'support_price': s_cp * 0.97 (계산식 아님)
                                     }
                                     break
 
@@ -341,6 +360,7 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                             and not has_exclude_kw
                             and len(clean_text) >= 40
                             and not channel_alert_sent  # 이번 배치에서 아직 발송 안 한 경우만
+                            and not is_stale            # [추가] 90분 넘은 글은 속보 대신 취합 버퍼로
                         )
 
                         if is_urgent:
@@ -384,7 +404,8 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                                     raw_message=clean_text,
                                     matched_stock=matched_dict,
                                     token=token,
-                                    chat_id=chat_id
+                                    chat_id=chat_id,
+                                    post_meta=post_meta
                                 )
                                 s_desc = matched_dict['name'] if matched_dict else '국내증시비상'
                                 print(f"[{time.strftime('%H:%M:%S')}] 🚨 {ch_name} 엄선 속보 발송 완료: [{p_id}] ({s_desc})")
@@ -417,7 +438,7 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                         json.dump(briefing_state, f, ensure_ascii=False, indent=2)
 
                 except Exception as ch_err:
-                    pass
+                    print(f"[scanner] {ch_name} 처리 오류: {ch_err!r}")   # [수정] 예외 삼킴 제거
 
             # ── [전 채널 통합 3분 수집 윈도우: 3분 동안 모인 모든 채널 글 취합 요약 발송] ──
             now_agg = time.time()
@@ -491,7 +512,7 @@ def _run_external_channels_scanner(token: str, chat_id: str):
                             print(f"DEBUG: send_aggregated_channel_briefing error: {agg_ex}")
 
         except Exception as scan_err:
-            pass
+            print(f"[scanner] 루프 오류: {scan_err!r}")   # [수정] 예외 삼킴 제거
 
         time.sleep(60) # 60초 주기 반복
 

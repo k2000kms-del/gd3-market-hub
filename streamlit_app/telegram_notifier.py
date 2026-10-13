@@ -11,6 +11,12 @@ telegram_notifier.py
 
 import requests
 from datetime import datetime
+from notifier_fixes import (
+    is_duplicate_ko, is_crypto_junk, merge_state, kst_now_str,
+    strip_cjk_lines, smart_truncate, esc, sanitize_ai_html,
+    build_quant_section, card_header, extract_first_url,
+    source_keyboard, merge_keyboards,
+)
 
 # 텔레그램 Bot API 기본 URL
 _TG_API_BASE = "https://api.telegram.org/bot{token}/sendMessage"
@@ -1058,16 +1064,9 @@ def _clean_channel_text(text: str) -> str:
         t = re.sub(jp, '', t, flags=re.IGNORECASE)
 
     # 5. 코인/가상자산/크립토/단순 선물 메모 100% 원천 차단 (국내/해외 주식 전용)
-    crypto_junk = [
-        '하이퍼리퀴드', 'hype', '비트코인', 'btc', '이더리움', 'eth', '솔라나', 'sol',
-        '업비트', '빗썸', '바이낸스', '코인', '가상자산', '가상화폐', '에어드랍',
-        '선물 일봉', '선물 숏', '선물 롱', '숏 포지션', '롱 포지션', '크립토',
-        'nft', 'meme', '민팅', '지갑 주소'
-    ]
-    t_lower = t.lower()
-    for cj in crypto_junk:
-        if cj in t_lower:
-            return ""
+    #    [수정] 부분문자열 오탐(Ethernet, Solar 등) 방지 → notifier_fixes.is_crypto_junk 사용
+    if is_crypto_junk(t):
+        return ""
 
     t = t.strip()
     # 6. 정제 후 순수 본문 길이가 35자 미만이면 의미 없는 단편/공백/1줄 메모로 간주
@@ -3070,7 +3069,8 @@ def notify_external_channel_alert(
     raw_message: str,
     matched_stock: dict = None,
     token: str = None,
-    chat_id: str = None
+    chat_id: str = None,
+    post_meta: dict = None
 ) -> bool:
     """
     외부 텔레그램 채널(예: elite_instructor)의 단타/속보 메시지를 포착하고
@@ -3094,26 +3094,11 @@ def notify_external_channel_alert(
         except Exception:
             b_state = {}
 
-    # ── [30분 이내 동일/유사 속보 중복 발송 차단 2중 방어] ──
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    state_file = os.path.join(base_dir, 'data', 'last_briefing_state.json')
-    if not os.path.exists(state_file):
-        state_file = os.path.join(base_dir, 'streamlit_app', 'data', 'last_briefing_state.json')
-
-    now_ts = time.time()
-    b_state = {}
-    if os.path.exists(state_file):
-        try:
-            with open(state_file, 'r', encoding='utf-8') as f:
-                b_state = json.load(f)
-        except Exception:
-            b_state = {}
-
     recent_urgent = b_state.get('recent_urgent_alerts', [])
     recent_urgent = [a for a in recent_urgent if isinstance(a, dict) and (now_ts - a.get('time', 0)) < 1800]
     existing_texts = [a.get('text', '') for a in recent_urgent]
 
-    if _is_duplicate_content(raw_message, existing_texts, threshold=0.55):
+    if is_duplicate_ko(raw_message, existing_texts) or _is_duplicate_content(raw_message, existing_texts, threshold=0.55):
         print(f"[{time.strftime('%H:%M:%S')}] ⏭️ [중복 방지] {channel_name} 유사 속보 이미 발송됨 (30분 중복 스킵): {raw_message[:40]}...")
         return False
 
@@ -3148,20 +3133,17 @@ def notify_external_channel_alert(
         name = matched_stock.get('name', code)
         cur_p = matched_stock.get('price', 0)
         chg_r = matched_stock.get('change_ratio', 0.0)
-        q_score = matched_stock.get('quant_score', 80)
+        q_score = matched_stock.get('quant_score')               # [수정] 계산된 값이 없으면 None (기본값 80 제거)
         jumping_status = matched_stock.get('jumping_status', '채널 포착')
-        support_p = matched_stock.get('support_price', cur_p * 0.97)
-        sign = "▲+" if chg_r >= 0 else "▼"
-        pnl_icon = "🟢" if chg_r >= 0 else "🔴"
-        quant_section = (
-            f"\n📊 <b>GD 퀀트 진단</b>\n"
-            f"  종목: <b>{name}</b> ({code})\n"
-            f"  현재가: <b>{cur_p:,.0f}원</b> {pnl_icon} {sign}{chg_r:.2f}%\n"
-            f"  퀀트점수: <b>{q_score:.0f}점</b>  |  방어선: <b>{support_p:,.0f}원</b>"
-        )
+        support_p = matched_stock.get('support_price') or None   # [수정] 현재가×0.97 가짜 방어선 제거
+        _rt = fetch_realtime_stock_info(code)                    # [수정] CSV 스냅샷 대신 실시간 시세로 덮어쓰기
+        if _rt:
+            cur_p, chg_r = _rt['price'], _rt['chg']
+        quant_section = build_quant_section(name, code, cur_p, chg_r, q_score, support_p,
+                                            '실시간' if _rt else '스냅샷')
 
     # 3. 속보 본문 정제
-    clean_raw = _clean_channel_text(raw_message)
+    clean_raw = strip_cjk_lines(_clean_channel_text(raw_message))   # [수정] 중국어 병기 줄 제거
     if len(clean_raw) < 20:
         return False
 
@@ -3208,19 +3190,23 @@ def notify_external_channel_alert(
                 fallback_text = fallback_text[:250] + "..."
         ai_analysis = f"📌 <b>[핵심 내용]</b>\n{fallback_text}"
 
-    # 6. ── 새 카드형 포맷 (원문 무작정 복붙 제거, AI 정밀 리포트 중심) ──
-    now_time_str = time.strftime('%m/%d %H:%M')
+    # 6. ── 새 카드형 포맷 (원문 복붙 제거 유지 + AI 정밀 리포트 + 원문 시각/버튼 연동) ──
+    pm = post_meta or {}
     header_icon = "🚨" if matched_stock else "📡"
+    _label = ch_display + (f" ← {pm['forwarded_from']}" if pm.get('forwarded_from') else "")
     text = (
-        f"{header_icon} <b>[{ch_display}] GD 3.0 인텔리전스</b>  <i>{now_time_str}</i>\n"
+        f"{card_header(header_icon, _label, pm.get('time_iso', ''))}\n"
         f"{'─' * 22}\n"
-        f"{ai_analysis}\n"
+        f"💡 <b>GD AI 분석:</b>\n{sanitize_ai_html(ai_analysis)}\n"
         f"{quant_section}"
         f"{'─' * 22}\n"
         f"⚠️ <i>뇌동매매 금지 · 수급 및 세력 방어선 지표 교차 확인</i>"
     )
 
-    markup = make_stock_action_keyboard(code, name) if code else None
+    _urls = pm.get('urls') or []
+    _src_kb = source_keyboard(pm.get('channel') or channel_name, pm.get('post_id', ''),
+                              _urls[0] if _urls else extract_first_url(raw_message))
+    markup = merge_keyboards(make_stock_action_keyboard(code, name) if code else None, _src_kb)
     sent_ok = False
     if code:
         chart_bytes = _get_stock_chart_safe(code, name, score=q_score, stop_loss=support_p)
@@ -3236,12 +3222,7 @@ def notify_external_channel_alert(
             'channel': channel_name,
             'stock': name if name else None
         })
-        b_state['recent_urgent_alerts'] = recent_urgent[-20:]
-        try:
-            with open(state_file, 'w', encoding='utf-8') as f:
-                json.dump(b_state, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        merge_state(state_file, {'recent_urgent_alerts': recent_urgent[-20:]})   # [수정] 해당 키만 원자적 갱신
 
     return sent_ok
 
@@ -3284,8 +3265,9 @@ def send_aggregated_channel_briefing(
         return False
 
     import time
-    token = token or _get_bot_token()
-    chat_id = chat_id or _get_chat_id()
+    _d_tok, _d_chat = _get_default_credentials()   # [수정] 미정의 _get_bot_token/_get_chat_id 대체
+    token = token or _d_tok
+    chat_id = chat_id or _d_chat
     if not token or not chat_id:
         return False
 
@@ -3382,9 +3364,10 @@ def send_aggregated_channel_briefing(
         )
 
     # 4. 수치 및 핵심 키워드 2차 자동 시각 강조 (HTML 마크업)
+    summary_body = sanitize_ai_html(summary_body)          # [추가] **굵게**·깨진 태그 정리
     summary_body = _highlight_market_keywords(summary_body)
 
-    now_time_str = time.strftime('%m/%d %H:%M')
+    now_time_str = kst_now_str()                           # [수정] UTC → KST
     final_msg = (
         f"📋 <b>[GD 3.0 채널 인텔리전스 취합 브리핑]</b>\n"
         f"📢 <b>출처</b>: <b>{ch_str}</b> ({len(combined_texts)}개 시황 취합)  <i>{now_time_str}</i>\n"
