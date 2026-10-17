@@ -271,12 +271,11 @@ def _send(token: str, chat_id: str, text: str, parse_mode: str = "HTML", reply_m
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
 
-    # 오후 8시(20:00) 이후, 주말, 공휴일에는 모든 자동 발송 절대 차단 (사용자 대화형 명령어 응답 제외)
-    is_user_cmd = reply_markup and "inline_keyboard" not in reply_markup and force_send
+    # 오후 8시(20:00) 이후, 주말, 공휴일에는 자동 발송(시황/속보/취합브리핑) 차단
+    # 단, 사용자가 채팅방에서 직접 버튼을 누르거나 질문한 경우(force_send=True)는 24시간 즉시 응답 허용
     if not is_allowed_notification_hours():
-        # 사용자가 텔레그램 채팅창에서 직접 /종목, /시황 등을 타이핑해 물어본 경우가 아니면 전면 차단
-        if not (force_send and ("질문" in text or "조회 결과" in text or "도움말" in text or "명령어" in text)):
-            print("DEBUG: [오후 8시 이후/공휴일 차단] 알림 허용 시간(07:00~20:00 개장일) 외이므로 전송을 차단합니다.")
+        if not force_send:
+            print("DEBUG: [오후 8시 이후/공휴일 차단] 자동 알림 허용 시간(07:00~20:00 개장일) 외이므로 전송을 차단합니다.")
             return False
 
     # 야간(22:00~08:00) 또는 주말에는 폰 소리/진동 없이 조용히 도착하도록 자동 무음 처리
@@ -320,9 +319,10 @@ def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "",
         print("DEBUG: 텔레그램 토큰 또는 Chat ID가 설정되지 않아 알림을 건너뜁니다.")
         return False
 
-    # 오후 8시(20:00) 이후, 주말, 공휴일에는 사진 알림 전면 차단
+    # 오후 8시(20:00) 이후, 주말, 공휴일에는 자동 사진 알림 차단
+    # 단, 사용자가 직접 요청한 경우(force_send=True)는 24시간 즉시 전송 허용
     if not is_allowed_notification_hours():
-        if not (force_send and ("질문" in caption or "조회 결과" in caption or "차트" in caption)):
+        if not force_send:
             print("DEBUG: [오후 8시 이후/공휴일 차단] 사진 알림 허용 시간(07:00~20:00 개장일) 외이므로 전송을 차단합니다.")
             return False
 
