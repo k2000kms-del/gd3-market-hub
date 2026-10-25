@@ -40,7 +40,7 @@ try:
         notify_daily_buy_signal, notify_daily_sell_signal,
         notify_morning_briefing, notify_closing_briefing,
         notify_quant_top_pick, process_incoming_command,
-        format_supply_amount
+        format_supply_amount, fetch_realtime_stock_info
     )
 except Exception:
     def format_supply_amount(val) -> str:
@@ -53,6 +53,46 @@ except Exception:
             return f"{sign}{abs(int(round(num))):,}억"
         except Exception:
             return str(val)
+
+    def fetch_realtime_stock_info(code: str) -> dict:
+        clean_code = str(code).split('.')[0].strip().zfill(6)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        try:
+            url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{clean_code}"
+            r = requests.get(url, headers=headers, timeout=1.8)
+            if r.status_code == 200:
+                datas = r.json().get('datas', [])
+                if datas:
+                    d = datas[0]
+                    def _to_float(v):
+                        try: return float(str(v).replace(',', '').replace('+', '').strip())
+                        except Exception: return 0.0
+                    price = _to_float(d.get('closePrice'))
+                    chg = _to_float(d.get('fluctuationsRatio'))
+                    open_p = _to_float(d.get('openPrice'))
+                    high_p = _to_float(d.get('highPrice'))
+                    low_p = _to_float(d.get('lowPrice'))
+                    name = str(d.get('stockName', ''))
+                    if price > 0:
+                        return {'name': name, 'price': price, 'chg': chg, 'open': open_p if open_p > 0 else price, 'high': high_p, 'low': low_p}
+        except Exception:
+            pass
+        try:
+            url = f"https://m.stock.naver.com/api/stock/{clean_code}/basic"
+            r = requests.get(url, headers=headers, timeout=1.5)
+            if r.status_code == 200:
+                d = r.json()
+                def _to_float(v):
+                    try: return float(str(v).replace(',', '').replace('+', '').strip())
+                    except Exception: return 0.0
+                price = _to_float(d.get('closePrice'))
+                chg = _to_float(d.get('fluctuationsRatio'))
+                name = str(d.get('stockName', ''))
+                if price > 0:
+                    return {'name': name, 'price': price, 'chg': chg, 'open': price, 'high': price, 'low': price}
+        except Exception:
+            pass
+        return {}
 
 import threading
 import os
@@ -1602,18 +1642,27 @@ def run_telegram_listener_daemon(default_token: str = "", default_chat_id: str =
                 tot_eval = 0
                 tot_entry = 0
                 for c_code, info in port.items():
+                    c_clean = str(c_code).split('.')[0].strip().zfill(6)
                     ep = float(info.get('entry_price', 0))
                     qty = float(info.get('qty', 0))
-                    cur_p = ep
-                    if not df_m.empty and 'Code' in df_m.columns:
-                        match = df_m[df_m['Code'].astype(str).str.zfill(6) == str(c_code).zfill(6)]
+                    cur_p = 0.0
+                    try:
+                        rt_info = fetch_realtime_stock_info(c_clean)
+                        if rt_info and rt_info.get('price', 0) > 0:
+                            cur_p = float(rt_info['price'])
+                    except Exception:
+                        pass
+                    if cur_p == 0.0 and not df_m.empty and 'Code' in df_m.columns:
+                        match = df_m[df_m['Code'].astype(str).str.zfill(6) == c_clean]
                         if not match.empty:
                             cur_p = float(match.iloc[0]['Close'])
+                    if cur_p == 0.0:
+                        cur_p = ep
                     pnl_pct = ((cur_p - ep) / ep * 100) if ep > 0 else 0
                     tot_entry += ep * qty
                     tot_eval += cur_p * qty
                     items.append({
-                        'name': info.get('name', c_code),
+                        'name': info.get('name', c_clean),
                         'cur_price': cur_p,
                         'pnl_pct': pnl_pct
                     })
@@ -5121,6 +5170,24 @@ with col_mid:
         df1['Current_Price_Val'] = pd.to_numeric(df1['Close'], errors='coerce').fillna(0)
         df1['Trade_Volume_Val']  = pd.to_numeric(df1['Volume'], errors='coerce').fillna(0)
         
+        # ── [네이버 실시간 시세 1순위 반영] TOP 10 종목 현재가 및 등락률 초고속 병렬 동기화 ──
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            def _get_rt_p1(c_code):
+                try:
+                    return c_code, fetch_realtime_stock_info(c_code)
+                except Exception:
+                    return c_code, {}
+            with ThreadPoolExecutor(max_workers=min(len(df1), 10)) as _pool:
+                for _c, _rt in _pool.map(_get_rt_p1, df1['Code']):
+                    if _rt and _rt.get('price', 0) > 0:
+                        df1.loc[df1['Code'] == _c, 'Close'] = float(_rt['price'])
+                        df1.loc[df1['Code'] == _c, 'Current_Price_Val'] = float(_rt['price'])
+                        if 'chg' in _rt:
+                            df1.loc[df1['Code'] == _c, 'ChagesRatio'] = float(_rt['chg'])
+        except Exception:
+            pass
+        
         # 최신 수급 데이터 반영 (네이버 실시간 우선 반영, 누락 시 기존 HD 수급 보존)
         fgn_list = []
         inst_list = []
@@ -5284,6 +5351,23 @@ with col_mid:
                 return trap_tag
             
             text_labels = df2.apply(lambda r: f" {r['Total_Score_Adj']:.1f}{get_delta_str(r)}", axis=1)
+
+        # ── [네이버 실시간 시세 1순위 반영] Quant TOP 10 종목 현재가 및 등락률 초고속 병렬 동기화 ──
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            def _get_rt_p2(c_code):
+                try:
+                    return c_code, fetch_realtime_stock_info(c_code)
+                except Exception:
+                    return c_code, {}
+            with ThreadPoolExecutor(max_workers=min(len(df2), 10)) as _pool:
+                for _c, _rt in _pool.map(_get_rt_p2, df2['Code']):
+                    if _rt and _rt.get('price', 0) > 0:
+                        df2.loc[df2['Code'] == _c, 'Close'] = float(_rt['price'])
+                        if 'chg' in _rt:
+                            df2.loc[df2['Code'] == _c, 'ChagesRatio'] = float(_rt['chg'])
+        except Exception:
+            pass
 
         fig_p2.add_trace(go.Bar(
             y=df2['Name'],
@@ -6560,6 +6644,18 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             chg_str = ''
             chg_color = '#cccccc'
 
+        # ── [네이버 실시간 시세 1순위 반영] 개별 종목 현재가 및 당일 등락률 실시간 동기화 ──
+        try:
+            _rt_stock = fetch_realtime_stock_info(code_disp)
+            if _rt_stock and _rt_stock.get('price', 0) > 0:
+                last_close = float(_rt_stock['price'])
+                if 'chg' in _rt_stock:
+                    daily_chg = float(_rt_stock['chg'])
+                    chg_color = '#ff6b6b' if daily_chg >= 0 else '#4e9ff5'
+                    chg_str   = f'{daily_chg:+.2f}%'
+        except Exception:
+            pass
+
         # 지표 요약 (상단 메트릭 - 프리미엄 HTML 가로 스탯 바)
         ma5_val = f"{int(df_candle['MA5'].iloc[-1]):,}원" if pd.notna(df_candle['MA5'].iloc[-1]) else '-'
         ma20_val = f"{int(df_candle['MA20'].iloc[-1]):,}원" if pd.notna(df_candle['MA20'].iloc[-1]) else '-'
@@ -6744,7 +6840,7 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
             if 'df_candle' in locals() and not df_candle.empty:
                 recent_closes = df_candle['Close'].tail(20).tolist()
                 recent_prices_str = ", ".join([str(int(p)) for p in recent_closes])
-                current_price_for_gemini = df_candle['Close'].iloc[-1]
+                current_price_for_gemini = last_close if ('last_close' in locals() and last_close > 0) else df_candle['Close'].iloc[-1]
                 recent_high_for_gemini = df_candle['High'].tail(20).max()
                 if 'Stop_Loss' in df_candle.columns:
                     stop_loss_for_gemini = df_candle['Stop_Loss'].iloc[-1]
@@ -6978,25 +7074,18 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
 
                 # 포트폴리오 목록 및 바로가기
                 if portfolio:
-                    # ── [초고속 렌더링] 포트폴리오 실시간 현재가 조회 (전체 크롤링 제거, 0.01초 즉시 반환) ──
-                    _kst_now_p = datetime.now(timezone(timedelta(hours=9)))
-                    _is_market_open = (_kst_now_p.weekday() < 5 and
-                                       900 <= _kst_now_p.hour * 100 + _kst_now_p.minute <= 1535)
+                    # ── [초고속 렌더링 & 실시간 정확도] 네이버 실시간 시세 API 1순위 일괄 병렬 조회 (0.2초) ──
+                    _port_codes_norm = [str(_c).split('.')[0].strip().zfill(6) for _c in portfolio.keys()]
 
-                    # 1단계: 이미 로드된 df_m에서 포트폴리오 종목 현재가 즉시 매핑 (0.001초)
-                    _dm_price_map = {}
-                    if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
-                        _dm_codes_s = df_m['Code'].astype(str).str.split('.').str[0].str.strip().str.zfill(6)
-                        for _c in portfolio.keys():
-                            _cn = str(_c).split('.')[0].strip().zfill(6)
-                            _mm = df_m[_dm_codes_s == _cn]
-                            if not _mm.empty:
-                                _cv = pd.to_numeric(_mm.iloc[0]['Close'], errors='coerce')
-                                if pd.notna(_cv) and _cv > 0:
-                                    _dm_price_map[_cn] = float(_cv)
-
-                    # 2단계: df_m에서 가격을 못 찾은 보유 종목만 장중에 초고속 병렬 단건 조회 (0.1초)
-                    def _fetch_single_price(code_str):
+                    # 1단계: 네이버 실시간 시세 API 병렬 조회 (1순위 — 장중/장외 불문 최신 체결가/종가)
+                    _live_price_map = {}
+                    def _fetch_port_price(code_str):
+                        try:
+                            _info = fetch_realtime_stock_info(code_str)
+                            if _info and _info.get('price', 0) > 0:
+                                return code_str, float(_info['price'])
+                        except Exception:
+                            pass
                         try:
                             import requests as _rq
                             _r = _rq.get(
@@ -7012,17 +7101,22 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                             pass
                         return code_str, 0.0
 
-                    _missing_codes = [
-                        str(c).split('.')[0].strip().zfill(6)
-                        for c in portfolio.keys()
-                        if str(c).split('.')[0].strip().zfill(6) not in _dm_price_map
-                    ]
-                    _extra_price_map = {}
-                    if _missing_codes and _is_market_open:
-                        with ThreadPoolExecutor(max_workers=min(len(_missing_codes), 5)) as _pool:
-                            for _code_r, _price_r in _pool.map(_fetch_single_price, _missing_codes):
+                    if _port_codes_norm:
+                        with ThreadPoolExecutor(max_workers=min(len(_port_codes_norm), 10)) as _pool:
+                            for _code_r, _price_r in _pool.map(_fetch_port_price, _port_codes_norm):
                                 if _price_r > 0:
-                                    _extra_price_map[_code_r] = _price_r
+                                    _live_price_map[_code_r] = _price_r
+
+                    # 2단계: df_m 사전 추출 맵 (네이버 API 실패 시 2순위 폴백)
+                    _dm_price_map = {}
+                    if df_m is not None and not df_m.empty and 'Code' in df_m.columns:
+                        _dm_codes_s = df_m['Code'].astype(str).str.split('.').str[0].str.strip().str.zfill(6)
+                        for _cn in _port_codes_norm:
+                            _mm = df_m[_dm_codes_s == _cn]
+                            if not _mm.empty:
+                                _cv = pd.to_numeric(_mm.iloc[0]['Close'], errors='coerce')
+                                if pd.notna(_cv) and _cv > 0:
+                                    _dm_price_map[_cn] = float(_cv)
 
                     # 포트폴리오 테이블 렌더링 (모든 보유 종목에 대해 퀀트 등급 색상 자동 하이라이트 일괄 적용)
                     port_rows = []
@@ -7032,12 +7126,12 @@ def render_stock_analysis_section(code_disp, df_m, df_all, kis_key, kis_sec, vol
                         p_entry = float(p_data.get("entry_price", 0) or 0)
                         p_qty   = float(p_data.get("qty", 0) or 0)
 
-                        # ─ 1순위: df_m 사전 추출 맵 ─
-                        p_close = _dm_price_map.get(p_code_norm, 0.0)
+                        # ─ 1순위: 네이버 실시간 시세 API ─
+                        p_close = _live_price_map.get(p_code_norm, 0.0)
 
-                        # ─ 2순위: 미조회 종목 장중 실시간 단건 조회 결과 ─
+                        # ─ 2순위: df_m CSV 스냅샷 폴백 ─
                         if p_close == 0.0:
-                            p_close = _extra_price_map.get(p_code_norm, 0.0)
+                            p_close = _dm_price_map.get(p_code_norm, 0.0)
 
                         # ─ 3순위: 최후 폴백 (매수가로 대체, 수익률 0% 표시) ─
                         if p_close == 0.0:
