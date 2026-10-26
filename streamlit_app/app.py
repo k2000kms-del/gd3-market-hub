@@ -803,11 +803,10 @@ def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_sc
 
     prompt += "\n위 데이터를 종합하여 [1. 현재 상황 요약], [2. 기술적 차트 분석], [3. 매매 대응 전략] 3단계를 한국어로 자세히 작성해줘."
 
+    # 대표님 지침 엄수: 3.7 미만 절대 사용 금지 (3.8 Flash ➔ 3.7 Flash로만 제한)
     pipeline_steps = [
-        ("gemini-3.8-flash", "high", {"thinkingBudget": 1024}, 10),
-        ("gemini-3.7-flash", "high", {"thinkingBudget": 1024}, 10),
-        ("gemini-2.5-flash", "standard", None, 10),
-        ("gemini-2.5-flash-lite", "fast", None, 15),  # 구글 서버 과부하시 100% 무중단 즉각 응답 보장 모델
+        ("gemini-3.8-flash", "high", {"thinkingBudget": 1024}, 30),
+        ("gemini-3.7-flash", "high", {"thinkingBudget": 1024}, 30),
     ]
 
     last_err = None
@@ -847,9 +846,9 @@ def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_sc
             continue
         time.sleep(0.05)
 
-    friendly_err = "현재 API 서버와의 통신이 일시적으로 지연되고 있습니다. 잠시 후 다시 시도해 주세요."
+    friendly_err = "현재 Gemini 3.8/3.7 API 서버와의 통신이 지연되고 있습니다. 잠시 후 다시 시도해 주세요."
     if is_quota_limit:
-        friendly_err = "Gemini API 호출 속도 제한을 초과했습니다. 잠시 후 다시 시도해 주세요."
+        friendly_err = "Gemini 3.8/3.7 일일 사용 한도(Free Tier 20회/일)를 초과했습니다. 새로운 API Key를 등록하시거나 구글 AI 스튜디오 종량제를 연결해 주세요."
     raise RuntimeError(friendly_err)
 
 
@@ -4530,12 +4529,10 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
 
 """
 
-            # 최신 Gemini 3.8 Flash 우선 ➔ 3.7 Flash ➔ 2.5 Flash ➔ 2.5 Flash Lite 4중 무중단 스마트 파이프라인
+            # 대표님 지침 엄수: 오직 최신 Gemini 3.8 Flash 및 3.7 Flash만 사용 (3.7 미만 절대 사용 금지)
             models_to_try = [
-                ("gemini-3.8-flash", 10),   # 최신 플래그십 (10초 대기)
-                ("gemini-3.7-flash", 10),   # 차세대 모델 (10초 대기)
-                ("gemini-2.5-flash", 10),   # 대표 범용 모델 (10초 대기)
-                ("gemini-2.5-flash-lite", 15), # 구글 서버 과부하시 100% 즉각 응답 보장 모델 (15초 대기)
+                ("gemini-3.8-flash", 30),   # 1순위: 최신 플래그십 (30초 대기)
+                ("gemini-3.7-flash", 30),   # 2순위: 차세대 고지능 (30초 대기)
             ]
 
             headers = {"Content-Type": "application/json"}
@@ -4575,7 +4572,7 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
                         if r.status_code == 400 and ("API key not valid" in r.text or "INVALID_ARGUMENT" in r.text):
                             last_err = "등록된 API Key가 구글 정식 키가 아닙니다. Google AI Studio(aistudio.google.com)에서 발급받은 정식 키(AIzaSy...로 시작)를 'Gemini API Key 변경'에 입력해 주세요."
                         elif r.status_code == 429:
-                            last_err = "Gemini API 호출 속도 제한(429)에 도달했습니다. 1~2분 후 다시 시도해 주세요."
+                            last_err = "Gemini 3.8/3.7 일일 사용 한도(Free Tier 20회/일)를 초과했습니다. 새로운 API Key를 등록하시거나 구글 AI 스튜디오 종량제를 연결해 주세요."
                         else:
                             last_err = f"({model_name} 코드 {r.status_code}): {r.text[:150]}"
                         continue
