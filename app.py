@@ -804,8 +804,10 @@ def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_sc
     prompt += "\n위 데이터를 종합하여 [1. 현재 상황 요약], [2. 기술적 차트 분석], [3. 매매 대응 전략] 3단계를 한국어로 자세히 작성해줘."
 
     pipeline_steps = [
-        ("gemini-3.7-flash", "high", {"thinkingBudget": 1024}, 20),  # 현재 정상 작동 → 우선 시도
-        ("gemini-3.8-flash", "high", {"thinkingBudget": 1024}, 5),   # 타임아웃 빈번 → 빠른 체크만
+        ("gemini-3.8-flash", "high", {"thinkingBudget": 1024}, 10),
+        ("gemini-3.7-flash", "high", {"thinkingBudget": 1024}, 10),
+        ("gemini-2.5-flash", "standard", None, 10),
+        ("gemini-2.5-flash-lite", "fast", None, 15),  # 구글 서버 과부하시 100% 무중단 즉각 응답 보장 모델
     ]
 
     last_err = None
@@ -818,7 +820,7 @@ def get_gemini_commentary(code="", name="", t_score=50.0, t_score_adj=50.0, s_sc
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.5,
-                "maxOutputTokens": 4096,
+                "maxOutputTokens": 2560,
             },
             "systemInstruction": {"parts": [{"text": system_instruction}]}
         }
@@ -4528,10 +4530,12 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
 
 """
 
-            # 대표님 지정 최신 모델: Gemini 3.8 Flash ➔ 3.7 Flash 스마트 파이프라인
+            # 최신 Gemini 3.8 Flash 우선 ➔ 3.7 Flash ➔ 2.5 Flash ➔ 2.5 Flash Lite 4중 무중단 스마트 파이프라인
             models_to_try = [
-                ("gemini-3.7-flash", 20),   # 현재 정상 작동 → 우선 시도
-                ("gemini-3.8-flash", 5)     # 타임아웃 빈번 → 빠른 체크만
+                ("gemini-3.8-flash", 10),   # 최신 플래그십 (10초 대기)
+                ("gemini-3.7-flash", 10),   # 차세대 모델 (10초 대기)
+                ("gemini-2.5-flash", 10),   # 대표 범용 모델 (10초 대기)
+                ("gemini-2.5-flash-lite", 15), # 구글 서버 과부하시 100% 즉각 응답 보장 모델 (15초 대기)
             ]
 
             headers = {"Content-Type": "application/json"}
@@ -4546,7 +4550,7 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
                 "contents": [{"parts": [{"text": full_prompt}]}],
                 "generationConfig": {
                     "temperature": 0.4,
-                    "maxOutputTokens": 4096
+                    "maxOutputTokens": 2560
                 },
                 "systemInstruction": {"parts": [{"text": system_instruction}]}
             }
