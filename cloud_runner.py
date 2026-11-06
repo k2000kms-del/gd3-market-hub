@@ -491,15 +491,26 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
 
 # 5. 외부 텔레그램 채널 실시간 속보 & 단타 모니터링 (복수 채널 지원)
 # ── 감시 대상 채널 목록 (채널명, 웹 URL, 상태 키) ──
+# 5. 외부 텔레그램 채널 실시간 속보 & 단타 모니터링 (11개 채널 통합)
+# ── 감시 대상 채널 목록 (채널명, 웹 URL, 상태 키) ──
 _EXTERNAL_CHANNELS = [
-    ('elite_instructor', 'https://t.me/s/elite_instructor', 'last_elite_post_id'),
-    ('trading_spin',     'https://t.me/s/trading_spin',     'last_spin_post_id'),
-    ('SAJAnote',         'https://t.me/s/SAJAnote',         'last_saja_post_id'),
+    ('elite_instructor',    'https://t.me/s/elite_instructor',    'last_elite_post_id'),
+    ('trading_spin',        'https://t.me/s/trading_spin',        'last_spin_post_id'),
+    ('globaletfi',          'https://t.me/s/globaletfi',          'last_globaletfi_post_id'),
+    ('kiwoom_semibat',      'https://t.me/s/kiwoom_semibat',      'last_kiwoom_semibat_post_id'),
+    ('gaoshoukorea',        'https://t.me/s/gaoshoukorea',        'last_gaoshoukorea_post_id'),
+    ('SAJAnote',            'https://t.me/s/SAJAnote',            'last_sajanote_post_id'),
+    ('defence_24',          'https://t.me/s/defence_24',          'last_defence24_post_id'),
+    ('hanaglobalbottomup',  'https://t.me/s/hanaglobalbottomup',  'last_hanaglobal_post_id'),
+    ('HS_academy',          'https://t.me/s/HS_academy',          'last_hsacademy_post_id'),
+    ('kimcharger',          'https://t.me/s/kimcharger',          'last_kimcharger_post_id'),
+    ('meritzbae',           'https://t.me/s/meritzbae',           'last_meritzbae_post_id'),
 ]
 
 try:
     import requests as req
     from bs4 import BeautifulSoup
+    from datetime import datetime as _dt_cl, timezone as _tz_cl
 
     m_path = os.path.join(base_dir, 'data', 'df_full_market.csv')
     df_m_srch = pd.DataFrame()
@@ -508,10 +519,8 @@ try:
 
     for ch_name, ch_url, state_key in _EXTERNAL_CHANNELS:
         try:
-            print(f"📡 외부 채널({ch_name}) 실시간 속보 감시...")
             r_t = req.get(ch_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
             if r_t.status_code != 200:
-                print(f"  ⚠️ {ch_name} HTTP {r_t.status_code} — 건너뜀")
                 continue
 
             soup_t = BeautifulSoup(r_t.text, 'html.parser')
@@ -521,11 +530,13 @@ try:
 
             saved_p_id = briefing_state.get(state_key, '')
 
-            # 신규 메시지 목록 추출 (저장된 ID 이후의 모든 메시지)
+            # 신규 메시지 목록 추출 (저장된 ID 이후의 메시지)
             new_msgs = []
             if not saved_p_id:
-                # 최초 실행 시에는 맨 마지막 글 1개만
-                new_msgs = [msgs[-1]]
+                # 최초 실행 시 과거 글 난사 방지: 최신 ID만 저장하고 스킵
+                briefing_state[state_key] = msgs[-1].get('data-post', '')
+                _save_state()
+                continue
             else:
                 found_saved = False
                 for m in msgs:
@@ -535,15 +546,14 @@ try:
                         continue
                     if found_saved:
                         new_msgs.append(m)
-                # 만약 saved_p_id가 목록에 없으면(너무 오래됨) 최근 3개 메시지만 검사
+                # 만약 saved_p_id가 목록에 없으면 최신 글 1개만 검사
                 if not found_saved:
-                    new_msgs = msgs[-3:]
+                    briefing_state[state_key] = msgs[-1].get('data-post', '')
+                    _save_state()
+                    continue
 
             if not new_msgs:
-                print(f"  ℹ️ {ch_name}: 새 글 없음 (최신: {saved_p_id})")
                 continue
-
-            print(f"  🔔 {ch_name}: 신규 메시지 {len(new_msgs)}개 감지 — 순차 정밀 분석 시작")
 
             for m_item in new_msgs:
                 p_id = m_item.get('data-post', '')
@@ -555,10 +565,28 @@ try:
                     _save_state()
                     continue
 
-                # 종목명 매칭 탐색 (해시태그 우선 & 긴 종목명 우선)
+                # ── [핵심 방어선] 작성 시각 기준 60분 초과 과거 글(Stale Post) 스킵 ──
+                _t_el = m_item.find('time')
+                time_iso = (_t_el.get('datetime') if _t_el else '') or ''
+                is_stale = False
+                if time_iso:
+                    try:
+                        post_dt = _dt_cl.fromisoformat(time_iso.replace('Z', '+00:00'))
+                        now_utc = _dt_cl.now(_tz_cl.utc)
+                        diff_sec = (now_utc - post_dt).total_seconds()
+                        if diff_sec > 3600:  # 60분 초과된 글은 알림 발송 절대 금지
+                            is_stale = True
+                    except Exception:
+                        pass
+
+                if is_stale:
+                    briefing_state[state_key] = p_id
+                    _save_state()
+                    continue
+
+                # 종목명 매칭 탐색 (해시태그 우선 & 불용어 배제)
                 matched_dict = None
                 if not df_m_srch.empty and 'Name' in df_m_srch.columns:
-                    # 1차: 해시태그(#종목명) 검색 (예: #로보티즈)
                     import re
                     hashtags = re.findall(r'#([가-힣a-zA-Z0-9]+)', raw_text)
                     for tag in hashtags:
@@ -574,14 +602,13 @@ try:
                                 'price': s_cp,
                                 'change_ratio': s_cr,
                                 'quant_score': 85.0,
-                                'jumping_status': '엘리트강사 단타 브리핑 포착 🟢',
+                                'jumping_status': '실시간 속보 포착',
                                 'support_price': s_cp * 0.97
                             }
                             break
 
-                    # 2차: 일반 텍스트 내 종목명 매칭 (불용어 제외)
                     if not matched_dict:
-                        stopwords = {'오늘', '지금', '시장', '코스피', '코스닥', '지수', '상승', '하락', '기술', '전망', '분석', '대응', '전략', '미국', '한국', '영상', '확인', '진행', '브리핑', '종목', '단타'}
+                        stopwords = {'오늘', '지금', '시장', '코스피', '코스닥', '지수', '상승', '하락', '기술', '전망', '분석', '대응', '전략', '미국', '한국', '영상', '확인', '진행', '브리핑', '종목', '단타', '마감', '체크'}
                         for _, m_row in df_m_srch.iterrows():
                             s_nm = str(m_row.get('Name', ''))
                             if len(s_nm) >= 2 and s_nm not in stopwords and s_nm in raw_text:
@@ -594,23 +621,32 @@ try:
                                     'price': s_cp,
                                     'change_ratio': s_cr,
                                     'quant_score': 85.0,
-                                    'jumping_status': '외부 채널 단타/속보 포착',
+                                    'jumping_status': '외부 채널 속보 포착',
                                     'support_price': s_cp * 0.97
                                 }
                                 break
 
-                # 알림 발송: 종목이 매칭되었거나 중요한 단타/속보 글일 때
-                is_important = matched_dict is not None or any(k in raw_text for k in ['단타', 'top pick', '속보', '특징주', '점핑'])
-                if is_important or len(raw_text) > 30:
+                # 알림 발송: 종목이 매칭되었거나 실시간 중요한 속보일 때만
+                _fw_el = m_item.find(class_='tgme_widget_message_forwarded_from_name')
+                post_meta = {
+                    'channel': p_id.split('/')[0],
+                    'post_id': p_id.split('/')[-1],
+                    'time_iso': time_iso,
+                    'forwarded_from': _fw_el.get_text(strip=True) if _fw_el else '',
+                    'urls': [a.get('href') for a in (text_el.find_all('a') if text_el else [])
+                             if (a.get('href') or '').startswith('http')],
+                }
+
+                is_important = matched_dict is not None or any(k in raw_text for k in ['[속보]', '[단독]', '특징주', '공시', '실적'])
+                if is_important and len(raw_text) >= 30:
                     tn.notify_external_channel_alert(
                         channel_name=ch_name,
                         raw_message=raw_text,
                         matched_stock=matched_dict,
                         token=token,
-                        chat_id=chat_id
+                        chat_id=chat_id,
+                        post_meta=post_meta
                     )
-                    s_desc = matched_dict['name'] if matched_dict else '일반속보'
-                    print(f"    ✅ {ch_name} 새 속보 전송 완료: [{p_id}] (종목: {s_desc})")
                     import time
                     time.sleep(0.5)
 

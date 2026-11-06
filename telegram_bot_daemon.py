@@ -13,6 +13,7 @@ import time
 import json
 import threading
 import urllib.request
+import urllib.parse
 import pandas as pd
 
 if sys.platform == 'win32':
@@ -747,29 +748,76 @@ def run_standalone_bot():
 
                         cb = upd.get('callback_query')
                         if cb:
-                            sender_id = str(cb.get('from', {}).get('id', sender_id))
+                            # ── [중요] 응답 대상 chat_id 결정:
+                            # callback_query.message.chat.id = 버튼이 있는 채팅방 ID (그룹/개인 모두 대응)
+                            # callback_query.from.id = 버튼 누른 사람의 개인 ID (개인 채팅방 전용)
+                            cb_msg = cb.get('message', {})
+                            cb_chat_id = str(cb_msg.get('chat', {}).get('id', ''))
+                            cb_from_id = str(cb.get('from', {}).get('id', ''))
+                            # 채팅방 ID 우선 사용 (없으면 개인 ID 폴백)
+                            sender_id = cb_chat_id or cb_from_id or sender_id
                             text = cb.get('data', text)
                             cb_id = cb.get('id')
+
+                            # ── 버튼 클릭 즉시 "로딩 중" 응답 (텔레그램 스피너 해제) ──
                             if cb_id:
                                 try:
-                                    ack_url = f'https://api.telegram.org/bot{token}/answerCallbackQuery?callback_query_id={cb_id}'
-                                    urllib.request.urlopen(urllib.request.Request(ack_url, headers={'User-Agent': 'Mozilla/5.0'}), timeout=3)
+                                    loading_text = ""
+                                    if text and text.startswith('ai_'):
+                                        loading_text = "⏳ AI 실시간 진단 준비 중..."
+                                    ack_url = (
+                                        f'https://api.telegram.org/bot{token}/answerCallbackQuery'
+                                        f'?callback_query_id={cb_id}'
+                                        + (f'&text={urllib.parse.quote(loading_text)}&show_alert=false' if loading_text else '')
+                                    )
+                                    urllib.request.urlopen(
+                                        urllib.request.Request(ack_url, headers={'User-Agent': 'Mozilla/5.0'}),
+                                        timeout=3
+                                    )
                                 except Exception:
                                     pass
 
-                        if text and sender_id:
+                            # 버튼 종류별 명확한 수신 로그
                             try:
-                                safe_t = text.encode('ascii', 'replace').decode('ascii')
-                                print(f'[{time.strftime("%H:%M:%S")}] 📩 수신 [{sender_id}]: {safe_t}')
+                                if text and text.startswith('ai_'):
+                                    stock_code = text.replace('ai_', '').zfill(6)
+                                    print(f'[{time.strftime("%H:%M:%S")}] 🤖 [AI 실시간 진단 버튼] 종목코드={stock_code} | chat_id={sender_id}')
+                                else:
+                                    safe_t = text.encode('ascii', 'replace').decode('ascii') if text else ''
+                                    print(f'[{time.strftime("%H:%M:%S")}] 🔘 [버튼 콜백] [{sender_id}]: {safe_t}')
                             except Exception:
                                 pass
 
-                            process_incoming_command(
-                                token=token,
-                                chat_id=sender_id,
-                                cmd_text=text,
-                                context_fn=standalone_context_fn
-                            )
+                        if text and sender_id:
+                            if not upd.get('callback_query'):  # 일반 메시지 로그 (콜백은 위에서 처리)
+                                try:
+                                    safe_t = text.encode('ascii', 'replace').decode('ascii')
+                                    print(f'[{time.strftime("%H:%M:%S")}] 📩 수신 [{sender_id}]: {safe_t}')
+                                except Exception:
+                                    pass
+
+                            try:
+                                process_incoming_command(
+                                    token=token,
+                                    chat_id=sender_id,
+                                    cmd_text=text,
+                                    context_fn=standalone_context_fn
+                                )
+                            except Exception as cmd_err:
+                                # 처리 중 에러 발생 시 사용자에게 반드시 피드백 (무반응 방지)
+                                try:
+                                    err_url = (
+                                        f'https://api.telegram.org/bot{token}/sendMessage'
+                                        f'?chat_id={sender_id}'
+                                        f'&text={urllib.parse.quote(f"⚠️ 처리 중 오류가 발생했습니다: {str(cmd_err)[:100]}")}'
+                                    )
+                                    urllib.request.urlopen(
+                                        urllib.request.Request(err_url, headers={'User-Agent': 'Mozilla/5.0'}),
+                                        timeout=3
+                                    )
+                                except Exception:
+                                    pass
+                                print(f'[{time.strftime("%H:%M:%S")}] ❌ process_incoming_command 오류: {cmd_err!r}')
         except Exception as e:
             try:
                 print(f'[{time.strftime("%H:%M:%S")}] ⚠️ 폴링 대기 중... ({e})')

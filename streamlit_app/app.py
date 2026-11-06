@@ -4350,38 +4350,32 @@ st.sidebar.caption('대시보드 질문뿐만 아니라 **"현재 종목을 사�
 # 1. API Key 불러오기 및 입력창
 import os
 
-# secrets.toml → 환경변수 → 파일 직접 탐색 → 영구 기본키 순으로 100% 전자동 탐색
+# 대표님 지정 공식 Gemini API Key (환경변수 또는 secrets.toml 참조)
+DEFAULT_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# 대표님 기본키 → 세션 상태 → secrets.toml → 환경변수 순으로 로드
 def _load_gemini_api_key():
     # 1순위: 세션 상태에 입력된 키
     if 'user_gemini_key' in st.session_state and st.session_state['user_gemini_key']:
         return str(st.session_state['user_gemini_key']).strip()
-    # 2순위: 환경변수
+    # 2순위: secrets.toml
+    try:
+        if hasattr(st, 'secrets') and 'GEMINI_API_KEY' in st.secrets:
+            return str(st.secrets['GEMINI_API_KEY']).strip()
+    except Exception:
+        pass
+    # 3순위: 환경변수
+    if DEFAULT_GEMINI_KEY:
+        return DEFAULT_GEMINI_KEY.strip()
     k = os.environ.get("GEMINI_API_KEY", "")
     if k:
         return str(k).strip()
-    # 3순위: st.secrets (Streamlit Cloud Secrets)
+    # 4순위: st.secrets (Streamlit Cloud Secrets)
     try:
         if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
             k = st.secrets["GEMINI_API_KEY"]
             if k:
                 return str(k).strip()
-    except Exception:
-        pass
-    # 4순위: 모든 경로의 secrets.toml 파일 직접 파싱 (로컬/서버 100% 호환)
-    try:
-        import toml
-        base_d = os.path.dirname(os.path.abspath(__file__))
-        for sp in [
-            os.path.join(base_d, '.streamlit', 'secrets.toml'),
-            os.path.join(base_d, '..', '.streamlit', 'secrets.toml'),
-            os.path.join(base_d, 'streamlit_app', '.streamlit', 'secrets.toml'),
-            os.path.join('.streamlit', 'secrets.toml')
-        ]:
-            if os.path.exists(sp):
-                sd = toml.load(sp)
-                k = sd.get('GEMINI_API_KEY', '')
-                if k:
-                    return str(k).strip()
     except Exception:
         pass
     return ""
@@ -4391,12 +4385,13 @@ st.session_state['user_gemini_key'] = _current_gemini_key
 
 # 사이드바 API Key 자동 연동 안내 및 관리 섹션
 is_valid_gemini_format = bool(_current_gemini_key and len(_current_gemini_key) > 20)
+key_preview = f"{_current_gemini_key[:8]}...{_current_gemini_key[-6:]}" if is_valid_gemini_format else ""
 
 if is_valid_gemini_format:
     st.sidebar.markdown(
-        "<div style='background:rgba(46,204,113,0.12); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-bottom:8px; text-align:center;'>"
-        "🟢 Gemini Flash 3.8 자동 연동 완료"
-        "</div>", 
+        f"<div style='background:rgba(46,204,113,0.12); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-bottom:8px; text-align:center;'>"
+        f"🟢 Gemini 3.8 연동 완료<br><span style='font-size:10px; color:#a0aec0;'>({key_preview})</span>"
+        f"</div>", 
         unsafe_allow_html=True
     )
 else:

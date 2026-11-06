@@ -2551,8 +2551,13 @@ def process_incoming_command(token: str, chat_id: str, cmd_text: str, context_fn
     """사용자가 보낸 텔레그램 메시지 또는 원터치 버튼 탭을 파싱하고 즉시 응답."""
     clean_cmd = cmd_text.strip().replace('/', '').lower()
 
-    # 0. 시스템 재점검 & 즉시 복구 / 진단 ('진단', '점검', '복구', '상태', 'status', 'diag')
-    if any(k in clean_cmd for k in ['진단', '점검', '복구', '상태', 'status', 'diag']) or '시스템 재점검' in cmd_text:
+    # 0-A. 종목 실시간 AI 진단 버튼 콜백 ('ai_005930' 등) - 시스템 점검과 키워드 충돌 방지를 위해 최우선 처리!
+    if clean_cmd.startswith('ai_'):
+        target_code = clean_cmd.replace('ai_', '').replace('diag_', '').strip().zfill(6)
+        return _reply_stock_diagnosis(token, chat_id, target_code, context_fn)
+
+    # 0-B. 시스템 재점검 & 즉시 복구 / 진단 ('진단', '점검', '복구', '상태', 'status', 'diag')
+    elif any(k in clean_cmd for k in ['진단', '점검', '복구', '상태', 'status', 'diag']) or '시스템 재점검' in cmd_text:
         import os, json, time, subprocess, sys
         from datetime import datetime, timezone, timedelta
         _now_kst_dt = datetime.now(timezone(timedelta(hours=9)))
@@ -3147,30 +3152,32 @@ def notify_external_channel_alert(
     if len(clean_raw) < 20:
         return False
 
-    # 4. Gemini AI 분석 — 항상 실행 (타임아웃 25초, 종목 유무 관계없이 전체 문맥 온전 전달)
+    # 4. Gemini AI 분석 — 대표님 전담 주식 비서로서 핵심 팩트 + 종목 영향 + 매매 액션 명쾌 분석
     gemini_k = _get_gemini_api_key()
     ai_analysis = ""
     if gemini_k and len(clean_raw) >= 30:
         try:
             if matched_stock and code:
-                # 종목 매칭된 경우: 해당 종목에 대한 구체적 투자 전략
+                # 종목 매칭된 경우: 대표님 계좌/종목 기준 실전 타점 및 대응 전략
                 p_ai = (
-                    f"다음은 투자 채널 '{ch_display}'의 속보입니다:\n\n{clean_raw}\n\n"
-                    f"이 내용을 투자자가 명확히 이해할 수 있도록 온전한 완성형 문장으로 한국어로 분석해줘:\n"
-                    f"1. <b>[핵심 팩트]</b>: 무슨 사건/공시/이슈인지 1~2문장으로 정리\n"
-                    f"2. <b>[{name}({code}) 주가 영향]</b>: 호재/악재/중립 판단과 단기/중기 영향\n"
-                    f"3. <b>[실전 대응 전략]</b>: 매수/홀딩/분할익절/관망 중 권장 행동 제시\n"
-                    f"문장이 중간에 끊기지 않도록 마침표까지 완전한 문장으로 작성해줘."
+                    f"너는 대표님의 1:1 전담 수석 주식 비서이자 퀀트 트레이더야.\n"
+                    f"다음은 투자 채널 '{ch_display}'에서 포착된 실시간 종목 정보야:\n\n{clean_raw}\n\n"
+                    f"대표님이 바쁜 일상 중에 모바일로 보고 3초 만에 판단할 수 있도록 아주 정갈하고 명확하게 한국어로 보고해줘:\n"
+                    f"1. 📌 <b>[핵심 팩트]</b>: 어떤 이슈/공시/수급 변화인지 1문장으로 핵심만 요약\n"
+                    f"2. 🔍 <b>[{name}({code}) 주가 영향]</b>: 호재/악재/단기 슈팅 여부 및 주가 영향 판단\n"
+                    f"3. ⚡ <b>[비서 실전 가이드]</b>: 지금 대표님이 취해야 할 액션(분할매수 유효 / 홀딩 / 분할익절 / 관망)과 매매 팁 제시\n"
+                    f"규칙: 마침표까지 완벽히 맺고 불필요한 서론/인사말 절대 금지."
                 )
             else:
-                # 종목 미매칭: 시장 전체 영향 분석
+                # 종목 미매칭: 시장/섹터 흐름 및 투자 전략 요약
                 p_ai = (
-                    f"다음은 투자 채널 '{ch_display}'의 시황 속보입니다:\n\n{clean_raw}\n\n"
-                    f"이 내용을 투자자가 한눈에 파악할 수 있도록 온전한 완성형 문장으로 한국어로 분석해줘:\n"
-                    f"1. <b>[핵심 팩트]</b>: 시장에서 주목하는 핵심 사건 1~2문장 요약\n"
-                    f"2. <b>[증시 영향]</b>: 코스피/코스닥 및 주요 수혜/피해 섹터\n"
-                    f"3. <b>[실전 투자 가이드]</b>: 지금 개인투자자가 취해야 할 포지션\n"
-                    f"문장이 중간에 끊기지 않도록 마침표까지 완전한 문장으로 작성해줘."
+                    f"너는 대표님의 1:1 전담 수석 주식 비서야.\n"
+                    f"다음은 투자 채널 '{ch_display}'에서 포착된 실시간 시황이야:\n\n{clean_raw}\n\n"
+                    f"대표님이 한눈에 핵심을 파악할 수 있도록 아주 정갈하고 명확하게 한국어로 보고해줘:\n"
+                    f"1. 📌 <b>[핵심 시황 요약]</b>: 시장에서 지금 가장 주목해야 할 팩트 1~2문장\n"
+                    f"2. 📈 <b>[영향 섹터 & 수혜주]</b>: 지수 흐름 및 직접적인 수혜/주의 섹터\n"
+                    f"3. 💡 <b>[비서 투자 가이드]</b>: 지금 대표님이 취해야 할 포지션 전략(비중 확대/축소/관망)\n"
+                    f"규칙: 마침표까지 완벽히 맺고 불필요한 서론/인사말 절대 금지."
                 )
             ai_result = _call_gemini_raw(p_ai, gemini_k, timeout=25)
             if ai_result and len(ai_result) >= 30:
@@ -3178,26 +3185,30 @@ def notify_external_channel_alert(
         except Exception:
             pass
 
-    # 5. AI 실패 시 폴백 (원문 글귀를 마침표 단위로 온전히 정리하여 중간 잘림 방지)
+    # 5. AI 실패 시 폴백 — "GD AI 분석" 라벨 절대 금지. 원문 수집본임을 명시
+    is_ai_analyzed = bool(ai_analysis)
     if not ai_analysis:
         clean_lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 10]
-        fallback_text = "\n".join(clean_lines[:3]) if clean_lines else clean_raw
-        if len(fallback_text) > 250:
-            last_period = fallback_text[:250].rfind('.')
+        fallback_text = "\n".join(clean_lines[:4]) if clean_lines else clean_raw
+        if len(fallback_text) > 300:
+            last_period = fallback_text[:300].rfind('.')
             if last_period > 100:
                 fallback_text = fallback_text[:last_period + 1]
             else:
-                fallback_text = fallback_text[:250] + "..."
-        ai_analysis = f"📌 <b>[핵심 내용]</b>\n{fallback_text}"
+                fallback_text = fallback_text[:300] + "..."
+        # AI 미분석 원문 수집본 — 출처 채널 명시, GD AI 분석으로 오인 방지
+        ai_analysis = f"📋 <b>[{ch_display} 원문 수집]</b>\n{fallback_text}"
 
-    # 6. ── 새 카드형 포맷 (원문 복붙 제거 유지 + AI 정밀 리포트 + 원문 시각/버튼 연동) ──
+    # 6. ── 카드형 포맷: AI 분석 성공/실패 여부에 따라 헤더 명확히 구분 ──
     pm = post_meta or {}
     header_icon = "🚨" if matched_stock else "📡"
     _label = ch_display + (f" ← {pm['forwarded_from']}" if pm.get('forwarded_from') else "")
+    # AI가 실제로 분석한 경우 비서 브리핑으로 표기
+    analysis_label = "🤖 <b>[GD 비서 실전 인텔리전스]</b>" if is_ai_analyzed else f"📡 <b>[{ch_display}] 원문 수집:</b>"
     text = (
         f"{card_header(header_icon, _label, pm.get('time_iso', ''))}\n"
         f"{'─' * 22}\n"
-        f"💡 <b>GD AI 분석:</b>\n{sanitize_ai_html(ai_analysis)}\n"
+        f"{analysis_label}\n{sanitize_ai_html(ai_analysis)}\n"
         f"{quant_section}"
         f"{'─' * 22}\n"
         f"⚠️ <i>뇌동매매 금지 · 수급 및 세력 방어선 지표 교차 확인</i>"
@@ -3316,68 +3327,79 @@ def send_aggregated_channel_briefing(
 
     gemini_k = _get_gemini_api_key()
     summary_body = ""
+    is_ai_success = False
     if gemini_k:
         prompt = (
-            f"너는 최고 수준의 퀀트 증시 분석가야. 다음은 여러 텔레그램 채널({ch_str})에서 수집된 {len(combined_texts)}건의 데이터야:\n\n"
+            f"너는 GD 3.0 시스템의 수석 퀀트 애널리스트야. 다음은 내가 감시 중인 {len(combined_texts)}개 텔레그램 채널({ch_str})에서 방금 수집된 시황/속보들이야:\n\n"
             f"{all_content_str}\n\n"
-            f"★ 핵심 지침 [동일 이슈 교차 통합 및 중복 제거]:\n"
-            f"- 서로 다른 채널에서 동일한 사건/이슈/종목을 언급한 경우, 절대 따로 나열하지 말고 '하나의 완성된 팩트'로 취합/병합해줘.\n"
-            f"  예: (출처: 채널A, 채널B 공통 언급) 형태로 출처를 묶고 내용을 통합 정리.\n"
-            f"- 특정 채널의 단순 잡담/중복 문장은 제거하고 알맹이 투자 팩트만 추출할 것.\n\n"
-            f"반드시 아래 4개 섹션으로 구조화하여 한국어로 완전한 문장으로 요약해줘 (해당 없는 섹션은 생략 가능):\n\n"
-            f"🌐 [글로벌 매크로 & 해외 이슈]\n"
-            f"• (미국 증시, 환율, 금리, 원자재 등 글로벌 핵심 팩트와 교차 출처 정리)\n\n"
-            f"📈 [국내 증시 & 수급/섹터]\n"
-            f"• (코스피/코스닥 지수 흐름, 외인/기관 수급, 주도 섹터 1~2개)\n\n"
-            f"🎯 [주요 개별 종목 속보 & 이슈]\n"
-            f"• <b>종목명</b> (출처): 여러 채널에서 분석한 핵심 내용 및 주가 영향 종합 정리\n\n"
-            f"💡 [GD 3.0 실전 대응 전략]\n"
-            f"• (지금 투자자가 취해야 할 매수/관망/방어선 전략을 1~2문장으로 명확히 제시)\n\n"
-            f"규칙:\n"
-            f"- 핵심 수치(예: <b>+3.5%</b>, <b>1,400원</b>)와 주요 종목명은 반드시 <b> 태그로 강조할 것.\n"
-            f"- 문장이 중간에 잘리지 않도록 마침표까지 온전하게 끝맺을 것."
+            f"★ 중요 지침:\n"
+            f"- 각 채널의 내용을 그냥 나열하거나 복사하는 것은 절대 금지. 그건 보고가 아니라 전달에 불과함.\n"
+            f"- 여러 채널이 같은 이슈를 언급하면 → '교차 검증된 팩트'로 취합하고 신뢰도를 높여 보고.\n"
+            f"- 단순 잡담, 광고성 멘트, 중복 내용은 완전히 걷어내고 투자에 직결된 알맹이만 추출.\n"
+            f"- 내가 직접 판단할 수 있는 '독립적 인사이트'를 제시할 것 (채널 의견을 그대로 전달하는 앵무새 금지).\n\n"
+            f"아래 형식으로 한국어 완성형 문장으로 보고해줘 (해당 없는 섹션은 생략):\n\n"
+            f"🌐 <b>[글로벌 매크로 & 해외 이슈]</b>\n"
+            f"• (미국 증시·환율·금리·원자재 교차 검증 팩트 — 여러 채널 언급 시 출처 묶어 통합)\n\n"
+            f"📈 <b>[국내 증시 & 수급/섹터]</b>\n"
+            f"• (코스피/코스닥 흐름, 외인·기관 수급, 오늘의 주도/약세 섹터)\n\n"
+            f"🎯 <b>[핵심 개별 종목]</b>\n"
+            f"• <b>종목명</b> (교차 출처: 채널명): 핵심 이슈 요약 + 단기 주가 영향 판단\n\n"
+            f"💡 <b>[GD 실전 대응 전략]</b>\n"
+            f"• 지금 취해야 할 포지션을 구체적으로 1~2문장으로 제시 (막연한 '주의하세요' 금지)\n\n"
+            f"규칙: 핵심 수치(<b>+3.5%</b>, <b>1,400원</b>)와 종목명은 <b>태그로 강조. 문장은 마침표까지 완전하게."
         )
         try:
-            ai_res = _call_gemini_raw(prompt, gemini_k, timeout=25)
-            if ai_res and len(ai_res) >= 40:
+            ai_res = _call_gemini_raw(prompt, gemini_k, timeout=30)
+            if ai_res and len(ai_res) >= 50:
                 summary_body = ai_res.strip()
+                is_ai_success = True
         except Exception:
             pass
 
-    # AI 실패 시 (429 할당량 초과 또는 네트워크 지연 시) 자체 고도화 스마트 폴백 요약
+    # AI 실패 시 — "GD AI 분석" 절대 사용 금지. 원문 수집본임을 투명하게 명시
     if not summary_body:
         bullets = []
-        for idx, p in enumerate(posts[:4], 1):
+        for idx, p in enumerate(posts[:5], 1):
             raw_t = p.get('text', '').strip()
             ch_item = ch_map.get(p.get('channel', ''), '외부채널')
             lines = [l.strip() for l in raw_t.split('\n') if len(l.strip()) >= 10]
-            lead_sentence = lines[0] if lines else raw_t[:80]
-            if len(lead_sentence) > 80:
-                lead_sentence = lead_sentence[:80] + "..."
+            # 첫 2줄까지 보여줘서 맥락 파악 가능하게
+            lead = "\n    ".join(lines[:2]) if lines else raw_t[:120]
+            if len(lead) > 120:
+                lead = lead[:120] + "..."
             stk = p.get('stock')
             if stk:
-                bullets.append(f"• 🎯 <b>[{stk}]</b>: {lead_sentence} (출처: {ch_item})")
+                bullets.append(f"• 🎯 <b>[{stk}]</b> ({ch_item}): {lead}")
             else:
-                bullets.append(f"• 📌 <b>[{ch_item}]</b>: {lead_sentence}")
-        summary_body = (
-            f"📋 <b>[채널별 핵심 팩트 요약]</b>\n" + "\n".join(bullets) + "\n\n"
-            f"💡 <b>[GD 3.0 실전 대응]</b>\n"
-            f"• 시장 변동성 요인이 혼재되어 있으므로 세력 방어선 지지 여부를 확인하며 분할 대응하십시오."
-        )
+                bullets.append(f"• 📌 <b>[{ch_item}]</b>: {lead}")
+        summary_body = "\n".join(bullets)
 
-    # 4. 수치 및 핵심 키워드 2차 자동 시각 강조 (HTML 마크업)
-    summary_body = sanitize_ai_html(summary_body)          # [추가] **굵게**·깨진 태그 정리
+    # 수치 및 핵심 키워드 2차 자동 시각 강조 (HTML 마크업)
+    summary_body = sanitize_ai_html(summary_body)
     summary_body = _highlight_market_keywords(summary_body)
 
-    now_time_str = kst_now_str()                           # [수정] UTC → KST
-    final_msg = (
-        f"📋 <b>[GD 3.0 채널 인텔리전스 취합 브리핑]</b>\n"
-        f"📢 <b>출처</b>: <b>{ch_str}</b> ({len(combined_texts)}개 시황 취합)  <i>{now_time_str}</i>\n"
-        f"{'─' * 22}\n"
-        f"{summary_body}\n"
-        f"{'─' * 22}\n"
-        f"⚠️ <i>실시간 수급 및 세력 방어선 지표를 반드시 교차 확인하십시오. 🚀</i>"
-    )
+    now_time_str = kst_now_str()
+
+    # AI 분석 성공/실패에 따라 헤더 완전히 다르게 표시
+    if is_ai_success:
+        final_msg = (
+            f"🤖 <b>[GD AI 채널 크로스 분석 보고]</b>\n"
+            f"📢 <b>분석 대상</b>: <b>{ch_str}</b> ({len(combined_texts)}개 채널 교차 분석)  <i>{now_time_str}</i>\n"
+            f"{'─' * 22}\n"
+            f"{summary_body}\n"
+            f"{'─' * 22}\n"
+            f"⚠️ <i>실시간 수급 및 세력 방어선 지표를 반드시 교차 확인하십시오. 🚀</i>"
+        )
+    else:
+        final_msg = (
+            f"📡 <b>[채널 원문 수집 — AI 분석 불가]</b>\n"
+            f"📢 <b>출처</b>: <b>{ch_str}</b> ({len(combined_texts)}개 원문 수집)  <i>{now_time_str}</i>\n"
+            f"<i>⚠️ AI 분석 서버 응답 지연으로 원문을 그대로 전달합니다. 직접 판단 필요.</i>\n"
+            f"{'─' * 22}\n"
+            f"{summary_body}\n"
+            f"{'─' * 22}\n"
+            f"⚠️ <i>이 내용은 외부 채널 원문 수집본이며 GD AI 분석이 아닙니다.</i>"
+        )
 
     markup = make_aggregated_briefing_keyboard()
     return _send(token, chat_id, final_msg, reply_markup=markup, force_send=True)
