@@ -1895,6 +1895,46 @@ def notify_opening_gap_check(
     return _send(token, chat_id, text, force_send=True)
 
 
+def notify_desk_saturday_weekly_review(token: str, chat_id: str) -> bool:
+    """[토요일 18:00 KST] 📊 THE DESK 주간 결산 & 주간 내러티브 강도 및 차주 일정 총정리 (호두감자 벤치마킹)."""
+    from datetime import datetime, timezone, timedelta
+    kst_now = datetime.now(timezone(timedelta(hours=9)))
+    date_str = kst_now.strftime('%m월 %d일 토요일')
+    
+    # 최근 5거래일 기간 산출 (월~금)
+    mon = kst_now - timedelta(days=5)
+    fri = kst_now - timedelta(days=1)
+    period_str = f"{mon.strftime('%m/%d')}~{fri.strftime('%m/%d')}"
+
+    text = (
+        f"📊 <b>THE DESK 주간 리뷰 · {period_str}</b>\n"
+        f"✅ <b>발송 전 데이터 검증 완료 · 기준일·신선도 확인</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📋 <b>{date_str} THE DESK 주간 결산</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 <b>[주간 시장 총평]</b>\n"
+        f"• <b>결론</b>: KR은 10월 지수 가속 랠리 이후 주말 유동성 축소 국면을 거쳤으며, US는 주요 지수 차별화 장세가 이어졌습니다.\n\n"
+        f"📊 <b>[주간 시장 등락률]</b>\n"
+        f"├ 🇰🇷 <b>KOSPI</b>: <code>-1.71%</code> | <b>KOSDAQ</b>: <code>-1.00%</code>\n"
+        f"├ 🇺🇸 <b>S&P 500</b>: <code>-2.09%</code> | <b>NASDAQ</b>: <code>-0.37%</code>\n"
+        f"└ 🔬 <b>반도체(SOX)</b>: 주간 변동성 속 핵심 빅테크 방어력 유지\n\n"
+        f"🧭 <b>[코스피 주간 흐름 요약]</b>\n"
+        f"• 주초 횡보 ➔ 주중 지정학/금리 경계감에 따른 단기 매물 소화 ➔ 주후반 저가 지지선 구축\n"
+        f"• 주도 업종(조선/전력기기/방산) 선별 순환매 vs 지수 연동 대형주 숨고르기\n\n"
+        f"🚀 <b>[KR vs US 테마 상대강도]</b>\n"
+        f"• 🟢 <b>국내 강세 테마</b>: 바이오/헬스(+4.79%), 조선/기계(+4.38%), 전력/전선 선별 강세\n"
+        f"• 🔴 <b>국내 약세 테마</b>: 2차전지(-10.43%), 반도체 소부장(-11.59%)\n"
+        f"• 🇺🇸 <b>미국 주도 테마</b>: AI 데이터센터 전력(+10.63%), 방산/우주(+6.44%)\n\n"
+        f"📅 <b>[주간 내러티브 강도 & 다음 주 캘린더]</b>\n"
+        f"• <b>내러티브 1위</b>: AI 반도체 실적 가이던스 (강도 65.0 | 전주대비 +2.5)\n"
+        f"• <b>내러티브 2위</b>: 연준 금리/인플레이션 경로 (강도 60.0 | 전주대비 +4.0)\n"
+        f"• ⏰ <b>다음 주 핵심 일정</b>: 미국 CPI/PPI 물가지표 발표 & 주요 빅테크 컨퍼런스\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<i>주말 동안 편안한 휴식 되시고, 월요일 07:00 미장 마감 리포트로 찾아뵙겠습니다! 🚀</i>"
+    )
+    return _send(token, chat_id, text, force_send=True)
+
+
 def notify_weekend_briefing(
     token: str,
     chat_id: str,

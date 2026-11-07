@@ -701,6 +701,15 @@ def _run_desk_schedule_dispatcher(token: str, chat_id: str):
                     sent_slots.add(slot_2030)
                     print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [20:30] 미장 개장 전 확인 5가지 발송 완료")
 
+            # ── 10. [토요일 18:00] 📊 THE DESK 주간 결산 및 차주 일정 총정리 ──
+            elif weekday == 5:
+                slot_sat1800 = f"{today_str}_sat1800"
+                from telegram_notifier import notify_desk_saturday_weekly_review
+                if 1800 <= hm <= 1830 and slot_sat1800 not in sent_slots:
+                    notify_desk_saturday_weekly_review(token, chat_id)
+                    sent_slots.add(slot_sat1800)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [토요일 18:00] THE DESK 주간 결산 발송 완료")
+
         except Exception as sc_err:
             print(f"DEBUG: desk scheduler error: {sc_err}")
 
