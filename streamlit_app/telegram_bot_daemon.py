@@ -601,6 +601,112 @@ def _run_intraday_supply_collector():
         time.sleep(60)
 
 
+def _run_desk_schedule_dispatcher(token: str, chat_id: str):
+    """
+    호두감자 스타일 24시간 실전 기관급 데스크 브리핑 자동 스케줄러.
+    평일 정해진 시각(07:00, 08:00, 09:32, 10:20, 12:00, 17:00, 17:33, 18:20, 20:30)에
+    텔레그램으로 검증된 브리핑을 100% 자동 발송.
+    """
+    from datetime import datetime, timezone, timedelta
+    from telegram_notifier import (
+        is_krx_market_open_day,
+        notify_desk_us_closing_0700,
+        notify_morning_briefing,
+        notify_desk_kr_opening_0932,
+        notify_desk_kr_top5_1020,
+        notify_desk_kr_midday_1200,
+        notify_desk_kr_closing_1700,
+        notify_desk_top5_picks_1733,
+        notify_desk_verified_conditions_1820,
+        notify_desk_us_premarket_2030,
+    )
+    _KST = timezone(timedelta(hours=9))
+    sent_slots = set()
+    time.sleep(10)  # 초기 안정화 대기
+    print("⏰ [실시간 데몬] THE DESK 24시간 정규 브리핑 스케줄러 가동")
+
+    while True:
+        try:
+            now_dt = datetime.now(_KST)
+            today_str = now_dt.strftime('%Y%m%d')
+            weekday = now_dt.weekday()
+            hm = now_dt.hour * 100 + now_dt.minute
+
+            # 날짜 바뀌면 슬롯 초기화
+            cur_slots_today = {s for s in sent_slots if s.startswith(today_str)}
+            sent_slots = cur_slots_today
+
+            # 평일 개장일 기준 동작
+            if weekday < 5 and is_krx_market_open_day():
+                # 1. [07:00] 🇺🇸 미장 마감 & 데일리 보드
+                slot_0700 = f"{today_str}_0700"
+                if 700 <= hm <= 710 and slot_0700 not in sent_slots:
+                    notify_desk_us_closing_0700(token, chat_id)
+                    sent_slots.add(slot_0700)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [07:00] 미장 마감 브리핑 발송 완료")
+
+                # 2. [08:00] 🌅 NXT 프리마켓 & 보유종목 시초가 처방전
+                slot_0800 = f"{today_str}_0800"
+                if 800 <= hm <= 810 and slot_0800 not in sent_slots:
+                    notify_morning_briefing(token, chat_id)
+                    sent_slots.add(slot_0800)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [08:00] 국장 선행 & 포트폴리오 처방 발송 완료")
+
+                # 3. [09:32] 🔔 국장 개장 30분 흐름
+                slot_0932 = f"{today_str}_0932"
+                if 932 <= hm <= 942 and slot_0932 not in sent_slots:
+                    notify_desk_kr_opening_0932(token, chat_id)
+                    sent_slots.add(slot_0932)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [09:32] 국장 개장 30분 브리핑 발송 완료")
+
+                # 4. [10:20] 🎯 THE DESK 관심/보유 TOP 5 장중 체크
+                slot_1020 = f"{today_str}_1020"
+                if 1020 <= hm <= 1030 and slot_1020 not in sent_slots:
+                    notify_desk_kr_top5_1020(token, chat_id)
+                    sent_slots.add(slot_1020)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [10:20] 관심/보유 TOP 5 점검 발송 완료")
+
+                # 5. [12:00] ☀️ 국장 오후 중간 점검
+                slot_1200 = f"{today_str}_1200"
+                if 1200 <= hm <= 1210 and slot_1200 not in sent_slots:
+                    notify_desk_kr_midday_1200(token, chat_id)
+                    sent_slots.add(slot_1200)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [12:00] 국장 오후 중간 점검 발송 완료")
+
+                # 6. [17:00] 🌙 국내 증시 마감 요약
+                slot_1700 = f"{today_str}_1700"
+                if 1700 <= hm <= 1710 and slot_1700 not in sent_slots:
+                    notify_desk_kr_closing_1700(token, chat_id)
+                    sent_slots.add(slot_1700)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [17:00] 국내 증시 마감 요약 발송 완료")
+
+                # 7. [17:33] 🎯 오늘의 관심 종목 5선
+                slot_1733 = f"{today_str}_1733"
+                if 1733 <= hm <= 1743 and slot_1733 not in sent_slots:
+                    notify_desk_top5_picks_1733(token, chat_id)
+                    sent_slots.add(slot_1733)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [17:33] 오늘의 관심 종목 5 발송 완료")
+
+                # 8. [18:20] 📋 검증된 조건 해당 종목
+                slot_1820 = f"{today_str}_1820"
+                if 1820 <= hm <= 1830 and slot_1820 not in sent_slots:
+                    notify_desk_verified_conditions_1820(token, chat_id)
+                    sent_slots.add(slot_1820)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [18:20] 검증 조건 종목 발송 완료")
+
+                # 9. [20:30] 🌙 미장 개장 전 확인 5가지
+                slot_2030 = f"{today_str}_2030"
+                if 2030 <= hm <= 2040 and slot_2030 not in sent_slots:
+                    notify_desk_us_premarket_2030(token, chat_id)
+                    sent_slots.add(slot_2030)
+                    print(f"[{now_dt.strftime('%H:%M:%S')}] ✅ [20:30] 미장 개장 전 확인 5가지 발송 완료")
+
+        except Exception as sc_err:
+            print(f"DEBUG: desk scheduler error: {sc_err}")
+
+        time.sleep(30)
+
+
 def _load_portfolio_safely() -> dict:
     p = os.path.join(CURRENT_DIR, 'data', 'my_portfolio.json')
     if os.path.exists(p):
@@ -727,6 +833,13 @@ def run_standalone_bot():
     # 2. 정규장(09:00~15:35) 외인/개인/기관 실시간 수급 60초 누적 수집기 스레드 시작
     threading.Thread(
         target=_run_intraday_supply_collector,
+        daemon=True
+    ).start()
+
+    # 3. 호두감자 벤치마킹 24시간 실전 기관급 데스크 브리핑 스케줄러 스레드 시작
+    threading.Thread(
+        target=_run_desk_schedule_dispatcher,
+        args=(token, default_chat),
         daemon=True
     ).start()
 
