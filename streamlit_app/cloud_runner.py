@@ -584,7 +584,7 @@ try:
                     _save_state()
                     continue
 
-                # 종목명 매칭 탐색 (해시태그 우선 & 불용어 배제)
+                # 종목명 매칭 탐색 (해시태그 우선 & 독립 단어 매칭만 허용, 부분문자열 오탐 차단)
                 matched_dict = None
                 if not df_m_srch.empty and 'Name' in df_m_srch.columns:
                     import re
@@ -607,11 +607,21 @@ try:
                             }
                             break
 
+                    # 2차 매칭: 본문 텍스트 내 독립 단어 매칭 (3음절 이상이거나 앞뒤 공백/특수문자로 명확히 구분될 때만)
                     if not matched_dict:
-                        stopwords = {'오늘', '지금', '시장', '코스피', '코스닥', '지수', '상승', '하락', '기술', '전망', '분석', '대응', '전략', '미국', '한국', '영상', '확인', '진행', '브리핑', '종목', '단타', '마감', '체크'}
-                        for _, m_row in df_m_srch.iterrows():
+                        stopwords = {
+                            '오늘', '지금', '시장', '코스피', '코스닥', '지수', '상승', '하락', '기술', '전망',
+                            '분석', '대응', '전략', '미국', '한국', '영상', '확인', '진행', '브리핑', '종목',
+                            '단타', '마감', '체크', '레이', '모두', '모두들', '플레이', '디스플레이', '헤드라인',
+                            '포인트', '이것', '공개', '설명회', '실적', '자료', '이야기', '상황', '기준'
+                        }
+                        # 긴 종목명 우선 정렬 탐색
+                        df_cand = df_m_srch[~df_m_srch['Name'].isin(stopwords) & (df_m_srch['Name'].astype(str).str.len() >= 3)]
+                        for _, m_row in df_cand.iterrows():
                             s_nm = str(m_row.get('Name', ''))
-                            if len(s_nm) >= 2 and s_nm not in stopwords and s_nm in raw_text:
+                            # 단어 경계(\b) 또는 앞뒤 공백/문장부호로 둘러싸인 온전한 단어 형태만 매칭
+                            pattern = rf'(?:^|[\s\(\)\[\]\,])({re.escape(s_nm)})(?:[\s\(\)\[\]\,\.\!\?]|$)'
+                            if re.search(pattern, raw_text):
                                 s_cd = str(m_row.get('Code', '')).zfill(6)
                                 s_cp = float(m_row.get('Close', 0))
                                 s_cr = float(m_row.get('ChagesRatio', 0))
@@ -626,7 +636,10 @@ try:
                                 }
                                 break
 
-                # 알림 발송: 종목이 매칭되었거나 실시간 중요한 속보일 때만
+                # ── [엄격한 즉시 알림 발송 조건] ──
+                # 1. 사이드카/서킷브레이커 등 초특급 비상사태
+                # 2. 명확한 종목 매칭과 함께 [특징주], 대규모 수주, FDA, 어닝서프라이즈 등 핵심 주가 변동 사건일 때만 즉시 단독 발송
+                # (그 외 일반 시황/코멘트는 인텔리전스 풀로만 모으고 낱개 알림은 발송하지 않음)
                 _fw_el = m_item.find(class_='tgme_widget_message_forwarded_from_name')
                 post_meta = {
                     'channel': p_id.split('/')[0],
@@ -637,8 +650,13 @@ try:
                              if (a.get('href') or '').startswith('http')],
                 }
 
-                is_important = matched_dict is not None or any(k in raw_text for k in ['[속보]', '[단독]', '특징주', '공시', '실적'])
-                if is_important and len(raw_text) >= 30:
+                CRISIS_KEYWORDS = ['서킷브레이커', '사이드카', '거래정지', '변동성완화장치', '비상계엄', '디폴트']
+                SURGE_KEYWORDS = ['[특징주]', '특징주', '공급계약', '대규모 수주', 'FDA 승인', '어닝 서프라이즈', '상한가']
+
+                is_crisis = any(k in raw_text for k in CRISIS_KEYWORDS)
+                is_stock_surge = (matched_dict is not None) and any(k in raw_text for k in SURGE_KEYWORDS)
+
+                if (is_crisis or is_stock_surge) and len(raw_text) >= 30:
                     tn.notify_external_channel_alert(
                         channel_name=ch_name,
                         raw_message=raw_text,
