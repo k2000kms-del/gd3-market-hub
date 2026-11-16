@@ -3550,7 +3550,7 @@ def notify_external_channel_alert(
         except Exception:
             pass
 
-    # 5. AI 실패 시 폴백 — "GD AI 분석" 라벨 절대 금지. 원문 수집본임을 명시
+    # 5. AI 실패 시 폴백 — 원문 요약 표시
     is_ai_analyzed = bool(ai_analysis)
     if not ai_analysis:
         clean_lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 10]
@@ -3561,15 +3561,13 @@ def notify_external_channel_alert(
                 fallback_text = fallback_text[:last_period + 1]
             else:
                 fallback_text = fallback_text[:300] + "..."
-        # AI 미분석 원문 수집본 — 출처 채널 명시, GD AI 분석으로 오인 방지
-        ai_analysis = f"📋 <b>[{ch_display} 원문 수집]</b>\n{fallback_text}"
+        ai_analysis = fallback_text
 
-    # 6. ── 카드형 포맷: AI 분석 성공/실패 여부에 따라 헤더 명확히 구분 ──
+    # 6. ── 카드형 포맷: 헤더 중복 완벽 제거 및 정갈한 카드 구성 ──
     pm = post_meta or {}
     header_icon = "🚨" if matched_stock else "📡"
     _label = ch_display + (f" ← {pm['forwarded_from']}" if pm.get('forwarded_from') else "")
-    # AI가 실제로 분석한 경우 비서 브리핑으로 표기
-    analysis_label = "🤖 <b>[GD 비서 실전 인텔리전스]</b>" if is_ai_analyzed else f"📡 <b>[{ch_display}] 원문 수집:</b>"
+    analysis_label = "🤖 <b>[GD 비서 실전 인텔리전스]</b>" if is_ai_analyzed else f"📋 <b>[속보 원문 요약]</b>"
     text = (
         f"{card_header(header_icon, _label, pm.get('time_iso', ''))}\n"
         f"{'─' * 22}\n"
@@ -3695,22 +3693,23 @@ def send_aggregated_channel_briefing(
     is_ai_success = False
     if gemini_k:
         prompt = (
-            f"너는 GD 3.0 시스템의 수석 퀀트 애널리스트야. 다음은 내가 감시 중인 {len(combined_texts)}개 텔레그램 채널({ch_str})에서 방금 수집된 시황/속보들이야:\n\n"
+            f"너는 대표님의 수석 주식 비서이자 퀀트 애널리스트야. 다음은 {len(combined_texts)}개 전문 텔레그램 채널({ch_str})에서 방금 수집된 시황/속보들이야:\n\n"
             f"{all_content_str}\n\n"
-            f"★ 중요 지침:\n"
-            f"- 각 채널의 내용을 그냥 나열하거나 복사하는 것은 절대 금지. 그건 보고가 아니라 전달에 불과함.\n"
+            f"★ 절대 규칙:\n"
+            f"- 'GD 3.0 시스템의 수석 퀀트 애널리스트로서 보고합니다' 같은 불필요한 자기소개나 인사말, 서론/결론 문장은 절대 출력하지 말 것. 바로 본문 헤더부터 시작할 것.\n"
+            f"- 각 채널의 내용을 그냥 나열하거나 복사하는 것은 절대 금지.\n"
             f"- 여러 채널이 같은 이슈를 언급하면 → '교차 검증된 팩트'로 취합하고 신뢰도를 높여 보고.\n"
             f"- 단순 잡담, 광고성 멘트, 중복 내용은 완전히 걷어내고 투자에 직결된 알맹이만 추출.\n"
-            f"- 내가 직접 판단할 수 있는 '독립적 인사이트'를 제시할 것 (채널 의견을 그대로 전달하는 앵무새 금지).\n\n"
-            f"아래 형식으로 한국어 완성형 문장으로 보고해줘 (해당 없는 섹션은 생략):\n\n"
+            f"- 대표님이 3초 만에 판단할 수 있도록 아주 정갈하고 명확하게 한국어로 작성할 것.\n\n"
+            f"아래 형식으로만 한국어 완성형 문장으로 보고해줘 (해당 없는 섹션은 생략):\n\n"
             f"🌐 <b>[글로벌 매크로 & 해외 이슈]</b>\n"
-            f"• (미국 증시·환율·금리·원자재 교차 검증 팩트 — 여러 채널 언급 시 출처 묶어 통합)\n\n"
+            f"• (미국 증시·환율·금리·원자재 교차 검증 팩트 1~2문장)\n\n"
             f"📈 <b>[국내 증시 & 수급/섹터]</b>\n"
-            f"• (코스피/코스닥 흐름, 외인·기관 수급, 오늘의 주도/약세 섹터)\n\n"
+            f"• (코스피/코스닥 흐름, 외인·기관 수급, 오늘의 주도/약세 섹터 1~2문장)\n\n"
             f"🎯 <b>[핵심 개별 종목]</b>\n"
-            f"• <b>종목명</b> (교차 출처: 채널명): 핵심 이슈 요약 + 단기 주가 영향 판단\n\n"
-            f"💡 <b>[GD 실전 대응 전략]</b>\n"
-            f"• 지금 취해야 할 포지션을 구체적으로 1~2문장으로 제시 (막연한 '주의하세요' 금지)\n\n"
+            f"• <b>종목명</b>: 핵심 이슈 요약 + 단기 주가 영향 판단\n\n"
+            f"💡 <b>[비서 실전 가이드]</b>\n"
+            f"• 지금 대표님이 취해야 할 구체적 액션(매수 유효/홀딩/관망) 제시\n\n"
             f"규칙: 핵심 수치(<b>+3.5%</b>, <b>1,400원</b>)와 종목명은 <b>태그로 강조. 문장은 마침표까지 완전하게."
         )
         try:

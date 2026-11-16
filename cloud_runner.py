@@ -206,9 +206,9 @@ if is_morning_time or '--force-morning' in sys.argv:
         except Exception as e:
             print(f"  ❌ 장전 브리핑 오류: {e}")
 
-# 3. 장마감 브리핑 (15:20 ~ 23:59 KST 사이 당일 최초 1회 무조건 발송)
+# 3. 장마감 브리핑 (15:20 ~ 17:30 KST 사이 당일 최초 1회 발송, 야간 지연 실행 시 오발송 원천 차단)
 last_closing = briefing_state.get('last_closing_date')
-is_closing_time = (now_weekday < 5 and 1520 <= now_hm <= 2359)
+is_closing_time = (now_weekday < 5 and 1520 <= now_hm <= 1730)
 if is_closing_time or '--force-closing' in sys.argv:
     if last_closing != today_str or '--force-closing' in sys.argv:
         print(f"🌙 [장마감 결산 브리핑] 발송 시도 (today={today_str}, now_hm={now_hm})...")
@@ -395,6 +395,10 @@ if is_closing_time or '--force-closing' in sys.argv:
             print(f"  ❌ 장마감 브리핑 오류: {e}")
     else:
         print(f"🌙 오늘({today_str}) 장마감 브리핑은 이미 발송 완료되었습니다.")
+elif now_weekday < 5 and now_hm > 1730 and last_closing != today_str:
+    print(f"🌙 오늘({today_str}) 장마감 유효 시간대(15:20~17:30) 경과 (now_hm={now_hm}) — 야간 오발송 방지를 위해 마감 브리핑을 자동 스킵합니다.")
+    briefing_state['last_closing_date'] = today_str
+    _save_state()
 
 # ── 브리핑 전용 모드(--briefing-only) 시 조기 종료 ──
 if '--briefing-only' in sys.argv:
@@ -430,14 +434,24 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
                         e_price = float(item.get('entry_price', 0))
                         stop_loss = float(item.get('stop_loss', 0)) if item.get('stop_loss') else e_price * 0.95
                         
-                        # 손절선 이탈 감지
-                        if c_price > 0 and c_price <= stop_loss:
-                            tn.notify_daily_sell_signal(
+                        # 손절선 이탈 감지 (당일 종목당 1회만 발송하여 중복 폭탄 알림 원천 차단)
+                        if briefing_state.get('sent_stop_loss_date') != today_str:
+                            briefing_state['sent_stop_loss_date'] = today_str
+                            briefing_state['sent_stop_loss_codes'] = []
+
+                        sent_sl = briefing_state.get('sent_stop_loss_codes', [])
+
+                        if c_price > 0 and c_price <= stop_loss and c_str not in sent_sl:
+                            sl_sent = tn.notify_daily_sell_signal(
                                 ticker=c_str, name=item.get('name', c_str),
                                 price=c_price, entry_price=e_price,
                                 date=today_str, signal_reason="🛑 손절선 이탈 경고",
                                 token=token, chat_id=chat_id
                             )
+                            if sl_sent:
+                                sent_sl.append(c_str)
+                                briefing_state['sent_stop_loss_codes'] = sent_sl
+                                _save_state()
 
         # ── [정우영식 점핑 양봉 돌파 실시간 스캔 (09:30 ~ 15:00)] ──
         if 930 <= now_hm <= 1500 and not df_q.empty and 'Code' in df_q.columns:
@@ -613,7 +627,7 @@ try:
                             '오늘', '지금', '시장', '코스피', '코스닥', '지수', '상승', '하락', '기술', '전망',
                             '분석', '대응', '전략', '미국', '한국', '영상', '확인', '진행', '브리핑', '종목',
                             '단타', '마감', '체크', '레이', '모두', '모두들', '플레이', '디스플레이', '헤드라인',
-                            '포인트', '이것', '공개', '설명회', '실적', '자료', '이야기', '상황', '기준'
+                            '포인트', '이것', '공개', '설명회', '실적', '자료', '이야기', '상황', '기준', '대상'
                         }
                         # 긴 종목명 우선 정렬 탐색
                         df_cand = df_m_srch[~df_m_srch['Name'].isin(stopwords) & (df_m_srch['Name'].astype(str).str.len() >= 3)]
