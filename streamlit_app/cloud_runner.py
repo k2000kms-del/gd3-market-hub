@@ -419,7 +419,13 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
             q_path = os.path.join(base_dir, 'data', 'df_quant_final.csv')
             df_q = pd.read_csv(q_path) if os.path.exists(q_path) else pd.DataFrame()
             
-            # 각 보유 종목 점검
+            # 각 보유 종목 점검 (당일 종목당 1회만 발송하여 중복 폭탄 알림 원천 차단)
+            if briefing_state.get('sent_stop_loss_date') != today_str:
+                briefing_state['sent_stop_loss_date'] = today_str
+                briefing_state['sent_stop_loss_codes'] = []
+
+            sent_sl = set(briefing_state.get('sent_stop_loss_codes', []))
+
             if not df_q.empty and 'Code' in df_q.columns:
                 df_q['Code'] = df_q['Code'].astype(str).str.zfill(6)
                 for code, item in port.items():
@@ -434,13 +440,7 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
                         e_price = float(item.get('entry_price', 0))
                         stop_loss = float(item.get('stop_loss', 0)) if item.get('stop_loss') else e_price * 0.95
                         
-                        # 손절선 이탈 감지 (당일 종목당 1회만 발송하여 중복 폭탄 알림 원천 차단)
-                        if briefing_state.get('sent_stop_loss_date') != today_str:
-                            briefing_state['sent_stop_loss_date'] = today_str
-                            briefing_state['sent_stop_loss_codes'] = []
-
-                        sent_sl = briefing_state.get('sent_stop_loss_codes', [])
-
+                        # 손절선 이탈 감지
                         if c_price > 0 and c_price <= stop_loss and c_str not in sent_sl:
                             sl_sent = tn.notify_daily_sell_signal(
                                 ticker=c_str, name=item.get('name', c_str),
@@ -449,8 +449,8 @@ if now_weekday < 5 and 900 <= now_hm <= 1530:
                                 token=token, chat_id=chat_id
                             )
                             if sl_sent:
-                                sent_sl.append(c_str)
-                                briefing_state['sent_stop_loss_codes'] = sent_sl
+                                sent_sl.add(c_str)
+                                briefing_state['sent_stop_loss_codes'] = list(sent_sl)
                                 _save_state()
 
         # ── [정우영식 점핑 양봉 돌파 실시간 스캔 (09:30 ~ 15:00)] ──
