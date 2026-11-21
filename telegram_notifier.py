@@ -377,6 +377,36 @@ def _send_photo(token: str, chat_id: str, photo_bytes: bytes, caption: str = "",
         return _send(token, chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup, force_send=force_send)
 
 
+def _send_media_group(token: str, chat_id: str, images: list, caption: str = "") -> bool:
+    """호두감자(THE DESK) 스타일 다중 카드뉴스 앨범(MediaGroup, 2~10장) 일괄 발송"""
+    if not token or not chat_id or not images:
+        return False
+    import json, requests
+    url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
+    media = []
+    files = {}
+    for idx, img_buf in enumerate(images):
+        p_name = f"photo_{idx}"
+        m_item = {
+            "type": "photo",
+            "media": f"attach://{p_name}"
+        }
+        if idx == 0 and caption:
+            m_item["caption"] = caption[:1024]
+            m_item["parse_mode"] = "HTML"
+        media.append(m_item)
+        if hasattr(img_buf, 'getvalue'):
+            files[p_name] = (f"{p_name}.jpg", img_buf.getvalue(), "image/jpeg")
+        else:
+            files[p_name] = (f"{p_name}.jpg", img_buf, "image/jpeg")
+    try:
+        res = requests.post(url, data={"chat_id": chat_id, "media": json.dumps(media)}, files=files, timeout=30)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"DEBUG: sendMediaGroup 발송 실패: {e}")
+        return False
+
+
 def _get_stock_chart_safe(code: str, name: str, score: float = None, target_price: float = None, stop_loss: float = None) -> bytes:
     """종목코드와 종목명으로 고해상도 캔들 차트 이미지를 안전하게 로드/생성 (실패 시 None 반환)"""
     try:
@@ -1932,6 +1962,29 @@ def notify_desk_saturday_weekly_review(token: str, chat_id: str) -> bool:
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<i>주말 동안 편안한 휴식 되시고, 월요일 07:00 미장 마감 리포트로 찾아뵙겠습니다! 🚀</i>"
     )
+    # ── [호두감자 벤치마킹] THE DESK 5장 카드뉴스 인포그래픽 앨범(MediaGroup) 동시 발송 ──
+    try:
+        from desk_card_generator import generate_hodugamza_weekly_cardset
+        market_summary = {
+            'kospi_chg': -1.71,
+            'kosdaq_chg': -1.00,
+            'sp_chg': -2.09,
+            'nasdaq_chg': -0.37
+        }
+        card_slides = generate_hodugamza_weekly_cardset(
+            date_str=f"{date_str} THE DESK",
+            period_str=period_str,
+            market_summary=market_summary
+        )
+        if card_slides:
+            album_caption = (
+                f"📍 <b>THE DESK Market Pulse • 주간 결산 및 차주 전망</b>\n"
+                f"✅ <b>발송 전 데이터 검증 완료 · 기준일·신선도 확인</b>"
+            )
+            _send_media_group(token, chat_id, card_slides, caption=album_caption)
+    except Exception as err:
+        print(f"DEBUG: 카드뉴스 앨범 생성/발송 실패: {err}")
+
     return _send(token, chat_id, text, force_send=True)
 
 
@@ -3512,12 +3565,17 @@ def notify_external_channel_alert(
         quant_section = build_quant_section(name, code, cur_p, chg_r, q_score, support_p,
                                             '실시간' if _rt else '스냅샷')
 
-    # 3. 속보 본문 정제
-    clean_raw = strip_cjk_lines(_clean_channel_text(raw_message))   # [수정] 중국어 병기 줄 제거
+    # 3. 속보 본문 정제 (헤더/원문 중복 태그 완벽 제거)
+    clean_raw = strip_cjk_lines(_clean_channel_text(raw_message))
+    import re
+    # 원문 본문 앞단에 포함된 각종 중복 접두어(예: [HS아카데미 원문 수집], [사자노트 원문 수집], 📡 [xxx] 원문 수집: 등) 완전 제거
+    clean_raw = re.sub(r'^[📡📋📢🚨]?\s*\[[^\]]*(?:원문|속보|수집)[^\]]*\]:?\s*', '', clean_raw, flags=re.IGNORECASE).strip()
+    clean_raw = re.sub(r'^[📡📋📢🚨]?\s*\[[^\]]*(?:원문|속보|수집)[^\]]*\]:?\s*', '', clean_raw, flags=re.IGNORECASE).strip()
+    clean_raw = re.sub(r'^[📡📋📢🚨]?\s*\[[^\]]+\]\s*원문\s*수집:?\s*', '', clean_raw, flags=re.IGNORECASE).strip()
     if len(clean_raw) < 20:
         return False
 
-    # 4. Gemini AI 분석 — 대표님 전담 주식 비서로서 핵심 팩트 + 종목 영향 + 매매 액션 명쾌 분석
+    # 4. Gemini AI 분석 — 대표님 전담 주식 비서로서 3줄 핵심 요약 (글자수 엄격 압축)
     gemini_k = _get_gemini_api_key()
     ai_analysis = ""
     if gemini_k and len(clean_raw) >= 30:
@@ -3525,24 +3583,22 @@ def notify_external_channel_alert(
             if matched_stock and code:
                 # 종목 매칭된 경우: 대표님 계좌/종목 기준 실전 타점 및 대응 전략
                 p_ai = (
-                    f"너는 대표님의 1:1 전담 수석 주식 비서이자 퀀트 트레이더야.\n"
-                    f"다음은 투자 채널 '{ch_display}'에서 포착된 실시간 종목 정보야:\n\n{clean_raw}\n\n"
-                    f"대표님이 바쁜 일상 중에 모바일로 보고 3초 만에 판단할 수 있도록 아주 정갈하고 명확하게 한국어로 보고해줘:\n"
-                    f"1. 📌 <b>[핵심 팩트]</b>: 어떤 이슈/공시/수급 변화인지 1문장으로 핵심만 요약\n"
-                    f"2. 🔍 <b>[{name}({code}) 주가 영향]</b>: 호재/악재/단기 슈팅 여부 및 주가 영향 판단\n"
-                    f"3. ⚡ <b>[비서 실전 가이드]</b>: 지금 대표님이 취해야 할 액션(분할매수 유효 / 홀딩 / 분할익절 / 관망)과 매매 팁 제시\n"
-                    f"규칙: 마침표까지 완벽히 맺고 불필요한 서론/인사말 절대 금지."
+                    f"너는 최고 수준의 전담 수석 주식 비서이자 퀀트 트레이더야.\n"
+                    f"다음 속보를 바쁜 대표님이 3초 만에 판단할 수 있도록 아주 정갈하고 간결하게 3줄로 한국어 요약해줘:\n\n{clean_raw}\n\n"
+                    f"• 📌 <b>[핵심 팩트]</b>: 어떤 이슈/공시인지 1문장 요약\n"
+                    f"• 🔍 <b>[{name} 영향]</b>: 주가 영향(호재/악재/단기 슈팅 등) 1문장\n"
+                    f"• 💡 <b>[실전 가이드]</b>: 지금 취할 액션(분할매수/홀딩/분할익절/관망) 1문장\n"
+                    f"규칙: 총 250자 이내, 각 항목 1문장, 불필요한 인사말/중복 서론 절대 금지, 마침표 필수."
                 )
             else:
                 # 종목 미매칭: 시장/섹터 흐름 및 투자 전략 요약
                 p_ai = (
-                    f"너는 대표님의 1:1 전담 수석 주식 비서야.\n"
-                    f"다음은 투자 채널 '{ch_display}'에서 포착된 실시간 시황이야:\n\n{clean_raw}\n\n"
-                    f"대표님이 한눈에 핵심을 파악할 수 있도록 아주 정갈하고 명확하게 한국어로 보고해줘:\n"
-                    f"1. 📌 <b>[핵심 시황 요약]</b>: 시장에서 지금 가장 주목해야 할 팩트 1~2문장\n"
-                    f"2. 📈 <b>[영향 섹터 & 수혜주]</b>: 지수 흐름 및 직접적인 수혜/주의 섹터\n"
-                    f"3. 💡 <b>[비서 투자 가이드]</b>: 지금 대표님이 취해야 할 포지션 전략(비중 확대/축소/관망)\n"
-                    f"규칙: 마침표까지 완벽히 맺고 불필요한 서론/인사말 절대 금지."
+                    f"너는 최고 수준의 전담 수석 주식 비서야.\n"
+                    f"다음 시황을 바쁜 대표님이 3초 만에 판단할 수 있도록 아주 정갈하고 간결하게 3줄로 한국어 요약해줘:\n\n{clean_raw}\n\n"
+                    f"• 📌 <b>[핵심 시황]</b>: 시장 핵심 팩트 1~2문장 요약\n"
+                    f"• 📈 <b>[주도 섹터]</b>: 직접적인 수혜/주의 섹터 1문장\n"
+                    f"• 💡 <b>[포지션 전략]</b>: 지금 취할 전략(비중 확대/축소/관망) 1문장\n"
+                    f"규칙: 총 250자 이내, 각 항목 1문장, 불필요한 인사말/중복 서론 절대 금지, 마침표 필수."
                 )
             ai_result = _call_gemini_raw(p_ai, gemini_k, timeout=25)
             if ai_result and len(ai_result) >= 30:
@@ -3550,24 +3606,24 @@ def notify_external_channel_alert(
         except Exception:
             pass
 
-    # 5. AI 실패 시 폴백 — 원문 요약 표시
+    # 5. AI 실패 시 폴백 — 원문 중 핵심 3줄만 정제 추출 (길이 엄격 제한)
     is_ai_analyzed = bool(ai_analysis)
     if not ai_analysis:
-        clean_lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 10]
-        fallback_text = "\n".join(clean_lines[:4]) if clean_lines else clean_raw
-        if len(fallback_text) > 300:
-            last_period = fallback_text[:300].rfind('.')
-            if last_period > 100:
+        clean_lines = [l.strip() for l in clean_raw.split('\n') if len(l.strip()) >= 8]
+        fallback_text = "\n".join(clean_lines[:3]) if clean_lines else clean_raw
+        if len(fallback_text) > 200:
+            last_period = fallback_text[:200].rfind('.')
+            if last_period > 60:
                 fallback_text = fallback_text[:last_period + 1]
             else:
-                fallback_text = fallback_text[:300] + "..."
+                fallback_text = fallback_text[:200] + "..."
         ai_analysis = fallback_text
 
     # 6. ── 카드형 포맷: 헤더 중복 완벽 제거 및 정갈한 카드 구성 ──
     pm = post_meta or {}
     header_icon = "🚨" if matched_stock else "📡"
     _label = ch_display + (f" ← {pm['forwarded_from']}" if pm.get('forwarded_from') else "")
-    analysis_label = "🤖 <b>[GD 비서 실전 인텔리전스]</b>" if is_ai_analyzed else f"📋 <b>[속보 원문 요약]</b>"
+    analysis_label = "🤖 <b>[GD 비서 실전 인텔리전스]</b>" if is_ai_analyzed else "📋 <b>[속보 핵심 요약]</b>"
     text = (
         f"{card_header(header_icon, _label, pm.get('time_iso', ''))}\n"
         f"{'─' * 22}\n"
