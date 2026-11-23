@@ -1,6 +1,6 @@
 {
-  "last_elite_post_id": "elite_instructor/11019",
-  "last_spin_post_id": "trading_spin/81042",
+  "last_elite_post_id": "elite_instructor/11030",
+  "last_spin_post_id": "trading_spin/81156",
   "last_saja_post_id": "SAJAnote/13885",
   "last_morning_date": "20261002",
   "sent_jumping_codes": [
@@ -51,7 +51,8 @@
     "298040",
     "042660",
     "068270",
-    "035720"
+    "035720",
+    "180640"
   ],
   "last_closing_date": "20261106",
   "recent_urgent_alerts": [
@@ -62,15 +63,15 @@
       "stock": "이닉스"
     }
   ],
-  "last_globaletfi_post_id": "globaletfi/22791",
-  "last_kiwoom_semibat_post_id": "kiwoom_semibat/18941",
-  "last_gaoshoukorea_post_id": "gaoshoukorea/65922",
-  "last_sajanote_post_id": "SAJAnote/14343",
-  "last_defence24_post_id": "defence_24/6598",
-  "last_hanaglobal_post_id": "hanaglobalbottomup/9264",
-  "last_hsacademy_post_id": "HS_academy/11157",
-  "last_kimcharger_post_id": "kimcharger/14706",
-  "last_meritzbae_post_id": "meritzbae/2258",
+  "last_globaletfi_post_id": "globaletfi/22806",
+  "last_kiwoom_semibat_post_id": "kiwoom_semibat/18955",
+  "last_gaoshoukorea_post_id": "gaoshoukorea/65950",
+  "last_sajanote_post_id": "SAJAnote/14363",
+  "last_defence24_post_id": "defence_24/6605",
+  "last_hanaglobal_post_id": "hanaglobalbottomup/9268",
+  "last_hsacademy_post_id": "HS_academy/11158",
+  "last_kimcharger_post_id": "kimcharger/14709",
+  "last_meritzbae_post_id": "meritzbae/2260",
   "recent_briefed_posts": [
     {
       "time": 1793974228.2608168,
@@ -87,5 +88,17 @@
       "text": "🔹\n업종별 10월 고용자 수 증감\n» 전문∙비즈니스 서비스: +7.0만명\n» 교육∙헬스케어 서비스: +5.3만명\n» 운송∙창고업: +2.5만명\n» 제조업: +1.9만명\n» 금융업: +7천명\n» 소매업: +6천명\n» 기타 서비스: +6천명\n» 정부∙공공부문: +6천명\n» 유틸리티: 0명\n» 광업 및 벌목: -1천명\n» IT: -1천명\n» 건설업: -3천명\n» 도매업: -9천명\n» 레저∙접객: -1.3만명",
       "channel": "globaletfi"
     }
+  ],
+  "sent_stop_loss_date": "20261123",
+  "sent_stop_loss_codes": [
+    "035420",
+    "000660",
+    "079550",
+    "417200",
+    "010120",
+    "009150",
+    "005930",
+    "010170",
+    "217590"
   ]
 }
