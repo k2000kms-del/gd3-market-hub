@@ -4560,21 +4560,26 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
                             break
                     else:
                         if r.status_code == 400 and ("API key not valid" in r.text or "INVALID_ARGUMENT" in r.text):
-                            last_err = "등록된 API Key가 구글 정식 키가 아닙니다. Google AI Studio(aistudio.google.com)에서 발급받은 정식 키(AIzaSy...로 시작)를 'Gemini API Key 변경'에 입력해 주세요."
+                            last_err = "등록된 API Key가 구글 정식 키가 아닙니다. Google AI Studio(aistudio.google.com)에서 발급받은 정식 키를 'Gemini API Key 변경'에 입력해 주세요."
                         elif r.status_code == 429:
-                            last_err = "Gemini 3.8/3.7 일일 사용 한도(Free Tier 20회/일)를 초과했습니다. 새로운 API Key를 등록하시거나 구글 AI 스튜디오 종량제를 연결해 주세요."
+                            last_err = "Gemini AI 일일 사용 한도를 초과했습니다. 잠시 후 다시 시도해 주세요."
+                        elif r.status_code == 503:
+                            last_err = "503_HIGH_DEMAND"
                         else:
-                            last_err = f"({model_name} 코드 {r.status_code}): {r.text[:150]}"
+                            last_err = f"코드 {r.status_code}: 구글 AI 서버 오류가 발생했습니다."
                         continue
                 except Exception as ex:
-                    last_err = f"({model_name}): {str(ex)}"
+                    last_err = f"연결 오류: {str(ex)}"
                     continue
 
             if not success:
-                st.sidebar.error(f"❌ AI 답변 생성 지연/오류:\n{last_err}")
-                if "정식 키" in str(last_err):
+                if last_err == "503_HIGH_DEMAND":
+                    st.sidebar.warning("⏳ 현재 구글 AI 서버에 요청이 집중되어 일시적으로 응답이 지연되고 있습니다.\n잠시 후(10~30초) 다시 질문해 주시면 정상적으로 답변드립니다.")
+                elif "정식 키" in str(last_err):
+                    st.sidebar.error(f"❌ AI 답변 생성 오류:\n{last_err}")
                     st.sidebar.info("💡 사이드바의 '🔑 Gemini API Key 변경' 메뉴를 열고 구글 AI 스튜디오 키를 붙여넣은 뒤 [💾 영구 저장]을 눌러주세요.")
                 else:
+                    st.sidebar.error(f"❌ AI 답변 생성 오류:\n{last_err}")
                     st.sidebar.info("💡 잠시 후 다시 질문하기 버튼을 눌러주시면 즉시 정상 생성됩니다.")
 
 
