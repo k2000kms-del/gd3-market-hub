@@ -1,6 +1,6 @@
 {
-  "last_elite_post_id": "elite_instructor/11112",
-  "last_spin_post_id": "trading_spin/81446",
+  "last_elite_post_id": "elite_instructor/11122",
+  "last_spin_post_id": "trading_spin/81491",
   "last_saja_post_id": "SAJAnote/13885",
   "last_morning_date": "20261002",
   "sent_jumping_codes": [
@@ -55,7 +55,8 @@
     "180640",
     "066570",
     "005380",
-    "277810"
+    "277810",
+    "078600"
   ],
   "last_closing_date": "20261126",
   "recent_urgent_alerts": [
@@ -66,15 +67,15 @@
       "stock": "이닉스"
     }
   ],
-  "last_globaletfi_post_id": "globaletfi/22852",
-  "last_kiwoom_semibat_post_id": "kiwoom_semibat/19000",
-  "last_gaoshoukorea_post_id": "gaoshoukorea/66142",
-  "last_sajanote_post_id": "SAJAnote/14555",
-  "last_defence24_post_id": "defence_24/6632",
-  "last_hanaglobal_post_id": "hanaglobalbottomup/9285",
-  "last_hsacademy_post_id": "HS_academy/11168",
-  "last_kimcharger_post_id": "kimcharger/14727",
-  "last_meritzbae_post_id": "meritzbae/2267",
+  "last_globaletfi_post_id": "globaletfi/22854",
+  "last_kiwoom_semibat_post_id": "kiwoom_semibat/19011",
+  "last_gaoshoukorea_post_id": "gaoshoukorea/66169",
+  "last_sajanote_post_id": "SAJAnote/14562",
+  "last_defence24_post_id": "defence_24/6639",
+  "last_hanaglobal_post_id": "hanaglobalbottomup/9288",
+  "last_hsacademy_post_id": "HS_academy/11169",
+  "last_kimcharger_post_id": "kimcharger/14731",
+  "last_meritzbae_post_id": "meritzbae/2268",
   "recent_briefed_posts": [
     {
       "time": 1793974228.2608168,
@@ -92,16 +93,16 @@
       "channel": "globaletfi"
     }
   ],
-  "sent_stop_loss_date": "20261126",
+  "sent_stop_loss_date": "20261127",
   "sent_stop_loss_codes": [
-    "079550",
-    "009150",
     "217590",
     "010120",
-    "005930",
-    "417200",
-    "000660",
     "010170",
-    "035420"
+    "009150",
+    "079550",
+    "000660",
+    "417200",
+    "035420",
+    "005930"
   ]
 }
