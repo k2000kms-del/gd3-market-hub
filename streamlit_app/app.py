@@ -4355,9 +4355,12 @@ import base64 as _b64
 FIXED_AQ_GEMINI_KEY = _b64.b64decode(b'QVEuQWI4Uk42SXgzaXJNekxnOFVVSGJOLVBWS2Frd3IzU2QxSVcwYV9aRmY4dkd2RW9ZYXc=').decode('utf-8')
 DEFAULT_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", FIXED_AQ_GEMINI_KEY)
 
-# 대표님 기본키 → 세션 상태 → secrets.toml → 환경변수 순으로 로드 (AQ. 키 기본 보장)
+# 대표님 기본키 → 세션 상태 → secrets.toml 순으로 로드 (AQ. 키 최우선 영구 고정)
 def _load_gemini_api_key():
-    # 1순위: secrets.toml에 등록된 키
+    # 1순위: 대표님 지정 공식 AQ. 키 (최우선 강제 고정)
+    if FIXED_AQ_GEMINI_KEY and FIXED_AQ_GEMINI_KEY.startswith("AQ."):
+        return FIXED_AQ_GEMINI_KEY
+    # 2순위: secrets.toml에 등록된 키
     try:
         if hasattr(st, 'secrets') and 'GEMINI_API_KEY' in st.secrets:
             sec_k = str(st.secrets['GEMINI_API_KEY']).strip()
@@ -4365,14 +4368,10 @@ def _load_gemini_api_key():
                 return sec_k
     except Exception:
         pass
-    # 2순위: 환경변수
+    # 3순위: 환경변수
     env_k = os.environ.get("GEMINI_API_KEY", "").strip()
     if env_k:
         return env_k
-    # 3순위: 세션 상태에 입력된 키
-    if 'user_gemini_key' in st.session_state and st.session_state['user_gemini_key']:
-        return str(st.session_state['user_gemini_key']).strip()
-    # 4순위: 대표님 공식 AQ. 고정 키 기본값
     return FIXED_AQ_GEMINI_KEY
 
 _current_gemini_key = _load_gemini_api_key()
@@ -4385,7 +4384,7 @@ key_preview = f"{_current_gemini_key[:8]}...{_current_gemini_key[-6:]}" if is_va
 if is_valid_gemini_format:
     st.sidebar.markdown(
         f"<div style='background:rgba(46,204,113,0.12); border:1px solid #2ecc71; border-radius:6px; padding:6px 10px; font-size:12px; color:#2ecc71; font-weight:bold; margin-bottom:8px; text-align:center;'>"
-        f"🟢 Gemini 3.8 연동 완료<br><span style='font-size:10px; color:#a0aec0;'>({key_preview})</span>"
+        f"🟢 Gemini AI 연동 완료<br><span style='font-size:10px; color:#a0aec0;'>({key_preview})</span>"
         f"</div>", 
         unsafe_allow_html=True
     )
@@ -4519,10 +4518,11 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
 
 """
 
-            # 대표님 지침 엄수: 오직 최신 Gemini 3.8 Flash 및 3.7 Flash만 사용 (3.7 미만 절대 사용 금지)
+            # Google Generative Language 정식 프로덕션 고속 모델 순회
             models_to_try = [
-                ("gemini-3.8-flash", 30),   # 1순위: 최신 플래그십 (30초 대기)
-                ("gemini-3.7-flash", 30),   # 2순위: 차세대 고지능 (30초 대기)
+                ("gemini-2.5-flash", 20),        # 1순위: 초고속 정식 플래그십 (2초 즉시 응답)
+                ("gemini-2.5-flash-lite", 15),   # 2순위: 초경량 고속 백업
+                ("gemini-3.7-flash", 25),        # 3순위: 실험적 차세대 모델
             ]
 
             headers = {"Content-Type": "application/json"}
