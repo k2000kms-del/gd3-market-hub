@@ -72,6 +72,21 @@ def _save_state():
     except Exception as err:
         print(f"DEBUG: 상태 파일 저장 실패: {err}")
 
+# 1-1. 🇺🇸 [07:00 KST] 미장 마감 리포트 & 데일리 보드 (06:45 ~ 08:00 KST 사이 당일 1회 보장)
+last_desk_0700 = briefing_state.get('last_desk_0700_date')
+is_0700_time = (now_weekday < 5 and 645 <= now_hm <= 800)
+if is_0700_time or '--force-us-closing' in sys.argv:
+    if last_desk_0700 != today_str or '--force-us-closing' in sys.argv:
+        print(f"🇺🇸 [07:00 미장 마감 리포트] 발송 시도 (today={today_str}, now_hm={now_hm})...")
+        try:
+            r_0700 = tn.notify_desk_us_closing_0700(token, chat_id)
+            print(f"  ✅ [07:00] 미장 마감 브리핑 발송 결과: {r_0700}")
+            if r_0700:
+                briefing_state['last_desk_0700_date'] = today_str
+                _save_state()
+        except Exception as e:
+            print(f"  ❌ 07:00 미장 마감 브리핑 오류: {e}")
+
 # 2. ☀️ 아침 출근 모닝 브리핑 (목표 07:35~07:50, 지연되더라도 08:50 개장 전 당일 1회 보장)
 last_morning = briefing_state.get('last_morning_date')
 is_morning_time = (now_weekday < 5 and 715 <= now_hm <= 850)
@@ -399,6 +414,67 @@ elif now_weekday < 5 and now_hm > 1730 and last_closing != today_str:
     print(f"🌙 오늘({today_str}) 장마감 유효 시간대(15:20~17:30) 경과 (now_hm={now_hm}) — 야간 오발송 방지를 위해 마감 브리핑을 자동 스킵합니다.")
     briefing_state['last_closing_date'] = today_str
     _save_state()
+
+# 3-1. 🎯 [17:00~17:33 KST] 국내 증시 마감 요약 & 오늘의 관심 종목 TOP 5
+last_desk_1733 = briefing_state.get('last_desk_1733_date')
+is_1733_time = (now_weekday < 5 and 1700 <= now_hm <= 1810)
+if is_1733_time or '--force-top5' in sys.argv:
+    if last_desk_1733 != today_str or '--force-top5' in sys.argv:
+        print(f"🎯 [THE DESK 17:00~17:33] 마감 요약 & 관심종목 5 발송 시도...")
+        try:
+            tn.notify_desk_kr_closing_1700(token, chat_id)
+            r_top5 = tn.notify_desk_top5_picks_1733(token, chat_id)
+            if r_top5:
+                briefing_state['last_desk_1733_date'] = today_str
+                _save_state()
+                print(f"  💾 17:33 관심종목 브리핑 발송 완료 ({today_str})")
+        except Exception as e:
+            print(f"  ❌ 17:33 브리핑 오류: {e}")
+
+# 3-2. 📋 [18:20 KST] 검증된 조건 해당 종목 (자사주 취득, 임원 매수 공시)
+last_desk_1820 = briefing_state.get('last_desk_1820_date')
+is_1820_time = (now_weekday < 5 and 1815 <= now_hm <= 1930)
+if is_1820_time or '--force-conditions' in sys.argv:
+    if last_desk_1820 != today_str or '--force-conditions' in sys.argv:
+        print(f"📋 [THE DESK 18:20] 검증된 조건 해당 종목 발송 시도...")
+        try:
+            r_1820 = tn.notify_desk_verified_conditions_1820(token, chat_id)
+            if r_1820:
+                briefing_state['last_desk_1820_date'] = today_str
+                _save_state()
+                print(f"  💾 18:20 검증조건 브리핑 발송 완료 ({today_str})")
+        except Exception as e:
+            print(f"  ❌ 18:20 브리핑 오류: {e}")
+
+# 3-3. 🌙 [20:30 KST] 미장 개장 전 확인 5가지 (지수/환율/빅테크 프리마켓)
+last_desk_2030 = briefing_state.get('last_desk_2030_date')
+is_2030_time = (now_weekday < 5 and 2020 <= now_hm <= 2150)
+if is_2030_time or '--force-us-premarket' in sys.argv:
+    if last_desk_2030 != today_str or '--force-us-premarket' in sys.argv:
+        print(f"🌙 [THE DESK 20:30] 미장 개장 전 확인 5가지 발송 시도...")
+        try:
+            r_2030 = tn.notify_desk_us_premarket_2030(token, chat_id)
+            if r_2030:
+                briefing_state['last_desk_2030_date'] = today_str
+                _save_state()
+                print(f"  💾 20:30 미장 개장전 브리핑 발송 완료 ({today_str})")
+        except Exception as e:
+            print(f"  ❌ 20:30 브리핑 오류: {e}")
+
+# 3-4. 📊 [토요일 18:00 KST] THE DESK 주간 결산 5장 카드뉴스 슬라이드 앨범
+last_desk_sat = briefing_state.get('last_desk_sat_date')
+is_sat_time = (now_weekday == 5 and 1750 <= now_hm <= 2030)
+if is_sat_time or '--force-weekly' in sys.argv:
+    if last_desk_sat != today_str or '--force-weekly' in sys.argv:
+        print(f"📊 [THE DESK 토요일 주간 결산] 5장 카드뉴스 앨범 발송 시도...")
+        try:
+            r_sat = tn.notify_desk_saturday_weekly_review(token, chat_id)
+            if r_sat:
+                briefing_state['last_desk_sat_date'] = today_str
+                _save_state()
+                print(f"  💾 토요일 주간 결산 카드뉴스 발송 완료 ({today_str})")
+        except Exception as e:
+            print(f"  ❌ 토요일 주간 브리핑 오류: {e}")
 
 # ── 브리핑 전용 모드(--briefing-only) 시 조기 종료 ──
 if '--briefing-only' in sys.argv:
