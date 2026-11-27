@@ -4553,7 +4553,7 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
                         cands = r.json().get('candidates', [])
                         if cands and 'content' in cands[0] and 'parts' in cands[0]['content']:
                             ans = cands[0]['content']['parts'][0]['text']
-                            st.sidebar.success(f"🤖 {model_name} 실시간 투자 어드바이저 답변:")
+                            st.sidebar.success(f"🤖 GD 3.0 AI 실시간 투자 어드바이저 답변:")
                             st.sidebar.markdown(ans)
                             success = True
                             used_model_name = model_name
