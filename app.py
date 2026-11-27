@@ -4518,11 +4518,11 @@ if st.sidebar.button("Gemini Flash 3.8에게 질문하기", width='stretch'):
 
 """
 
-            # Google Generative Language 정식 프로덕션 고속 모델 순회
+            # Google Generative Language 정식 최신 모델 순회 (최신 버전 우선)
             models_to_try = [
-                ("gemini-2.5-flash", 20),        # 1순위: 초고속 정식 플래그십 (2초 즉시 응답)
-                ("gemini-2.5-flash-lite", 15),   # 2순위: 초경량 고속 백업
-                ("gemini-3.7-flash", 25),        # 3순위: 실험적 차세대 모델
+                ("gemini-3.8-flash", 30),   # 1순위: 최신 플래그십 (실 호출 검증 완료)
+                ("gemini-3.7-flash", 25),   # 2순위: 차세대 고지능
+                ("gemini-2.5-flash", 20),   # 3순위: 안정 프로덕션 백업
             ]
 
             headers = {"Content-Type": "application/json"}
